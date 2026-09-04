@@ -9,16 +9,19 @@ use quote::quote;
 /// preserves standalone `gpui-component` consumers, including dependencies
 /// that rename that package to `gpui` (the conventional name).
 pub(crate) fn gpui() -> syn::Result<TokenStream> {
+    // `gpui` (the package name in a zed git checkout) is the third option: forks that depend on
+    // zed directly instead of the `gpui-pre` crates.io snapshot expose it under its real name.
     match crate_name("gpui-kit") {
         Ok(found) => Ok(found_crate_path(found)),
         Err(kit_error) => crate_name("gpui-pre")
+            .or_else(|_| crate_name("gpui"))
             .map(found_crate_path)
             .map_err(|gpui_error| {
                 syn::Error::new(
                     Span::call_site(),
                     format!(
-                        "IntoPlot requires a direct dependency on `gpui-kit` or `gpui-pre`: \
-                         gpui-kit lookup failed: {kit_error}; gpui-pre lookup failed: {gpui_error}"
+                        "IntoPlot requires a direct dependency on `gpui-kit`, `gpui-pre` or `gpui`: \
+                         gpui-kit lookup failed: {kit_error}; gpui lookup failed: {gpui_error}"
                     ),
                 )
             }),

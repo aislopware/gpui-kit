@@ -57,13 +57,13 @@ gpui-wry = { path = "crates/webview", version = "0.6.1" }
 gpui-component-shell = { path = "crates/component-shell", version = "0.6.1" }
 story = { path = "crates/story" }
 
-gpui = { package = "gpui-pre", version = "0.3.5" }
-gpui_platform = { package = "gpui-pre-platform", version = "0.3.5", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui_web = { package = "gpui-pre-web", version = "0.3.5" }
-gpui_macros = { package = "gpui-pre-macros", version = "0.3.5" }
-reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.5" }
-sum-tree = { package = "gpui-pre-sum-tree", version = "0.3.5" }
-reqwest = { package = "gpui-pre-reqwest", version = "0.12.15", default-features = false, features = [
+gpui = { git = "https://github.com/aislopware/zed.git", branch = "slopty" }
+gpui_platform = { git = "https://github.com/aislopware/zed.git", branch = "slopty", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui_web = { git = "https://github.com/aislopware/zed.git", branch = "slopty" }
+gpui_macros = { git = "https://github.com/aislopware/zed.git", branch = "slopty" }
+reqwest_client = { git = "https://github.com/aislopware/zed.git", branch = "slopty" }
+sum-tree = { package = "sum_tree", git = "https://github.com/aislopware/zed.git", branch = "slopty" }
+reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "33bc764aa15ff7b200bf7c93bd96e24878d53e14", default-features = false, features = [
     "charset",
     "http2",
     "macos-system-configuration",
@@ -71,7 +71,7 @@ reqwest = { package = "gpui-pre-reqwest", version = "0.12.15", default-features 
     "rustls-tls-native-roots",
     "socks",
     "stream",
-] }
+], package = "zed-reqwest", version = "0.12.15-zed" }
 
 anyhow = "1"
 instant = { version = "0.1", features = ["wasm-bindgen"] }
@@ -136,14 +136,14 @@ rustybuzz = { opt-level = 3 }
 taffy = { opt-level = 3 }
 ttf-parser = { opt-level = 3 }
 smol = { opt-level = 3 }
-gpui-pre = { opt-level = 3 }
-gpui-pre-platform = { opt-level = 3 }
-gpui-pre-macros = { opt-level = 3 }
+gpui = { opt-level = 3 }
+gpui_platform = { opt-level = 3 }
+gpui_macros = { opt-level = 3 }
 tree-sitter = { opt-level = 3 }
-gpui-pre-sum-tree = { opt-level = 3 }
+sum_tree = { opt-level = 3 }
 ropey = { opt-level = 3 }
 lsp-types = { opt-level = 3 }
-gpui-pre-reqwest-client = { opt-level = 3 }
+reqwest_client = { opt-level = 3 }
 markdown = { opt-level = 3 }
 xml5ever = { opt-level = 3 }
 # `quickjs-jit` is a facade that re-exports `quickjs-jit-core`, so naming it alone

@@ -36,13 +36,13 @@ const MAX_SYNC_FULL_REPLACE_BYTES: usize = 4 * 1024;
 
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys(vec![
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-c", input::Copy, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         KeyBinding::new("ctrl-c", input::Copy, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-a", input::SelectAll, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         KeyBinding::new("ctrl-a", input::SelectAll, Some(CONTEXT)),
     ]);
 }

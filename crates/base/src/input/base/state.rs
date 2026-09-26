@@ -410,6 +410,8 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(crate) scroll_size: gpui::Size<Pixels>,
     pub(super) editor_scrollbar_snapshot: Cell<Option<EditorScrollbarSnapshot>>,
     pub(super) editor_paddings: Edges<Pixels>,
+    /// The space between the line numbers and the text.
+    pub(super) line_number_gap: Pixels,
     /// The style this state paints with: what was projected onto it, with
     /// every colour left unset resolved from the palette that is current. It
     /// is rebuilt at the top of every render, which is what keeps it current
@@ -740,6 +742,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             scroll_size: gpui::size(px(0.), px(0.)),
             editor_scrollbar_snapshot: Cell::new(None),
             editor_paddings: Edges::default(),
+            line_number_gap: super::element::LINE_NUMBER_RIGHT_MARGIN,
             deferred_scroll_offset: None,
             placeholder: SharedString::default(),
             mask_pattern: MaskPattern::default(),
@@ -9870,6 +9873,14 @@ impl InputBaseState<crate::input::EditorMode> {
         if let LayoutMode::CodeEditor { line_number: l, .. } = &mut self.mode {
             *l = line_number;
         }
+        self
+    }
+
+    /// Set the space between the line numbers and the text.
+    ///
+    /// Default: 6px
+    pub fn line_number_gap(mut self, gap: Pixels) -> Self {
+        self.line_number_gap = gap;
         self
     }
 

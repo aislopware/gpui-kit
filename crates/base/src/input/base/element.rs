@@ -139,6 +139,7 @@ impl EditorScrollbarSnapshot {
             layout: EditorScrollbarLayout::new(
                 input_bounds,
                 last_layout.line_number_width,
+                state.line_number_gap,
                 scroll_size,
                 state.editor_paddings,
             ),
@@ -152,13 +153,14 @@ impl EditorScrollbarLayout {
     fn new(
         input_bounds: Bounds<Pixels>,
         line_number_width: Pixels,
+        line_number_gap: Pixels,
         scroll_size: Size<Pixels>,
         paddings: Edges<Pixels>,
     ) -> Self {
         let left = if line_number_width == px(0.) {
             px(0.)
         } else {
-            paddings.left + line_number_width - LINE_NUMBER_RIGHT_MARGIN
+            paddings.left + line_number_width - line_number_gap
         };
 
         Self {
@@ -1076,9 +1078,9 @@ impl<M: InputModeKind> TextElement<M> {
                 None,
             );
 
-            empty_line_number.width + LINE_NUMBER_RIGHT_MARGIN
+            empty_line_number.width + state.line_number_gap
         } else if state.is_code_editor() {
-            LINE_NUMBER_RIGHT_MARGIN
+            state.line_number_gap
         } else {
             px(0.)
         };
@@ -1265,7 +1267,7 @@ impl<M: InputModeKind> TextElement<M> {
             icons: vec![],
         };
 
-        let fold_infos: Vec<FoldInfo> = {
+        let (fold_infos, line_number_gap) = {
             let state = self.state.read(cx);
             if !state.mode.is_folding() {
                 return icon_layout;
@@ -1292,13 +1294,13 @@ impl<M: InputModeKind> TextElement<M> {
                 offset_y += line.wrapped_lines.len() * last_layout.line_height;
             }
 
-            infos
+            (infos, state.line_number_gap)
         }; // state is dropped here
 
         // Second pass: create and prepaint icons
         let line_height = last_layout.line_height;
         let line_number_width =
-            last_layout.line_number_width - LINE_NUMBER_RIGHT_MARGIN - FOLD_ICON_HITBOX_WIDTH;
+            last_layout.line_number_width - line_number_gap - FOLD_ICON_HITBOX_WIDTH;
         let icon_relative_pos = point(
             (FOLD_ICON_HITBOX_WIDTH - FOLD_ICON_WIDTH).half(),
             (line_height - FOLD_ICON_WIDTH).half(),
@@ -3514,6 +3516,27 @@ mod tests {
     }
 
     #[gpui::test]
+    fn line_number_gap_widens_the_gutter_by_its_difference(cx: &mut TestAppContext) {
+        let (editor, window) = decoration_editor(cx, "x\n", false);
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| {
+            let width = |window: &mut Window, cx: &mut App| {
+                window.draw(cx).clear(cx);
+                editor
+                    .read(cx)
+                    .last_layout
+                    .as_ref()
+                    .unwrap()
+                    .line_number_width
+            };
+            let default = width(window, cx);
+            editor.update(cx, |state, _| state.line_number_gap = px(16.));
+            let wider = width(window, cx);
+            assert_eq!(wider - default, px(16.) - LINE_NUMBER_RIGHT_MARGIN);
+        });
+    }
+
+    #[gpui::test]
     fn geometric_decorations_clip_scrolled_viewport_and_cull_offscreen_ranges(
         cx: &mut TestAppContext,
     ) {
@@ -3949,8 +3972,13 @@ mod tests {
             left: px(7.),
         };
 
-        let layout =
-            EditorScrollbarLayout::new(input_bounds, px(40.), size(px(1000.), px(200.)), paddings);
+        let layout = EditorScrollbarLayout::new(
+            input_bounds,
+            px(40.),
+            LINE_NUMBER_RIGHT_MARGIN,
+            size(px(1000.), px(200.)),
+            paddings,
+        );
 
         assert_eq!(
             layout.bounds,
@@ -3958,8 +3986,13 @@ mod tests {
         );
         assert_eq!(layout.scroll_size, size(px(972.), px(200.)));
 
-        let layout_without_gutter =
-            EditorScrollbarLayout::new(input_bounds, px(0.), size(px(500.), px(120.)), paddings);
+        let layout_without_gutter = EditorScrollbarLayout::new(
+            input_bounds,
+            px(0.),
+            LINE_NUMBER_RIGHT_MARGIN,
+            size(px(500.), px(120.)),
+            paddings,
+        );
 
         assert_eq!(
             layout_without_gutter.bounds,

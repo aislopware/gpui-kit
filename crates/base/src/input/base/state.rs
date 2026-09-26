@@ -493,6 +493,8 @@ pub struct InputBaseState<M: InputModeKind> {
     /// The unwrapped width of the longest line and what it was measured for.
     pub(super) longest_line_width: Cell<Option<(LongestLineKey, Pixels)>>,
     pub(super) editor_paddings: Edges<Pixels>,
+    /// The space between the line numbers and the text.
+    pub(super) line_number_gap: Pixels,
     /// The style this state paints with: what was projected onto it, with
     /// every colour left unset resolved from the palette that is current. It
     /// is rebuilt at the top of every render, which is what keeps it current
@@ -857,6 +859,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             editor_scrollbar_snapshot: Cell::new(None),
             longest_line_width: Cell::new(None),
             editor_paddings: Edges::default(),
+            line_number_gap: super::element::LINE_NUMBER_RIGHT_MARGIN,
             deferred_scroll_offset: None,
             placeholder: SharedString::default(),
             mask_pattern: MaskPattern::default(),
@@ -11470,6 +11473,14 @@ impl InputBaseState<crate::input::EditorMode> {
         self.display_map
             .set_wrapping_indent(self.wrapping_indent, cx);
         self.display_map.ensure_text_prepared(&self.text, cx);
+    }
+
+    /// Set the space between the line numbers and the text.
+    ///
+    /// Default: 6px
+    pub fn line_number_gap(mut self, gap: Pixels) -> Self {
+        self.line_number_gap = gap;
+        self
     }
 
     /// Set line number.

@@ -26,7 +26,7 @@ use crate::{
         RangeHighlight, RangeHighlightError, RenderedText, TableActionsFn, TextViewStyle,
         document::ParsedDocument,
         format,
-        node::{self, NodeContext},
+        node::{self, BlockNode, NodeContext, Span},
         range_highlight::{
             LeafRemap, PendingReveal, RangeHighlightFrame, RenderedIndex, RevealRequest,
         },
@@ -1371,55 +1371,149 @@ fn parse_content(
     mut content: ParsedContent,
     options: &UpdateOptions,
 ) -> Result<ParsedContent, SharedString> {
-    let mut node_cx = NodeContext {
-        markdown_extensions: options.markdown_extensions.clone(),
-        ..NodeContext::default()
+    let parse = |source: &str, offset: usize| {
+        let mut node_cx = NodeContext {
+            markdown_extensions: options.markdown_extensions.clone(),
+            offset,
+            ..NodeContext::default()
+        };
+        match format {
+            TextViewFormat::Markdown => format::markdown::parse(source, &mut node_cx),
+            TextViewFormat::Html => format::html::parse(source, &mut node_cx),
+        }
     };
+    if !options.append {
+        content.document = parse(&options.pending_text, 0)?;
+        return Ok(content);
+    }
 
     // Re-parse the last block together with the appended text, so a block the
     // new text continues (an unclosed list, a fenced code block) is not split
     // in two. A block without a span cannot be located in `source` — the HTML
     // parser never records spans — so it is left in place and only the
     // appended text is parsed, positioned at the end of the current source.
-    let last_span = options
-        .append
-        .then(|| {
-            content
-                .document
-                .blocks
-                .last()
-                .and_then(|block| block.span())
-        })
-        .flatten();
-
-    let mut source = String::new();
-    if let Some(span) = last_span {
-        Arc::make_mut(&mut content.document.blocks).pop();
-        node_cx.offset = span.start;
-        source.push_str(&content.document.source[span.start..]);
-        source.push_str(&options.pending_text);
-    } else {
-        if options.append {
-            node_cx.offset = content.document.source.len();
+    let old_source = content.document.source.clone();
+    let blocks = Arc::make_mut(&mut content.document.blocks);
+    let mut start = old_source.len();
+    let mut list = None;
+    match blocks.last().map(BlockNode::span) {
+        None => start = 0,
+        Some(None) => {}
+        Some(Some(span)) => {
+            start = span.start;
+            // The appended text can turn the last block into an item of a
+            // list just before it, so that list is parsed again as well.
+            let list_block = match blocks.pop() {
+                Some(block @ BlockNode::List { .. }) => Some(block),
+                _ => blocks.pop_if(|block| matches!(block, BlockNode::List { span: Some(_), .. })),
+            };
+            if let Some(BlockNode::List {
+                children,
+                ordered,
+                start: first,
+                span: Some(list_span),
+            }) = list_block
+            {
+                match ContinuedList::new(&old_source, children, ordered, first, list_span) {
+                    Ok((item_start, continued)) => {
+                        start = item_start;
+                        list = Some(continued);
+                    }
+                    Err(_) => start = list_span.start,
+                }
+            }
         }
+    }
+    let tail = |start: usize| {
+        let mut source =
+            String::with_capacity(old_source.len() - start + options.pending_text.len());
+        source.push_str(&old_source[start..]);
         source.push_str(&options.pending_text);
+        source
+    };
+    let mut parsed = Arc::unwrap_or_clone(parse(&tail(start), start)?.blocks);
+    if let Some(continued) = list {
+        let list_start = continued.span.start;
+        if continued.continue_into(&mut parsed).is_err() {
+            parsed = Arc::unwrap_or_clone(parse(&tail(list_start), list_start)?.blocks);
+        }
     }
-
-    let new_document = match format {
-        TextViewFormat::Markdown => format::markdown::parse(&source, &mut node_cx),
-        TextViewFormat::Html => format::html::parse(&source, &mut node_cx),
-    }?;
-
-    if options.append {
-        content.document.source =
-            format!("{}{}", content.document.source, options.pending_text).into();
-        Arc::make_mut(&mut content.document.blocks)
-            .extend(Arc::unwrap_or_clone(new_document.blocks));
-    } else {
-        content.document = new_document;
-    }
-
+    blocks.extend(parsed);
+    content.document.source = format!("{old_source}{}", options.pending_text).into();
     Ok(content)
+}
+
+/// A list an append continues, holding its items but the last, which is
+/// parsed again with the appended text, so a long list streams an item at a
+/// time.
+///
+/// An item's content and its `spread` depend only on its own lines, and the
+/// items before the last were parsed with the one after them in place, so the
+/// items kept are those parsing the whole list would give.
+struct ContinuedList {
+    items: Vec<BlockNode>,
+    ordered: bool,
+    start: Option<u32>,
+    span: Span,
+}
+
+impl ContinuedList {
+    /// Split the last item off a list of `source`, and return where the line
+    /// of that item starts, with the list's other items. `Err` gives the items
+    /// back when the list has no other items or its last one has no span.
+    fn new(
+        source: &str,
+        mut items: Vec<BlockNode>,
+        ordered: bool,
+        start: Option<u32>,
+        span: Span,
+    ) -> Result<(usize, Self), Vec<BlockNode>> {
+        let item_start = match items.last().and_then(BlockNode::span) {
+            Some(item) if items.len() > 1 => item.start,
+            _ => return Err(items),
+        };
+        // From the start of the line, so the item's indentation and the
+        // columns of its continuation lines stay as they were.
+        let line_start = source[..item_start].rfind('\n').map_or(0, |ix| ix + 1);
+        if !source[line_start..item_start]
+            .bytes()
+            .all(|byte| byte == b' ' || byte == b'\t')
+        {
+            return Err(items);
+        }
+        items.pop();
+        let list = Self {
+            items,
+            ordered,
+            start,
+            span,
+        };
+        Ok((line_start, list))
+    }
+
+    /// Put the kept items in front of those of the first of `blocks`, the
+    /// list parsed from the last item on. `Err` when that is no list of the
+    /// same kind, which the caller answers by parsing the whole list again.
+    fn continue_into(self, blocks: &mut [BlockNode]) -> Result<(), ()> {
+        let Some(BlockNode::List {
+            children,
+            ordered,
+            start,
+            span: Some(span),
+        }) = blocks.first_mut()
+        else {
+            return Err(());
+        };
+        if *ordered != self.ordered {
+            return Err(());
+        }
+        let mut items = self.items;
+        items.append(children);
+        *children = items;
+        *start = self.start;
+        span.start = self.span.start;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -2548,6 +2642,53 @@ mod tests {
         state.read_with(cx, |state, _| {
             assert!(state.parsed_content.document == whole.document);
         });
+    }
+
+    #[test]
+    fn markdown_appended_a_byte_at_a_time_parses_as_the_whole_text() {
+        let whole = |text: &str| {
+            let options = UpdateOptions {
+                revision: 0,
+                pending_text: text.to_string(),
+                append: false,
+                mode: ParseMode::Replace,
+                markdown_extensions: Arc::default(),
+            };
+            parse_content(TextViewFormat::Markdown, ParsedContent::default(), &options)
+                .expect("whole parse")
+        };
+        let samples = [
+            "intro\n\n- one\n- two\n  still two\n- three\n\nafter",
+            "- lazy\ncontinuation\n\n- loose\n\n  second paragraph\n- tight",
+            "3. three\n4. four\n\n5. five\n6) new list",
+            "- a\n* new list\n+ another\n\n  - nested\n  - nested two\n- back",
+            "  - indented\n    continued\n  - again\n\n        code in item",
+            "- item\n\n  ```rust\n  fn main() {}\n  ```\n- next\n---\ntitle\n===",
+            "- [ ] task\n- [x] done\n\n| a | b |\n|---|---|\n| c | d |",
+            "- a\n\n5. five\n\n- b\n\n-\n\n--\n\n- c\n# heading\n- d",
+            "> - quoted\n> - list\n\nplain *emphasis\n\n- 中文 **粗体**\n- é",
+            "<div>\n\n- html then list\n\n</div>\n- after",
+            "The parser keeps `recover`, one.\n\n- fixed `parse_header`\nThe parser keeps one.\n\n- fixed",
+        ];
+        for text in samples {
+            let mut streamed = ParsedContent::default();
+            for (ix, ch) in text.char_indices() {
+                let options = UpdateOptions {
+                    revision: ix,
+                    pending_text: ch.to_string(),
+                    append: true,
+                    mode: ParseMode::Compatible,
+                    markdown_extensions: Arc::default(),
+                };
+                streamed = parse_content(TextViewFormat::Markdown, streamed, &options)
+                    .expect("append parse");
+                let so_far = &text[..ix + ch.len_utf8()];
+                assert!(
+                    streamed.document == whole(so_far).document,
+                    "appending to {so_far:?} diverged from parsing it whole"
+                );
+            }
+        }
     }
 
     #[gpui::test]

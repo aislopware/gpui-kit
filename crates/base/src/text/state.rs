@@ -39,9 +39,10 @@ use crate::{
 const CONTEXT: &'static str = "TextView";
 // Keep coalescing bounded so sustained streams still render intermediate updates.
 const MAX_COALESCED_UPDATES_PER_PARSE: usize = 64;
-// Preserve exact first-layout height for small documents while bounding the
-// amount of source parsed synchronously on the UI thread.
-const MAX_SYNC_FULL_REPLACE_BYTES: usize = 4 * 1024;
+// Preserve exact first-layout height for small updates while bounding the
+// amount of source parsed synchronously on the UI thread: a small replacement,
+// or an append whose last block plus appended text is small.
+const MAX_SYNC_PARSE_BYTES: usize = 4 * 1024;
 // Repaint a streamed fade at about 30 fps, not at the display refresh rate.
 const STREAM_FADE_TICK: Duration = Duration::from_millis(33);
 
@@ -135,6 +136,9 @@ pub struct TextViewState {
     /// of small full-replace updates.
     format: TextViewFormat,
     text: String,
+    /// Whether `text` may hold a link reference or footnote definition, which
+    /// resolves references in every block, so an append must parse it all.
+    may_hold_definitions: bool,
     /// The text a `TextView` element last handed over, to recognize the same
     /// string next frame without comparing its bytes.
     element_text: Option<SharedString>,
@@ -183,47 +187,15 @@ impl TextViewState {
                             return;
                         }
                         if parsed_update.baseline_ack {
-                            debug_assert!(parsed_update.full_parse);
                             return;
                         }
-
-                        match parsed_update.result {
-                            Ok(content) => {
-                                let append =
-                                    parsed_update.selection_compatible && !parsed_update.full_parse;
-                                if append && state.full_update_revision <= state.committed_revision
-                                {
-                                    state.splice_appended_blocks(&content.document);
-                                }
-                                state.reconcile_range_highlights(
-                                    &content.document,
-                                    parsed_update.revision,
-                                    append,
-                                );
-                                state.stream_fade.record(
-                                    &state.parsed_content.document,
-                                    &content.document,
-                                    Instant::now(),
-                                );
-                                state.parsed_content = content;
-                                state.parsed_error = None;
-                                state.compatible_layout_update = parsed_update.selection_compatible;
-                                if parsed_update.full_parse {
-                                    state.invalidate_measured_heights();
-                                }
-                            }
-                            Err(err) => {
-                                state.stream_fade.discard_pending();
-                                state.parsed_error = Some(err);
-                            }
-                        }
-                        // Don't interrupt an active drag-selection; the stored
-                        // positions remain valid for append-only updates and will
-                        // self-correct on the next mouse-move event.
-                        if !parsed_update.selection_compatible && !state.is_selecting {
-                            state.reset_selection_and_adapter(cx);
-                        }
-                        cx.notify();
+                        state.commit_parse(
+                            parsed_update.result,
+                            parsed_update.revision,
+                            !parsed_update.full_parse,
+                            parsed_update.selection_compatible,
+                            cx,
+                        );
                     });
                 }
             }
@@ -266,6 +238,7 @@ impl TextViewState {
             format,
             parsed_error: None,
             text: text.to_string(),
+            may_hold_definitions: may_hold_definition(text.as_bytes()),
             element_text: None,
             revision: 0,
             committed_revision: 0,
@@ -280,7 +253,7 @@ impl TextViewState {
             _parse_task,
             _receive_task,
         };
-        this.increment_update(&text, false, cx);
+        this.increment_update(text, Change::Replace, cx);
         this
     }
 
@@ -340,31 +313,41 @@ impl TextViewState {
 
     /// Set the text content.
     ///
-    /// Markdown that extends the current non-empty text is appended like
-    /// [`Self::push_str`], keeping the selection; any other text replaces it.
-    /// With a streamed fade-in enabled, extended text fades in; a replacement
-    /// shows at once.
+    /// Markdown that extends the current non-empty text is appended as by
+    /// [`Self::push_str`], keeping the selection, so a streamed answer handed
+    /// over whole every frame parses only its last block again; any other text
+    /// replaces it. With a streamed fade-in enabled, text that extends the
+    /// current text fades in like [`Self::push_str`] would; a replacement shows
+    /// at once.
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         if self.text.as_str() == text {
             return;
         }
+        let appended = text.strip_prefix(self.text.as_str());
         // HTML blocks carry no spans, so an append would parse the delta as a
         // standalone document. After a failed parse the background parser's
-        // document lacks that text, so only a full parse resynchronizes it.
-        if self.format == TextViewFormat::Markdown
+        // document lacks that text, so only a full parse resynchronizes it; an
+        // MDX parse can fail partway through a stream, so it is parsed whole.
+        if let Some(appended) = appended
+            && self.format == TextViewFormat::Markdown
+            && !self.markdown_extensions.is_mdx_enabled()
             && self.parsed_error.is_none()
             && !self.text.is_empty()
-            && let Some(delta) = text.strip_prefix(self.text.as_str())
         {
-            self.push_str(delta, cx);
+            self.push_str(appended, cx);
             return;
         }
-        self.stream_fade.note_replace();
+        if appended.is_some() {
+            self.stream_fade.note_extend(self.text.len());
+        } else {
+            self.stream_fade.note_replace();
+        }
 
         self.text.clear();
         self.text.push_str(text);
+        self.may_hold_definitions = may_hold_definition(text.as_bytes());
         self.parsed_error = None;
-        self.increment_update(text, false, cx);
+        self.increment_update(text, Change::Replace, cx);
     }
 
     /// [`Self::set_text`] for the text a `TextView` element hands over every
@@ -383,13 +366,36 @@ impl TextViewState {
     }
 
     /// Append partial text content to the existing text.
+    ///
+    /// Only the last block is parsed again, together with the appended text,
+    /// and at once when that is small. Markdown that may hold a link reference
+    /// or footnote definition, or that may open with frontmatter, is parsed
+    /// whole instead, since the appended text can change blocks before it.
     pub fn push_str(&mut self, new_text: &str, cx: &mut Context<Self>) {
         if new_text.is_empty() {
             return;
         }
         self.stream_fade.note_extend(self.text.len());
+        // Back one byte: a `]` ending the text pairs with a leading `:`.
+        let unscanned = self.text.len().saturating_sub(1);
         self.text.push_str(new_text);
-        self.increment_update(new_text, true, cx);
+        self.may_hold_definitions |= may_hold_definition(&self.text.as_bytes()[unscanned..]);
+        if self.appends_parse_whole_text() {
+            let text = self.text.clone();
+            self.increment_update(&text, Change::Extend, cx);
+        } else {
+            self.increment_update(new_text, Change::Append, cx);
+        }
+    }
+
+    /// Whether text appended to the Markdown can change blocks before the
+    /// last: a definition resolves references anywhere, and frontmatter is
+    /// recognized only where the document starts.
+    fn appends_parse_whole_text(&self) -> bool {
+        self.format == TextViewFormat::Markdown
+            && (self.may_hold_definitions
+                || (self.markdown_extensions.is_frontmatter_enabled()
+                    && (self.text.starts_with("---") || self.text.starts_with("+++"))))
     }
 
     /// Set the motion policy; see [`TextViewMotion`].
@@ -418,7 +424,7 @@ impl TextViewState {
         self.markdown_extensions = markdown_extensions;
         if parser_configuration_changed && self.format == TextViewFormat::Markdown {
             let text = self.text.clone();
-            self.increment_update(&text, false, cx);
+            self.increment_update(&text, Change::Replace, cx);
         }
     }
 
@@ -527,60 +533,112 @@ impl TextViewState {
         cx.notify();
     }
 
-    fn increment_update(&mut self, text: &str, append: bool, cx: &mut Context<Self>) {
+    fn increment_update(&mut self, text: &str, change: Change, cx: &mut Context<Self>) {
+        let append = change == Change::Append;
+        let parse_len = if append {
+            self.appended_parse_len(text.len())
+        } else {
+            Some(text.len())
+        };
+        let parse_synchronously = parse_len.is_some_and(|len| len <= MAX_SYNC_PARSE_BYTES);
         self.revision += 1;
         if !append {
             self.full_update_revision = self.revision;
+        }
+        if change == Change::Replace {
             self.selection_revision = self.selection_revision.wrapping_add(1);
         }
-        let parse_synchronously = !append && text.len() <= MAX_SYNC_FULL_REPLACE_BYTES;
         let update_options = UpdateOptions {
             revision: self.revision,
             append,
-            mode: if append {
-                ParseMode::Compatible
-            } else if parse_synchronously {
+            mode: if parse_synchronously {
                 ParseMode::BaselineAck
-            } else {
+            } else if change == Change::Replace {
                 ParseMode::Replace
+            } else {
+                ParseMode::Compatible
             },
             pending_text: text.to_string(),
             markdown_extensions: self.markdown_extensions.clone(),
         };
 
-        // Keep small full replacements synchronous so their first layout has
-        // the exact content height. Larger replacements use the existing
-        // background parser, bounding synchronous parser input on the UI thread.
+        // Keep small updates synchronous so their first layout has the exact
+        // content height. Larger ones use the background parser, bounding
+        // synchronous parser input on the UI thread.
         if parse_synchronously {
-            match parse_content(self.format, ParsedContent::default(), &update_options) {
-                Ok(content) => {
-                    self.reconcile_range_highlights(&content.document, self.revision, false);
-                    self.stream_fade.record(
-                        &self.parsed_content.document,
-                        &content.document,
-                        Instant::now(),
-                    );
-                    self.parsed_content = content;
-                    self.parsed_error = None;
-                    self.invalidate_measured_heights();
-                    if !self.is_selecting {
-                        self.reset_selection_and_adapter(cx);
-                    }
+            let base = if append {
+                self.parsed_content.clone()
+            } else {
+                ParsedContent::default()
+            };
+            let result = parse_content(self.format, base, &update_options);
+            self.commit_parse(result, self.revision, append, change != Change::Replace, cx);
+        }
+        // A synchronous update keeps the background parser's accumulated
+        // document in sync, so a later append extends this baseline instead of
+        // parsing the delta as a standalone document.
+        _ = self.tx.try_send(update_options);
+    }
+
+    /// How many bytes an append of `appended` bytes parses: the current
+    /// document's last block and the appended text. `None` when the current
+    /// document is not the text before the append (an update is still being
+    /// parsed, or the last one failed) or its last block has no source span.
+    fn appended_parse_len(&self, appended: usize) -> Option<usize> {
+        if self.committed_revision != self.revision || self.parsed_error.is_some() {
+            return None;
+        }
+        let document = &self.parsed_content.document;
+        let start = match document.blocks.last() {
+            Some(block) => block.span()?.start,
+            None => document.source.len(),
+        };
+        Some(document.source.len() - start + appended)
+    }
+
+    /// Commit the parse of the update of `revision`.
+    ///
+    /// `append` is whether it parsed only appended text onto the document
+    /// before it, and `compatible` whether the text before it is still there,
+    /// so a selection in it holds.
+    fn commit_parse(
+        &mut self,
+        result: Result<ParsedContent, SharedString>,
+        revision: usize,
+        append: bool,
+        compatible: bool,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(content) => {
+                if append && self.full_update_revision <= self.committed_revision {
+                    self.splice_appended_blocks(&content.document);
                 }
-                Err(err) => {
-                    self.stream_fade.discard_pending();
-                    self.parsed_error = Some(err);
+                self.reconcile_range_highlights(&content.document, revision, append);
+                self.stream_fade.record(
+                    &self.parsed_content.document,
+                    &content.document,
+                    Instant::now(),
+                );
+                self.parsed_content = content;
+                self.parsed_error = None;
+                self.compatible_layout_update = compatible;
+                if !append {
+                    self.invalidate_measured_heights();
                 }
             }
-            // Keep the background parser's accumulated document in sync so a
-            // later append extends this baseline instead of parsing the delta
-            // as a standalone document.
-            _ = self.tx.try_send(update_options);
-            cx.notify();
-            return;
+            Err(err) => {
+                self.stream_fade.discard_pending();
+                self.parsed_error = Some(err);
+            }
         }
-
-        _ = self.tx.try_send(update_options);
+        // Don't interrupt an active drag-selection; the stored positions
+        // remain valid for append-only updates and will self-correct on the
+        // next mouse-move event.
+        if !compatible && !self.is_selecting {
+            self.reset_selection_and_adapter(cx);
+        }
+        cx.notify();
     }
 
     /// The text this view renders, which [`RangeHighlight`] ranges index.
@@ -1186,9 +1244,12 @@ impl UpdateOptions {
         if next.append {
             self.pending_text.push_str(&next.pending_text);
             self.revision = next.revision;
-            if self.mode != ParseMode::Replace {
-                self.mode = ParseMode::Compatible;
-            }
+            self.mode = match (self.mode, next.mode) {
+                (ParseMode::Replace, _) => ParseMode::Replace,
+                // The UI thread parsed both already.
+                (ParseMode::BaselineAck, ParseMode::BaselineAck) => ParseMode::BaselineAck,
+                _ => ParseMode::Compatible,
+            };
         } else {
             *self = next;
         }
@@ -1208,6 +1269,24 @@ enum ParseMode {
     BaselineAck,
     Replace,
     Compatible,
+}
+
+/// How the text of an update relates to the text before it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Change {
+    /// Other text: it is parsed whole, and the selection starts over.
+    Replace,
+    /// The text before it with more after, parsed whole.
+    Extend,
+    /// The text before it with more after, of which only the last block of
+    /// the current document and the appended text are parsed.
+    Append,
+}
+
+/// Whether `text` may hold a link reference or footnote definition, whose
+/// label always ends in `]:`.
+fn may_hold_definition(text: &[u8]) -> bool {
+    text.windows(2).any(|pair| pair == b"]:")
 }
 
 fn merge_pending_options(options: &mut UpdateOptions, rx: &Receiver<UpdateOptions>) -> bool {
@@ -1552,10 +1631,10 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         cx.update(crate::init);
-        let markdown = "# x\n\n".repeat(MAX_SYNC_FULL_REPLACE_BYTES / 5 + 1);
-        let html = format!("<p>{}</p>", "x".repeat(MAX_SYNC_FULL_REPLACE_BYTES + 1));
-        assert!(markdown.len() > MAX_SYNC_FULL_REPLACE_BYTES);
-        assert!(html.len() > MAX_SYNC_FULL_REPLACE_BYTES);
+        let markdown = "# x\n\n".repeat(MAX_SYNC_PARSE_BYTES / 5 + 1);
+        let html = format!("<p>{}</p>", "x".repeat(MAX_SYNC_PARSE_BYTES + 1));
+        assert!(markdown.len() > MAX_SYNC_PARSE_BYTES);
+        assert!(html.len() > MAX_SYNC_PARSE_BYTES);
 
         let (markdown_state, html_state) = cx.update(|cx| {
             (
@@ -1638,7 +1717,7 @@ mod tests {
         let state = cx.update(|cx| cx.new(|cx| TextViewState::markdown("old", cx)));
         cx.run_until_parked();
 
-        let replacement = "x".repeat(MAX_SYNC_FULL_REPLACE_BYTES + 1);
+        let replacement = "x".repeat(MAX_SYNC_PARSE_BYTES + 1);
         let expected = format!("{replacement} tail");
         state.update(cx, |state, cx| {
             state.set_text(&replacement, cx);
@@ -1801,7 +1880,7 @@ mod tests {
         // Chunks continue a heading, a paragraph, an inline code span, a list
         // and a fenced code block, and the text grows past the synchronous
         // parse limit.
-        let filler = "word ".repeat(MAX_SYNC_FULL_REPLACE_BYTES / 5 + 1);
+        let filler = "word ".repeat(MAX_SYNC_PARSE_BYTES / 5 + 1);
         let chunks = [
             "\n\nfirst para",
             "graph with `co",
@@ -2189,6 +2268,67 @@ mod tests {
         });
     }
 
+    #[gpui::test]
+    fn set_text_extending_markdown_parses_only_the_last_block_at_once(cx: &mut TestAppContext) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        cx.update(crate::init);
+        let paragraphs = Arc::new(AtomicUsize::new(0));
+        let extensions = MarkdownExtensions::default().block_parser({
+            let paragraphs = paragraphs.clone();
+            move |node, _| {
+                if matches!(node, markdown::mdast::Node::Paragraph(_)) {
+                    paragraphs.fetch_add(1, Ordering::Relaxed);
+                }
+                None
+            }
+        });
+        let state = cx.update(|cx| cx.new(|cx| TextViewState::markdown("", cx)));
+        state.update(cx, |state, cx| {
+            state.set_markdown_extensions(Arc::new(extensions), cx);
+            state.set_text("first\n\nsecond\n\nthi", cx);
+        });
+        cx.run_until_parked();
+        let parsed = paragraphs.load(Ordering::Relaxed);
+
+        let text = "first\n\nsecond\n\nthird";
+        state.update(cx, |state, cx| state.set_text(text, cx));
+
+        // Parsed before the background executor runs, and only the paragraph
+        // the text extends.
+        assert_eq!(paragraphs.load(Ordering::Relaxed) - parsed, 1);
+        let options = UpdateOptions {
+            revision: 0,
+            pending_text: text.to_string(),
+            append: false,
+            mode: ParseMode::Replace,
+            markdown_extensions: Arc::default(),
+        };
+        let whole = parse_content(TextViewFormat::Markdown, ParsedContent::default(), &options)
+            .expect("whole parse");
+        state.read_with(cx, |state, _| {
+            assert!(state.parsed_content.document == whole.document);
+        });
+    }
+
+    #[gpui::test]
+    fn set_text_extending_markdown_with_a_definition_resolves_earlier_references(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(crate::init);
+        let text = "[foo] and text\n\nmore";
+        let state = cx.update(|cx| cx.new(|cx| TextViewState::markdown(text, cx)));
+        cx.run_until_parked();
+
+        state.update(cx, |state, cx| {
+            state.set_text(&format!("{text}\n\n[foo]: https://example.com"), cx)
+        });
+
+        state.read_with(cx, |state, _| {
+            assert!(state.rendered_text().as_str().starts_with("foo and text"));
+        });
+    }
+
     mod range_highlights {
         use std::ops::Range;
 
@@ -2428,7 +2568,7 @@ mod tests {
             assert_eq!(painted(&state, TextLeafKey::block(0), cx), [0..5]);
             assert!(painted(&state, TextLeafKey::block(7), cx).is_empty());
 
-            let large = "x".repeat(MAX_SYNC_FULL_REPLACE_BYTES + 1);
+            let large = "x".repeat(MAX_SYNC_PARSE_BYTES + 1);
             state.update(cx, |state, cx| state.set_text(&large, cx));
             cx.run_until_parked();
             assert!(!has_highlights(&state, cx));
@@ -2569,7 +2709,7 @@ mod tests {
         fn a_full_update_before_an_append_drops_replaced_highlights(cx: &mut TestAppContext) {
             let state = state("first", cx);
             set(&state, [0..5], cx).unwrap();
-            let large = "x".repeat(MAX_SYNC_FULL_REPLACE_BYTES + 1);
+            let large = "x".repeat(MAX_SYNC_PARSE_BYTES + 1);
             state.update(cx, |state, cx| {
                 state.set_text(&large, cx);
                 state.push_str(" tail", cx);
@@ -2704,13 +2844,12 @@ mod tests {
             let source = "first\n\nsecond **part**";
             let second = find(source, "second **part**");
 
-            // The append is parsed in the background, so until it lands the
-            // view renders the source it had.
+            // A short append's tail is parsed at once, so the view renders the
+            // new source straight away.
             state.read_with(cx, |state, _| {
                 let text = state.rendered_text();
-                assert_eq!(text, before);
-                assert_eq!(text.source(), "first");
-                assert_eq!(text.range_for_source(second.clone()), None);
+                assert_ne!(text, before);
+                assert_eq!(text.source(), source);
             });
             cx.run_until_parked();
 
@@ -2761,10 +2900,7 @@ mod tests {
         #[gpui::test]
         fn a_background_parse_converts_once_it_lands(cx: &mut TestAppContext) {
             cx.update(crate::init);
-            let markdown = format!(
-                "{}\n\n**tail**",
-                "word ".repeat(MAX_SYNC_FULL_REPLACE_BYTES / 4)
-            );
+            let markdown = format!("{}\n\n**tail**", "word ".repeat(MAX_SYNC_PARSE_BYTES / 4));
             let state = cx.update(|cx| cx.new(|cx| TextViewState::markdown(&markdown, cx)));
             let tail = find(&markdown, "**tail**");
             state.read_with(cx, |state, _| {

@@ -343,6 +343,14 @@ impl MarkdownExtensions {
         self.revision
     }
 
+    pub(crate) fn is_frontmatter_enabled(&self) -> bool {
+        self.enable_frontmatter
+    }
+
+    pub(crate) fn is_mdx_enabled(&self) -> bool {
+        self.enable_mdx
+    }
+
     /// Whether replacing these extension handles can change the parsed tree.
     ///
     /// Render methods commonly rebuild equivalent plugin closures every frame.

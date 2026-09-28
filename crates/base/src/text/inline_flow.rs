@@ -8,10 +8,11 @@ use unicode_segmentation::UnicodeSegmentation as _;
 
 use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, DefiniteLength, Element, ElementId,
-    GlobalElementId, Hsla, ImageSource, InspectorElementId, InteractiveElement as _, IntoElement,
-    LayoutId, LineFragment as WrapLineFragment, ObjectFit, Pixels, Refineable as _, ShapedLine,
-    SharedString, Size, StatefulInteractiveElement as _, Styled, StyledImage as _, TextRun,
-    TextStyle, WhiteSpace, Window, img, point, prelude::FluentBuilder as _, px, relative, size,
+    GlobalElementId, Hsla, ImageSource, IndentAdjustment, InspectorElementId,
+    InteractiveElement as _, IntoElement, LayoutId, LineFragment as WrapLineFragment, ObjectFit,
+    Pixels, Refineable as _, ShapedLine, SharedString, Size, StatefulInteractiveElement as _,
+    Styled, StyledImage as _, TextRun, TextStyle, WhiteSpace, Window, img, point,
+    prelude::FluentBuilder as _, px, relative, size,
 };
 
 use crate::text::text_view::{LinkClickHandlerFn, handle_link_click};
@@ -1275,7 +1276,7 @@ fn next_wrap(
     end: usize,
 ) -> usize {
     wrapper
-        .wrap_line(fragments, wrap_width)
+        .wrap_line(fragments, wrap_width, IndentAdjustment::SameIndent)
         .next()
         .map_or(end, |boundary| (start + boundary.ix).min(end))
 }

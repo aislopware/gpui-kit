@@ -5,7 +5,8 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    App, Font, LineFragment, Pixels, Point, ShapedLine, Size, TextAlign, Window, point, px, size,
+    App, Font, IndentAdjustment, LineFragment, Pixels, Point, ShapedLine, Size, TextAlign, Window,
+    point, px, size,
 };
 use ropey::Rope;
 use smallvec::SmallVec;
@@ -331,13 +332,19 @@ impl TextWrapper {
                 }
                 if fragments.is_empty() {
                     return line_wrapper
-                        .wrap_line(&[LineFragment::text(line_str)], wrap_width)
+                        .wrap_line(
+                            &[LineFragment::text(line_str)],
+                            wrap_width,
+                            IndentAdjustment::SameIndent,
+                        )
                         .collect();
                 }
                 if offset < line_str.len() {
                     fragments.push(LineFragment::text(&line_str[offset..]));
                 }
-                line_wrapper.wrap_line(&fragments, wrap_width).collect()
+                line_wrapper
+                    .wrap_line(&fragments, wrap_width, IndentAdjustment::SameIndent)
+                    .collect()
             },
         );
     }

@@ -91,6 +91,11 @@ impl TextInputState {
         dispatch!(self, |state| state.read(cx).text())
     }
 
+    /// The caret's byte offset in [`Self::text`].
+    pub(crate) fn cursor(&self, cx: &App) -> usize {
+        dispatch!(self, |state| state.read(cx).cursor())
+    }
+
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
         dispatch!(self, |state| state
             .update(cx, |state, cx| state.focus(window, cx)))

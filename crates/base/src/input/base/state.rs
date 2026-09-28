@@ -582,6 +582,29 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) auto_scroll: AutoScroll,
 }
 
+/// A text up to this size is the input's accessibility value whole. Anything larger would be
+/// copied out of the rope on every frame the input draws: a 14 MB document cost about 4 ms a
+/// frame that way.
+const ACCESSIBILITY_TEXT_BYTES: usize = 64 * 1024;
+/// Lines around the caret a larger text exposes, as a screen reader's page of a long document.
+const ACCESSIBILITY_PAGE_LINES: usize = 100;
+
+/// What assistive technology reads as the input's value: the whole text when it is small, else
+/// the page of lines around the caret.
+fn accessibility_text(text: &Rope, cursor: usize) -> String {
+    if text.len() <= ACCESSIBILITY_TEXT_BYTES {
+        return text.to_string();
+    }
+    let row = text.offset_to_point(cursor.min(text.len())).row;
+    let first = row.saturating_sub(ACCESSIBILITY_PAGE_LINES / 2);
+    let last = (first + ACCESSIBILITY_PAGE_LINES)
+        .min(text.lines_len())
+        .saturating_sub(1);
+    let start = text.line_start_offset(first);
+    let end = text.line_end_offset(last).max(start);
+    text.slice(start..end).to_string()
+}
+
 /// Accessibility presentation for the editor's existing keyboard-focus boundary.
 ///
 /// Frames and their addon controls keep their own identities. This projection
@@ -5030,7 +5053,7 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
                         accessibility.value_exposed
                             && !self.masked
                             && (window.is_a11y_active() || cfg!(feature = "test-support")),
-                        |this| this.aria_value(self.text.to_string()),
+                        |this| this.aria_value(accessibility_text(&self.text, self.cursor())),
                     )
                     .on_a11y_action(gpui::AccessibleAction::Focus, {
                         let entity = entity.clone();
@@ -5194,6 +5217,21 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_large_text_exposes_the_page_around_the_caret() {
+        let small = Rope::from("one\ntwo");
+        assert_eq!(accessibility_text(&small, 0), "one\ntwo");
+        let lines: Vec<String> = (0..10_000).map(|i| format!("line {i}")).collect();
+        let large = Rope::from(lines.join("\n").as_str());
+        assert!(large.len() > ACCESSIBILITY_TEXT_BYTES);
+        let caret = large.line_start_offset(5_000);
+        let page = accessibility_text(&large, caret);
+        assert_eq!(page.lines().count(), ACCESSIBILITY_PAGE_LINES);
+        assert_eq!(page.lines().next(), Some("line 4950"));
+        let end = accessibility_text(&large, large.len());
+        assert_eq!(end.lines().last(), Some("line 9999"));
+    }
 
     #[gpui::test]
     fn accessibility_actions_recheck_live_editability(cx: &mut TestAppContext) {

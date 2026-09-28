@@ -18,6 +18,8 @@ use crate::{IconName, Size};
 use crate::{RoleOverride, Selectable, StyledExt, h_flex};
 use crate::{Sizable, StyleSized};
 use gpui_base::InputBase as BaseInput;
+use gpui_base::input::RopeExt as _;
+use ropey::Rope;
 use rust_i18n::t;
 
 use super::state::{TextInputState, sync_focused_input_registry};
@@ -92,6 +94,27 @@ fn exposes_accessibility_value(masked: bool, content_type: Option<InputContentTy
             content_type,
             Some(InputContentType::Password | InputContentType::NewPassword)
         )
+}
+
+/// A text up to this size is the input's accessibility value whole. Anything larger would be
+/// copied out of the rope on every frame the input draws: a 14 MB document cost about 4 ms a
+/// frame that way.
+const ACCESSIBILITY_TEXT_BYTES: usize = 64 * 1024;
+/// Lines around the caret a larger text exposes, as a screen reader's page of a long document.
+const ACCESSIBILITY_PAGE_LINES: usize = 100;
+
+/// What assistive technology reads as the input's value: the whole text when it is small, else
+/// the page of lines around the caret.
+fn accessibility_text(text: &Rope, cursor: usize) -> String {
+    if text.len() <= ACCESSIBILITY_TEXT_BYTES {
+        return text.to_string();
+    }
+    let row = text.offset_to_point(cursor.min(text.len())).row;
+    let first = row.saturating_sub(ACCESSIBILITY_PAGE_LINES / 2);
+    let last = (first + ACCESSIBILITY_PAGE_LINES).min(text.lines_len()).saturating_sub(1);
+    let start = text.line_start_offset(first);
+    let end = text.line_end_offset(last).max(start);
+    text.slice(start..end).to_string()
 }
 
 /// Returns `(background, foreground)` colors for input-like components.
@@ -682,7 +705,7 @@ impl RenderOnce for Input {
         // Avoid materializing the rope in normal builds without a client.
         let accessibility_value = ((window.is_a11y_active() || cfg!(feature = "test-support"))
             && exposes_accessibility_value(presentation.is_masked(), content_type))
-        .then(|| state.text(cx).to_string());
+        .then(|| accessibility_text(state.text(cx), state.cursor(cx)));
         let input_focused =
             presentation.focus_handle().is_focused(window) && !presentation.is_disabled();
         if input_focused {
@@ -1234,6 +1257,21 @@ mod tests {
             *captured.lock().unwrap(),
             vec![None, Some("search.query".into())]
         );
+    }
+
+    #[test]
+    fn a_large_text_exposes_the_page_around_the_caret() {
+        let small = Rope::from("one\ntwo");
+        assert_eq!(accessibility_text(&small, 0), "one\ntwo");
+        let lines: Vec<String> = (0..10_000).map(|i| format!("line {i}")).collect();
+        let large = Rope::from(lines.join("\n").as_str());
+        assert!(large.len() > ACCESSIBILITY_TEXT_BYTES);
+        let caret = large.line_start_offset(5_000);
+        let page = accessibility_text(&large, caret);
+        assert_eq!(page.lines().count(), ACCESSIBILITY_PAGE_LINES);
+        assert_eq!(page.lines().next(), Some("line 4950"));
+        let end = accessibility_text(&large, large.len());
+        assert_eq!(end.lines().last(), Some("line 9999"));
     }
 
     #[test]

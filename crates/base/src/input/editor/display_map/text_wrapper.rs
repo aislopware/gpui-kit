@@ -265,7 +265,12 @@ impl TextWrapper {
 
         self.font = font;
         self.font_size = font_size;
-        self.update_all(&self.text.clone(), cx);
+        // Without a wrap width every line is one row whatever the font, so there is nothing to
+        // lay out again. Rewrapping the whole text here cost a zooming editor of 200 000 lines
+        // about 130 ms a frame.
+        if self.wrap_width.is_some() {
+            self.update_all(&self.text.clone(), cx);
+        }
     }
 
     pub(crate) fn prepare_if_need(&mut self, text: &Rope, cx: &mut App) -> bool {

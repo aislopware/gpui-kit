@@ -24,6 +24,10 @@ harness = false
 name = "text_view_scroll"
 harness = false
 
+[[bench]]
+name = "editor_large_file"
+harness = false
+
 [features]
 decimal = ["dep:rust_decimal"]
 test-support = ["gpui/test-support"]
@@ -78,7 +82,7 @@ windows = { workspace = true, features = ["Win32_Foundation", "Win32_UI_WindowsA
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "settings"] }
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8.2"
 gpui = { workspace = true, features = ["test-support", "bench-support"] }
 gpui_platform = { workspace = true, features = ["bench-support"] }
 indoc = "2"

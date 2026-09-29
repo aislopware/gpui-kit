@@ -25,8 +25,17 @@ pub struct Theme {
 impl Global for Theme {}
 
 impl Theme {
-    pub fn global(cx: &App) -> Self {
-        cx.try_global::<Self>().cloned().unwrap_or_default()
+    /// The application's theme, or the default one before any is set.
+    pub fn global(cx: &App) -> &Self {
+        thread_local! {
+            // One per UI thread, for its lifetime: `Theme` holds `Rc`s, so no
+            // `static` can share it.
+            static DEFAULT: &'static Theme = Box::leak(Box::default());
+        }
+        match cx.try_global::<Self>() {
+            Some(theme) => theme,
+            None => DEFAULT.with(|theme| *theme),
+        }
     }
 
     pub fn global_mut(cx: &mut App) -> &mut Self {
@@ -39,12 +48,12 @@ impl Theme {
 
 /// Access to the active base theme through an application context.
 pub(crate) trait ActiveTheme {
-    fn theme(&self) -> Theme;
+    fn theme(&self) -> &Theme;
 }
 
 impl ActiveTheme for App {
     #[inline(always)]
-    fn theme(&self) -> Theme {
+    fn theme(&self) -> &Theme {
         Theme::global(self)
     }
 }

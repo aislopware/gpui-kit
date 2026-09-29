@@ -515,7 +515,7 @@ impl Inline {
         window: &mut Window,
         cx: &mut App,
     ) -> (bool, bool, Option<Selection>) {
-        let Some(text_view_state) = GlobalState::global(cx).text_view_state() else {
+        let Some(text_view_state) = crate::global_state::TextViewStateStack::current(cx) else {
             return (false, false, None);
         };
 
@@ -908,7 +908,7 @@ impl Element for Inline {
         // Report this element's laid-out extent so an ancestor TextView with
         // `max_lines` can snap its clip to a whole-line boundary. Only a view
         // that set `max_lines` collects them.
-        if let Some(text_view_state) = GlobalState::global(cx).text_view_state() {
+        if let Some(text_view_state) = crate::global_state::TextViewStateStack::current(cx) {
             let state = text_view_state.read(cx);
             if state.max_lines.is_some()
                 && let Ok(mut line_spans) = state.line_spans.lock()
@@ -987,13 +987,12 @@ impl Element for Inline {
         }
 
         if let Some(selection) = &state.selection {
-            let color = GlobalState::global(cx)
-                .text_view_state()
+            let color = crate::global_state::TextViewStateStack::current(cx)
                 .map(|state| state.read(cx).text_view_style.selection())
                 .unwrap_or_else(|| crate::Theme::global(cx).tokens.colors.selection);
             Self::paint_selection(selection, &text_layout, &bounds, window, color);
             if let Some((start, end)) = Self::selection_edges(selection, &text_layout)
-                && let Some(text_view_state) = GlobalState::global(cx).text_view_state()
+                && let Some(text_view_state) = crate::global_state::TextViewStateStack::current(cx)
             {
                 text_view_state.update(cx, |state, _| {
                     state.selection_adapter.register_selection_edges(start, end);
@@ -1002,7 +1001,7 @@ impl Element for Inline {
         }
 
         if is_selectable {
-            if let Some(text_view_state) = GlobalState::global(cx).text_view_state() {
+            if let Some(text_view_state) = crate::global_state::TextViewStateStack::current(cx) {
                 let text_bounds = Self::text_line_bounds(
                     &text_layout,
                     text_layout.line_height(),
@@ -1025,7 +1024,7 @@ impl Element for Inline {
                 let text_layout = text_layout.clone();
                 let inline_state = self.state.clone();
                 let text = self.text.clone();
-                let text_view_state = GlobalState::global(cx).text_view_state();
+                let text_view_state = crate::global_state::TextViewStateStack::current(cx);
                 let line_bounds = self.selection_bounds;
                 move |event: &MouseDownEvent, phase, window, cx| {
                     if !phase.bubble()
@@ -1127,7 +1126,7 @@ impl Element for Inline {
                 let links = self.links.clone();
                 let text_layout = text_layout.clone();
                 let hitbox = hitbox.clone();
-                let text_view_state = GlobalState::global(cx).text_view_state();
+                let text_view_state = crate::global_state::TextViewStateStack::current(cx);
                 let link_click_handler = self.link_click_handler.clone();
 
                 move |event: &MouseUpEvent, phase, window, cx| {

@@ -1192,6 +1192,13 @@ impl<M: InputModeKind> InputBaseState<M> {
         cx.notify();
     }
 
+    /// Whether an input method currently owns uncommitted text. Consumers that
+    /// implement their own Enter shortcut should defer submission until a later
+    /// key press after the composition has been committed.
+    pub fn is_composing(&self) -> bool {
+        self.ime_marked_range.is_some()
+    }
+
     /// Set whether to show whitespace characters.
     #[doc(hidden)]
     pub fn show_whitespaces(mut self, show: bool) -> Self {
@@ -1979,6 +1986,13 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     pub(super) fn enter(&mut self, action: &Enter, window: &mut Window, cx: &mut Context<Self>) {
+        // The same Enter press can confirm an IME candidate. It must not also
+        // insert a newline, pick a menu item or emit PressEnter for the host to
+        // read as send.
+        if self.is_composing() {
+            return;
+        }
+
         if M::handle_context_menu_action(self, Box::new(action.clone()), window, cx) {
             return;
         }
@@ -4442,7 +4456,14 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         let last_layout = self.last_layout.as_ref()?;
         let line_height = last_layout.line_height;
         let line_number_width = last_layout.line_number_width;
-        let range = self.range_from_utf16(&range_utf16);
+        let mut range = self.range_from_utf16(&range_utf16);
+        // An input method asks as soon as it marks text, before a paint lays that text out.
+        // Text before the caret the layout was painted with has not moved, and a
+        // composition starts there, so the answer holds to it until the paint asks again.
+        if last_layout.document_revision != self.document_revision {
+            let caret = self.last_cursor.unwrap_or_else(|| self.cursor());
+            range = range.start.min(caret)..range.end.min(caret);
+        }
 
         let mut start_origin = None;
         let mut end_origin = None;
@@ -7719,6 +7740,88 @@ mod tests {
 
                 s.redo(&Redo, window, cx);
                 assert_eq!(s.value(), "你");
+            });
+        });
+    }
+
+    /// Confirming an active IME candidate must not insert a newline.
+    #[gpui::test]
+    fn test_enter_confirms_composition_without_inserting_newline(cx: &mut TestAppContext) {
+        let input_view = InputView::build_textarea(cx, |state| state.default_value(""));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_and_mark_text_in_range(None, "ni", Some(2..2), window, cx);
+                assert!(state.is_composing());
+                for secondary in [false, true] {
+                    let enter = Enter {
+                        secondary,
+                        shift: false,
+                    };
+                    state.enter(&enter, window, cx);
+                    assert_eq!(state.value(), "ni");
+                }
+
+                state.replace_text_in_range(None, "你", window, cx);
+                assert!(!state.is_composing());
+                let enter = Enter {
+                    secondary: false,
+                    shift: false,
+                };
+                state.enter(&enter, window, cx);
+                assert_eq!(state.value(), "你\n");
+            });
+        });
+    }
+
+    /// An input method asks where its marked text is before a paint lays it
+    /// out. The answer holds to the caret on the caret's line, rather than
+    /// running to the start of the next line or the corner of the input.
+    #[gpui::test]
+    fn test_ime_bounds_before_a_paint_hold_to_the_caret(cx: &mut TestAppContext) {
+        let input_view = InputView::build_textarea(cx, |state| {
+            state.default_value("这是一段已经输入的中文文字\nsecond line")
+        });
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.focus(window, cx);
+                let end_of_first_line = state.text.line_end_offset(0);
+                state.set_cursor_to(end_of_first_line);
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let (caret, before) = cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                let bounds = state.last_bounds.unwrap();
+                let caret = state.selected_text_range(false, window, cx).unwrap().range;
+                let before = state
+                    .bounds_for_range(caret.clone(), bounds, window, cx)
+                    .unwrap();
+
+                state.replace_and_mark_text_in_range(None, "n", Some(1..1), window, cx);
+                let marked = state.marked_text_range(window, cx).unwrap();
+                let pending = state.bounds_for_range(marked, bounds, window, cx).unwrap();
+                assert_eq!(pending.origin, before.origin);
+                assert_eq!(pending.size.height, before.size.height);
+                assert!(pending.size.width >= px(0.), "{pending:?}");
+                (caret, before)
+            })
+        });
+
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                let bounds = state.last_bounds.unwrap();
+                let marked = state.marked_text_range(window, cx).unwrap();
+                assert_eq!(marked.start, caret.start);
+                let painted = state.bounds_for_range(marked, bounds, window, cx).unwrap();
+                assert_eq!(painted.origin, before.origin);
+                assert!(painted.size.width > px(0.), "{painted:?}");
             });
         });
     }

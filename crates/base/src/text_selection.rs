@@ -213,12 +213,14 @@ impl TextSelectionSnapshot {
 struct RenderedMarker;
 
 /// Per-frame geometry reported by a [`TextSelectionHandle`] participant.
+#[derive(Clone)]
 pub struct TextSelectionRegistration {
     hitbox: Hitbox,
     bounds: Bounds<Pixels>,
     scroll_offset: Point<Pixels>,
     scope: TextSelectionScopeId,
     document_order: u64,
+    automatic_order: bool,
     text_bounds: Vec<Bounds<Pixels>>,
     self_scroll: bool,
     selection_edges: Option<(Bounds<Pixels>, Bounds<Pixels>)>,
@@ -234,6 +236,7 @@ impl TextSelectionRegistration {
             scroll_offset: Point::default(),
             scope: TextSelectionScopeId::default(),
             document_order: 0,
+            automatic_order: false,
             text_bounds: Vec::new(),
             self_scroll: false,
             selection_edges: None,
@@ -300,6 +303,19 @@ impl TextSelectionRegistration {
     /// Sets the stable logical document order.
     pub fn with_document_order(mut self, document_order: u64) -> Self {
         self.document_order = document_order;
+        self.automatic_order = false;
+        self
+    }
+
+    /// Takes the document order from where the participant paints among the
+    /// other participants that do, counted from 1.
+    ///
+    /// The order is kept across frames that paint only some participants, as
+    /// a renderer that draws unchanged views from the last frame does: a
+    /// participant painted alone keeps its place, and one painted after
+    /// another moves behind it.
+    pub fn with_automatic_document_order(mut self) -> Self {
+        self.automatic_order = true;
         self
     }
 
@@ -744,11 +760,15 @@ impl SelectableTextState {
         }
         self.snapshot = snapshot;
         self.projected_copy_text = None;
+        // Participants paint their highlight from the snapshot.
+        cx.notify();
         cx.emit(TextSelectionEvent::SelectionChanged(snapshot));
     }
 
     fn clear_state(&mut self, cx: &mut Context<Self>) -> Option<ClearHandler> {
-        self.snapshot = None;
+        if self.snapshot.take().is_some() || self.local_selection {
+            cx.notify();
+        }
         self.projected_copy_text = None;
         self.local_selection = false;
         cx.emit(TextSelectionEvent::Cleared);
@@ -834,6 +854,17 @@ impl TextSelectionHandle {
         let Some(state) = WindowSelectionState::existing(window, cx) else {
             return;
         };
+        if registration.automatic_order && state.read(cx).painted_automatic.borrow().is_empty() {
+            // Ended once this frame is drawn, rather than at the selection
+            // layer's paint: a frame drawing views from the last one may not
+            // paint the layer at all.
+            let state = state.downgrade();
+            window.defer(cx, move |_, cx| {
+                if let Some(state) = state.upgrade() {
+                    state.read(cx).end_automatic_paint_order();
+                }
+            });
+        }
         state.update(cx, |state, cx| {
             state.register_participant(self.clone(), registration, cx)
         });
@@ -1139,6 +1170,11 @@ struct WindowSelectionState {
     /// bounces stretch and snap back on every tick.
     auto_scroll_stall: (Option<(Bounds<Pixels>, Point<Pixels>)>, u8),
     touch: TouchSelection,
+    /// The participants with an automatic document order, in that order.
+    automatic_order: Vec<EntityId>,
+    /// The automatic participants painted so far in the frame being drawn, in
+    /// paint order; emptied once it is drawn.
+    painted_automatic: std::cell::RefCell<Vec<EntityId>>,
     /// This entity, so that touch changes can notify observers from paths that
     /// only hold an [`App`].
     entity_id: Option<EntityId>,
@@ -1283,12 +1319,14 @@ impl WindowSelectionState {
         let mut handlers = Vec::new();
         for (id, participant) in stale {
             self.participants.remove(&id);
+            self.automatic_order.retain(|automatic| *automatic != id);
             if let Some(participant) = participant.upgrade() {
                 if let Some(handler) = participant.update(cx, |state, cx| state.clear_state(cx)) {
                     handlers.push(handler);
                 }
             }
         }
+        self.number_automatic_participants();
         self.publish_snapshots(cx);
         self.end_frame();
         handlers
@@ -1361,14 +1399,23 @@ impl WindowSelectionState {
                 .is_none_or(|previous| {
                     previous.registration.selection_edges != registration.selection_edges
                 });
+        let id = selection.entity_id();
+        let automatic = registration.automatic_order;
+        let bounds = registration.bounds;
         self.participants.insert(
-            selection.entity_id(),
+            id,
             ParticipantRegistration {
                 participant: selection.downgrade(),
                 registration: Rc::new(registration),
                 generation: self.frame_generation.get(),
             },
         );
+        if automatic {
+            self.place_automatic_participant(id, bounds);
+        } else {
+            self.automatic_order.retain(|automatic| *automatic != id);
+        }
+        self.number_automatic_participants();
         self.publish_snapshots(cx);
         if edges_moved {
             self.touch_changed(cx);
@@ -2296,6 +2343,79 @@ impl WindowSelectionState {
     fn prune_dead_participants(&mut self) {
         self.participants
             .retain(|_, registration| registration.participant.upgrade().is_some());
+        if self
+            .automatic_order
+            .iter()
+            .any(|id| !self.participants.contains_key(id))
+        {
+            let participants = &self.participants;
+            self.automatic_order
+                .retain(|id| participants.contains_key(id));
+            self.number_automatic_participants();
+        }
+    }
+
+    /// Places an automatic participant just painted: behind the one painted
+    /// before it in this frame, or where it already was when it is the first.
+    /// A participant new to the window goes behind its predecessor and behind
+    /// the unpainted participants that sit above it on screen, since this
+    /// frame may be drawing it alone.
+    ///
+    /// Numbering by paint order within each frame instead would give a
+    /// participant painted alone the first number, which reorders it against
+    /// the ones drawn from the last frame and changes every snapshot, which
+    /// draws the next frame, and so on without end.
+    fn place_automatic_participant(&mut self, id: EntityId, bounds: Bounds<Pixels>) {
+        let mut painted = self.painted_automatic.borrow_mut();
+        let predecessor = painted.last().copied().filter(|previous| *previous != id);
+        if !painted.contains(&id) {
+            painted.push(id);
+        }
+        let position_of = |order: &[EntityId], id: EntityId| order.iter().position(|e| *e == id);
+        let after =
+            predecessor.and_then(|predecessor| position_of(&self.automatic_order, predecessor));
+        match (position_of(&self.automatic_order, id), after) {
+            (Some(_), None) => {}
+            (Some(ix), Some(after)) if ix > after => {}
+            (Some(ix), Some(_)) => {
+                self.automatic_order.remove(ix);
+                let after = predecessor
+                    .and_then(|predecessor| position_of(&self.automatic_order, predecessor))
+                    .map_or(0, |after| after + 1);
+                self.automatic_order.insert(after, id);
+            }
+            (None, after) => {
+                let mut slot = after.map_or(0, |after| after + 1);
+                while let Some(next) = self.automatic_order.get(slot)
+                    && !painted.contains(next)
+                    && self.participants.get(next).is_some_and(|next| {
+                        let next = next.registration.bounds.origin;
+                        (next.y, next.x) <= (bounds.origin.y, bounds.origin.x)
+                    })
+                {
+                    slot += 1;
+                }
+                self.automatic_order.insert(slot, id);
+            }
+        }
+    }
+
+    /// Writes each automatic participant's place into its registration,
+    /// touching only those whose place changed.
+    fn number_automatic_participants(&mut self) {
+        for (ix, id) in self.automatic_order.iter().enumerate() {
+            let order = ix as u64 + 1;
+            if let Some(participant) = self.participants.get_mut(id)
+                && participant.registration.document_order != order
+            {
+                Rc::make_mut(&mut participant.registration).document_order = order;
+            }
+        }
+    }
+
+    /// The frame being drawn is over: the next one starts a new paint order.
+    fn end_automatic_paint_order(&self) {
+        self.painted_automatic.borrow_mut().clear();
     }
 }
 
@@ -2649,13 +2769,7 @@ impl Element for TextSelectionLayer {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        // Automatic participant order is paint order within this frame. Keep
-        // this lifecycle in base so base-only applications do not need a
-        // separate root component to reset it. Otherwise, registering the
-        // first of two selected TextViews temporarily reverses their order
-        // against the previous frame and alternates coverage forever.
         GlobalState::init(cx);
-        GlobalState::global(cx).begin_selection_frame();
         let state = retain_text_selection_state(global_id, window, cx);
         // The handles and the menu register again as they paint this frame.
         if state.read(cx).touch.has_ui_bounds() {
@@ -3174,6 +3288,38 @@ mod tests {
                 .with_text_bounds(vec![bounds]),
                 cx,
             );
+        }
+    }
+
+    impl FakeParticipant {
+        fn paint_automatic(
+            &self,
+            selection_state: &mut WindowSelectionState,
+            y: f32,
+            cx: &mut gpui::App,
+        ) {
+            let bounds = Bounds::new(point(px(0.), px(y)), size(px(100.), px(10.)));
+            selection_state.register_participant(
+                self.selection.clone(),
+                TextSelectionRegistration::new(
+                    Hitbox {
+                        id: HitboxId::placeholder(),
+                        bounds,
+                        content_mask: ContentMask { bounds },
+                        behavior: HitboxBehavior::Normal,
+                    },
+                    bounds,
+                )
+                .with_automatic_document_order()
+                .with_text_bounds(vec![bounds]),
+                cx,
+            );
+        }
+
+        fn order(&self, selection_state: &WindowSelectionState) -> u64 {
+            selection_state.participants[&self.selection.entity_id()]
+                .registration
+                .document_order
         }
     }
 
@@ -4171,6 +4317,52 @@ mod tests {
                 });
             })
             .unwrap();
+    }
+
+    /// A frame drawing unchanged views from the last one paints only some
+    /// participants; their automatic order must be the one a frame painting
+    /// all of them gives.
+    #[gpui::test]
+    fn automatic_order_holds_across_frames_that_paint_some_participants(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let mut state = WindowSelectionState::default();
+            let [a, b, c, d] = ["a", "b", "c", "d"].map(|text| FakeParticipant::new(text, cx));
+            let frame = |state: &mut WindowSelectionState,
+                         painted: &[(&FakeParticipant, f32)],
+                         cx: &mut gpui::App| {
+                for (participant, y) in painted {
+                    participant.paint_automatic(state, *y, cx);
+                }
+                state.end_automatic_paint_order();
+            };
+
+            frame(&mut state, &[(&a, 0.), (&b, 20.), (&c, 40.)], cx);
+            assert_eq!(
+                [a.order(&state), b.order(&state), c.order(&state)],
+                [1, 2, 3]
+            );
+
+            frame(&mut state, &[(&c, 40.)], cx);
+            assert_eq!(
+                [a.order(&state), b.order(&state), c.order(&state)],
+                [1, 2, 3],
+                "a participant painted alone keeps its place"
+            );
+
+            frame(&mut state, &[(&d, 10.)], cx);
+            assert_eq!(
+                [&a, &d, &b, &c].map(|participant| participant.order(&state)),
+                [1, 2, 3, 4],
+                "a new participant painted alone goes where it sits on screen"
+            );
+
+            frame(&mut state, &[(&b, 0.), (&a, 20.)], cx);
+            assert_eq!(
+                [&d, &b, &a, &c].map(|participant| participant.order(&state)),
+                [1, 2, 3, 4],
+                "a participant painted after another goes behind it"
+            );
+        });
     }
 
     #[gpui::test]

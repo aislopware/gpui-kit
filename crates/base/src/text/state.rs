@@ -118,6 +118,7 @@ pub struct TextViewState {
     pub(super) table_actions: Option<std::sync::Arc<TableActionsFn>>,
     pub(super) image_source: Option<std::sync::Arc<super::text_view::ImageSourceFn>>,
     pub(super) link_click_handler: Option<std::sync::Arc<LinkClickHandlerFn>>,
+    pub(super) reveal_handler: Option<std::rc::Rc<super::text_view::RevealHandlerFn>>,
     pub(super) markdown_extensions: Arc<MarkdownExtensions>,
 
     pub(super) is_selecting: bool,
@@ -226,6 +227,7 @@ impl TextViewState {
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
+            reveal_handler: None,
             image_source: None,
             markdown_extensions: Arc::default(),
             is_selecting: false,
@@ -355,14 +357,21 @@ impl TextViewState {
     /// merely equal bytes) is recognized without a comparison, as long as the
     /// state still holds a text of its length.
     pub(super) fn set_element_text(&mut self, text: &SharedString, cx: &mut Context<Self>) {
-        let same_string = self.element_text.as_ref().is_some_and(|current| {
-            current.as_ptr() == text.as_ptr() && current.len() == text.len()
-        });
-        if same_string && self.text.len() == text.len() {
+        if self.holds_element_text(text) {
             return;
         }
         self.element_text = Some(text.clone());
         self.set_text(text, cx);
+    }
+
+    /// Whether `text` is the string a `TextView` element handed over last
+    /// time and the state still holds it, so [`Self::set_element_text`]
+    /// would change nothing.
+    pub(super) fn holds_element_text(&self, text: &SharedString) -> bool {
+        let same_string = self.element_text.as_ref().is_some_and(|current| {
+            current.as_ptr() == text.as_ptr() && current.len() == text.len()
+        });
+        same_string && self.text.len() == text.len()
     }
 
     /// Append partial text content to the existing text.
@@ -1225,7 +1234,7 @@ impl Render for TextViewState {
         if let Some(block_ix) = reveal_block {
             self.list_state.scroll_to_reveal_item(block_ix);
         }
-        content
+        super::text_view::TextViewContent::new(cx.entity(), content)
     }
 }
 

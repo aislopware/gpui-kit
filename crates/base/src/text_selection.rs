@@ -846,7 +846,23 @@ impl TextSelectionHandle {
 
     // Rich text renders its own selection; retain geometry only for word hit testing.
     pub(crate) fn set_hit_test_runs(&self, runs: &[TextSelectionRun], cx: &mut App) {
-        self.0.update(cx, |state, _| state.runs = runs.to_vec());
+        let unchanged = {
+            let current = &self.0.read(cx).runs;
+            current.len() == runs.len()
+                && current.iter().zip(runs).all(|(current, run)| {
+                    current.document_order == run.document_order
+                        && current.bounds == run.bounds
+                        && current.text == run.text
+                })
+        };
+        if !unchanged {
+            self.0.update(cx, |state, _| state.runs = runs.to_vec());
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hit_test_run_count(&self, cx: &App) -> usize {
+        self.0.read(cx).runs.len()
     }
 
     /// Subscribes to participant selection notifications.
@@ -1078,6 +1094,10 @@ impl TouchSelection {
                 .any(|bounds| bounds.contains(&position))
     }
 
+    fn has_ui_bounds(&self) -> bool {
+        !self.ui_bounds.is_empty() || !self.previous_ui_bounds.is_empty()
+    }
+
     /// A new frame begins: what was painted last frame is kept one frame more.
     fn begin_frame(&mut self) {
         self.previous_ui_bounds = std::mem::take(&mut self.ui_bounds);
@@ -1104,8 +1124,12 @@ struct WindowSelectionState {
     pending_extension_anchor: Option<SelectionEndpoint>,
     is_selecting: bool,
     did_hit_text: bool,
-    frame_generation: u64,
-    finish_frame_scheduled: bool,
+    // Frame bookkeeping, kept out of the entity's updates: an update while
+    // drawing counts as a change for every view that read the state, which a
+    // renderer that draws unchanged views from the last frame, as GPUI Fast's
+    // retained mode does, would then build again.
+    frame_generation: std::cell::Cell<u64>,
+    finish_frame_scheduled: std::cell::Cell<bool>,
     refresh_held_cursor: bool,
     mouse_down_prepared: bool,
     auto_scroll: AutoScroll,
@@ -1248,14 +1272,12 @@ impl WindowSelectionState {
     /// the registration it last reported, which still describes what is on
     /// screen; only one whose element GPUI has dropped is swept.
     pub fn finish_frame(&mut self, cx: &mut App) -> Vec<ClearHandler> {
-        self.finish_frame_scheduled = false;
         let stale = self
             .participants
             .iter()
             .filter_map(|(id, registration)| {
-                (registration.generation != self.frame_generation
-                    && !registration.registration.is_rendered())
-                .then(|| (*id, registration.participant.clone()))
+                self.is_stale(registration)
+                    .then(|| (*id, registration.participant.clone()))
             })
             .collect::<Vec<_>>();
         let mut handlers = Vec::new();
@@ -1268,16 +1290,44 @@ impl WindowSelectionState {
             }
         }
         self.publish_snapshots(cx);
-        self.frame_generation = self.frame_generation.wrapping_add(1);
+        self.end_frame();
         handlers
     }
 
-    fn schedule_finish_frame(&mut self) -> bool {
-        if self.finish_frame_scheduled {
-            return false;
+    /// [`Self::finish_frame`] for the frame just painted, updating the state
+    /// only when a participant has to be swept. Most frames sweep nothing and
+    /// change no snapshot, and then nothing is written.
+    fn finish_painted_frame(state: &Entity<Self>, cx: &mut App) -> Vec<ClearHandler> {
+        let sweep = {
+            let state = state.read(cx);
+            state.participants.values().any(|registration| {
+                state.is_stale(registration) || registration.participant.upgrade().is_none()
+            })
+        };
+        if sweep {
+            return state.update(cx, |state, cx| state.finish_frame(cx));
         }
-        self.finish_frame_scheduled = true;
-        true
+        let changed = state.read(cx).changed_snapshots(cx);
+        deliver_snapshots(changed, cx);
+        state.read(cx).end_frame();
+        Vec::new()
+    }
+
+    /// Whether a participant was neither painted this frame nor drawn from
+    /// the last one.
+    fn is_stale(&self, registration: &ParticipantRegistration) -> bool {
+        registration.generation != self.frame_generation.get()
+            && !registration.registration.is_rendered()
+    }
+
+    fn end_frame(&self) {
+        self.finish_frame_scheduled.set(false);
+        self.frame_generation
+            .set(self.frame_generation.get().wrapping_add(1));
+    }
+
+    fn schedule_finish_frame(&self) -> bool {
+        !self.finish_frame_scheduled.replace(true)
     }
 
     /// Registers this frame's geometry for a participant.
@@ -1316,7 +1366,7 @@ impl WindowSelectionState {
             ParticipantRegistration {
                 participant: selection.downgrade(),
                 registration: Rc::new(registration),
-                generation: self.frame_generation,
+                generation: self.frame_generation.get(),
             },
         );
         self.publish_snapshots(cx);
@@ -2027,23 +2077,36 @@ impl WindowSelectionState {
 
     fn publish_snapshots(&mut self, cx: &mut App) {
         self.prune_dead_participants();
+        let changed = self.changed_snapshots(cx);
+        deliver_snapshots(changed, cx);
+    }
+
+    /// The participants whose snapshot differs from the one they hold, with
+    /// the snapshot each is to hold. Only those are updated: an update counts
+    /// as a change for every view that read the participant.
+    fn changed_snapshots(
+        &self,
+        cx: &App,
+    ) -> Vec<(Entity<SelectableTextState>, Option<TextSelectionSnapshot>)> {
         let snapshot = self.snapshot();
         let single_participant = self.single_participant();
-        for (id, registration) in &self.participants {
-            let Some(participant) = registration.participant.upgrade() else {
-                continue;
-            };
-            let participant_snapshot = (registration.registration.scope == self.active_scope
-                && self.participates(*id, registration)
-                && single_participant.is_none_or(|single| single == *id))
-            .then_some(snapshot)
-            .flatten()
-            .map(|mut snapshot| {
-                snapshot.coverage = self.coverage_for(*id);
-                snapshot
-            });
-            participant.update(cx, |state, cx| state.set_snapshot(participant_snapshot, cx));
-        }
+        self.participants
+            .iter()
+            .filter_map(|(id, registration)| {
+                let participant = registration.participant.upgrade()?;
+                let participant_snapshot = (registration.registration.scope == self.active_scope
+                    && self.participates(*id, registration)
+                    && single_participant.is_none_or(|single| single == *id))
+                .then_some(snapshot)
+                .flatten()
+                .map(|mut snapshot| {
+                    snapshot.coverage = self.coverage_for(*id);
+                    snapshot
+                });
+                (participant.read(cx).snapshot != participant_snapshot)
+                    .then_some((participant, participant_snapshot))
+            })
+            .collect()
     }
 
     fn coverage_for(&self, id: EntityId) -> TextSelectionCoverage {
@@ -2233,6 +2296,15 @@ impl WindowSelectionState {
     fn prune_dead_participants(&mut self) {
         self.participants
             .retain(|_, registration| registration.participant.upgrade().is_some());
+    }
+}
+
+fn deliver_snapshots(
+    changed: Vec<(Entity<SelectableTextState>, Option<TextSelectionSnapshot>)>,
+    cx: &mut App,
+) {
+    for (participant, snapshot) in changed {
+        participant.update(cx, |state, cx| state.set_snapshot(snapshot, cx));
     }
 }
 
@@ -2449,6 +2521,9 @@ impl TextSelection {
                 .insert(window.window_handle().window_id(), scope);
             return;
         };
+        if state.read(cx).active_scope == scope {
+            return;
+        }
         let handlers = state.update(cx, |state, cx| state.set_active_scope_state(scope, cx));
         dispatch_clear_handlers(handlers, cx);
     }
@@ -2597,10 +2672,12 @@ impl Element for TextSelectionLayer {
         // first of two selected TextViews temporarily reverses their order
         // against the previous frame and alternates coverage forever.
         GlobalState::init(cx);
-        GlobalState::global_mut(cx).begin_selection_frame();
+        GlobalState::global(cx).begin_selection_frame();
         let state = retain_text_selection_state(global_id, window, cx);
         // The handles and the menu register again as they paint this frame.
-        state.update(cx, |state, _| state.touch.begin_frame());
+        if state.read(cx).touch.has_ui_bounds() {
+            state.update(cx, |state, _| state.touch.begin_frame());
+        }
         TextSelectionLayerPrepaintState(state)
     }
 
@@ -2631,24 +2708,35 @@ fn retain_text_selection_state(
             (state.clone(), state)
         },
     );
-    if !cx.has_global::<SelectionStateRegistry>() {
-        cx.set_global(SelectionStateRegistry::default());
+    // Writing the registry every frame would count as a change for every
+    // view that read it.
+    let registered = cx
+        .try_global::<SelectionStateRegistry>()
+        .and_then(|registry| registry.0.get(&window_id))
+        .is_some_and(|registered| registered.entity_id() == state.entity_id());
+    if !registered {
+        if !cx.has_global::<SelectionStateRegistry>() {
+            cx.set_global(SelectionStateRegistry::default());
+        }
+        cx.global_mut::<SelectionStateRegistry>()
+            .0
+            .insert(window_id, state.downgrade());
     }
-    cx.global_mut::<SelectionStateRegistry>()
-        .0
-        .insert(window_id, state.downgrade());
     state
 }
 
 fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Window, cx: &mut App) {
-    if state.update(cx, |state, _| state.schedule_finish_frame()) {
+    if state.read(cx).schedule_finish_frame() {
         let state = state.downgrade();
         window.defer(cx, move |window, cx| {
             let Some(state) = state.upgrade() else {
                 return;
             };
-            let handlers = state.update(cx, |state, cx| state.finish_frame(cx));
+            let handlers = WindowSelectionState::finish_painted_frame(&state, cx);
             dispatch_clear_handlers(handlers, cx);
+            if !state.read(cx).refresh_held_cursor {
+                return;
+            }
             // Direct participant scrolling produces no wheel event. Refresh
             // the held cursor after paint registers the new scroll geometry.
             let refresh_cursor = state.update(cx, |state, cx| {

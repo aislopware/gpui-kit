@@ -120,7 +120,7 @@ fn set_theme<'js>(ctx: Ctx<'js>, value: Value<'js>) -> JsResult<()> {
     let supplied: ScriptTheme = serde_json::from_str(&source)
         .map_err(|error| js_error::type_error(&ctx, &format!("invalid theme snapshot: {error}")))?;
     crate::scope::with_current_app(|cx| {
-        let mut tokens = Theme::global(cx).tokens;
+        let mut tokens = Theme::global(cx).tokens.clone();
         apply_colors(&mut tokens.colors, &supplied.tokens.colors)
             .map_err(|e| js_error::type_error(&ctx, &e))?;
         apply_scale(

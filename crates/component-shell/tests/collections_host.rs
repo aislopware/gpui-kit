@@ -79,6 +79,11 @@ fn mount(
     (context, view, app)
 }
 
+/// Draws any frame still pending. The probes record every render, and GPUI
+/// renders a view when something it read changed: at mount, and in the frame a
+/// click or refresh asks for. An explicit draw with nothing changed renders
+/// nothing, so a stage reads what the probes gathered since the last stage,
+/// never clearing them just before this draw.
 fn draw(context: &mut VisualTestContext, view: Entity<gpui_shell::ScriptView>) {
     drop(view);
     context.update(|window, cx| window.draw(cx).clear(cx));
@@ -136,7 +141,6 @@ export default class App extends View {
 }
 "#;
     let (mut context, view, _app) = mount(cx, source);
-    collections::test_probe::take_rows();
     draw(&mut context, view.clone());
     context.update(|_, cx| {
         assert_eq!(view.read(cx).build_error(), None);
@@ -153,7 +157,6 @@ export default class App extends View {
 
     context.simulate_click(point(px(20.), px(20.)), Modifiers::default());
     context.run_until_parked();
-    collections::test_probe::take_rows();
     draw(&mut context, view.clone());
     let collapsed = distinct_rows(collections::test_probe::take_rows());
     assert_eq!(
@@ -167,7 +170,6 @@ export default class App extends View {
 
     context.update(|_, cx| view.update(cx, |view, cx| view.refresh(cx)));
     context.run_until_parked();
-    collections::test_probe::take_rows();
     draw(&mut context, view.clone());
     context.update(|_, cx| {
         assert_eq!(view.read(cx).build_error(), None);
@@ -184,7 +186,6 @@ export default class App extends View {
 
     context.simulate_click(point(px(20.), px(20.)), Modifiers::default());
     context.run_until_parked();
-    collections::test_probe::take_rows();
     draw(&mut context, view);
     let expanded = distinct_rows(collections::test_probe::take_rows());
     assert_eq!(
@@ -205,8 +206,8 @@ fn draw_invalid(cx: &mut TestAppContext, expression: &str) -> Vec<String> {
 import {{ Tree, TreeItem }} from "gpui-component";
 export default class App extends View {{ render() {{ return {expression}; }} }}"#
     );
-    let (mut context, view, _app) = mount(cx, &source);
     collections::test_probe::take_errors();
+    let (mut context, view, _app) = mount(cx, &source);
     draw(&mut context, view);
     collections::test_probe::take_errors()
 }

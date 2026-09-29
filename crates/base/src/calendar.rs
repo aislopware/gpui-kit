@@ -204,9 +204,10 @@ impl CalendarState {
         &mut self,
         matcher: impl Into<Matcher>,
         _: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
         self.disabled_matcher = Some(Rc::new(matcher.into()));
+        cx.notify();
     }
     pub fn set_disabled_matcher_shared(&mut self, matcher: Option<Rc<Matcher>>) {
         self.disabled_matcher = matcher;

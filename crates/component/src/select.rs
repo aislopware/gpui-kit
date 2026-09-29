@@ -358,8 +358,9 @@ where
     where
         D: SearchableListDelegate + 'static,
     {
-        self.state.list.update(cx, |list, _| {
+        self.state.list.update(cx, |list, cx| {
             list.delegate_mut().delegate = items;
+            cx.notify();
         });
     }
 

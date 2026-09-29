@@ -236,8 +236,9 @@ where
     /// up-to-date check state. Call after every mutation that changes `self.selection`.
     pub(crate) fn sync_snapshot<P: 'static>(&self, cx: &mut Context<P>) {
         let snapshot = self.selection.clone();
-        self.list.update(cx, |l, _| {
+        self.list.update(cx, |l, cx| {
             l.delegate_mut().update_selection_snapshot(snapshot);
+            cx.notify();
         });
     }
 }

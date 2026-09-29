@@ -5855,6 +5855,13 @@ mod tests {
             }))
         });
         cx.run_until_parked();
+        // The first paint reports the input's geometry to layout consumers,
+        // and asks for the input to be drawn again with it, as it does after
+        // any change of geometry, which builds the cached parent again once.
+        // Upstream GPUI loses that first request, made while the window draws
+        // an entity it has not drawn before; a renderer that tracks what each
+        // view read, as GPUI Fast's retained mode does, honours it.
+        window.update(cx, |_, _, cx| cx.notify()).unwrap();
         let before = renders.get();
         assert!(before > 0);
         for _ in 0..60 {

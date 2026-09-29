@@ -368,6 +368,7 @@ where
 
         if removed {
             self.state.sync_snapshot(cx);
+            cx.notify();
         }
 
         removed
@@ -383,8 +384,9 @@ where
 
     /// Replace the underlying delegate (item data source).
     pub fn set_items(&mut self, items: D, _: &mut Window, cx: &mut Context<Self>) {
-        self.state.list.update(cx, |list, _| {
+        self.state.list.update(cx, |list, cx| {
             list.delegate_mut().delegate = items;
+            cx.notify();
         });
     }
 

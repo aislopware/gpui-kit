@@ -2113,8 +2113,11 @@ where
                             }),
                         ))
                         .children(self.render_fixed_cols_border(cx))
-                        .on_prepaint(move |bounds, _, cx| {
-                            view.update(cx, |r, _| r.fixed_head_cols_bounds = bounds)
+                        .on_prepaint(move |bounds, window, cx| {
+                            if view.read(cx).fixed_head_cols_bounds != bounds {
+                                view.update(cx, |r, _| r.fixed_head_cols_bounds = bounds);
+                                lay_columns_out_again(view.entity_id(), window);
+                            }
                         }),
                 )
             })
@@ -2839,7 +2842,12 @@ where
             })
             .on_prepaint({
                 let state = cx.entity();
-                move |bounds, _, cx| state.update(cx, |state, _| state.bounds = bounds)
+                move |bounds, window, cx| {
+                    if state.read(cx).bounds != bounds {
+                        state.update(cx, |state, _| state.bounds = bounds);
+                        lay_columns_out_again(state.entity_id(), window);
+                    }
+                }
             })
             .when(!window.is_inspector_picking(cx), |this| {
                 this.child(
@@ -2857,6 +2865,13 @@ where
                 )
             })
     }
+}
+
+/// The visible columns are chosen at render from the bounds the last
+/// prepaint measured, so when those move the table has to be built again. A
+/// notify raised while drawing draws nothing, hence the next frame.
+fn lay_columns_out_again(table: gpui::EntityId, window: &mut Window) {
+    window.on_next_frame(move |_, cx| cx.notify(table));
 }
 
 #[cfg(test)]

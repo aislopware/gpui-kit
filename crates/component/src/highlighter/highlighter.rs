@@ -13,9 +13,7 @@ use std::{
     ops::{ControlFlow, Range},
 };
 use sum_tree::Bias;
-use tree_sitter::{
-    InputEdit, ParseOptions, Parser, Point, Query, QueryCursor, StreamingIterator, Tree,
-};
+use tree_sitter::{InputEdit, ParseOptions, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 const MAX_INJECTION_RANGES: usize = 4096;
 const MAX_INJECTION_BYTES: usize = 512 * 1024;
@@ -547,9 +545,18 @@ impl SyntaxHighlighter {
 
     /// Apply only the structural `edit` to the existing tree and update the stored text,
     /// without re-parsing.
+    ///
+    /// Without an edit the change is unknown and the tree is dropped: a tree that has not
+    /// taken the edit describes other text, and a parse that started from it would reuse
+    /// its nodes at their old offsets (#3315).
     pub fn edit_tree(&mut self, edit: Option<InputEdit>, text: &Rope) {
-        if let (Some(edit), Some(tree)) = (edit, self.tree.as_mut()) {
-            tree.edit(&edit);
+        match edit {
+            Some(edit) => {
+                if let Some(tree) = self.tree.as_mut() {
+                    tree.edit(&edit);
+                }
+            }
+            None => self.tree = None,
         }
         self.edit_injection_layers(edit.as_ref());
         self.text = text.clone();
@@ -622,32 +629,24 @@ impl SyntaxHighlighter {
             return true;
         }
 
-        let full_edit;
-        let edits = if edits.is_empty() {
+        // No edits means the change is unknown: nothing of the old tree can be reused, and
+        // an incremental parse from a tree that has not taken the change would keep its nodes
+        // at offsets of other text.
+        let old_tree = if edits.is_empty() {
             self.edit_injection_layers(None);
-            full_edit = [InputEdit {
-                start_byte: 0,
-                old_end_byte: 0,
-                new_end_byte: text.len(),
-                start_position: Point::new(0, 0),
-                old_end_position: Point::new(0, 0),
-                new_end_position: Point::new(0, 0),
-            }];
-            &full_edit[..]
+            self.tree = None;
+            None
         } else {
             for edit in edits {
                 self.edit_injection_layers(Some(edit));
             }
-            edits
+            self.tree.take().map(|mut tree| {
+                for edit in edits {
+                    tree.edit(edit);
+                }
+                tree
+            })
         };
-
-        let mut old_tree = self
-            .tree
-            .take()
-            .unwrap_or(self.parser.parse("", None).unwrap());
-        for edit in edits {
-            old_tree.edit(edit);
-        }
 
         let mut timed_out = false;
         let start = Instant::now();
@@ -667,13 +666,13 @@ impl SyntaxHighlighter {
         let options = ParseOptions::new().progress_callback(&mut progress);
         let new_tree = self.parser.parse_with_options(
             &mut move |offset, _| parse_input_bytes(text, offset),
-            Some(&old_tree),
+            old_tree.as_ref(),
             Some(options),
         );
 
         if timed_out || new_tree.is_none() {
             // Restore the old tree so highlighting continues with stale data.
-            self.tree = Some(old_tree);
+            self.tree = old_tree;
             self.text = text.clone();
             return false;
         }
@@ -1339,6 +1338,7 @@ fn merge_highlight_style(style: &mut HighlightStyle, other: &HighlightStyle) {
 #[cfg(test)]
 mod tests {
     use gpui::Hsla;
+    use tree_sitter::Point;
 
     use super::*;
     use crate::Colorize as _;
@@ -1410,22 +1410,36 @@ mod tests {
         assert!(highlighter.tree().is_none());
     }
 
-    /// While a background reparse is pending (sync-parse timeout, or the
-    /// large-text `edit_tree` path), `styles()` serves ranges from a stale
-    /// tree. Those must still land on char boundaries of the current text,
-    /// or text shaping panics on multi-byte characters.
+    /// While a background reparse is pending after a sync-parse timeout,
+    /// `styles()` serves ranges from the edited tree. Those must land on char
+    /// boundaries of the current text, or text shaping panics on multi-byte
+    /// characters.
     #[cfg(feature = "tree-sitter-languages")]
     #[test]
     fn test_stale_tree_styles_snap_to_char_boundaries() {
+        // Enough text that the parse checks its budget before it is done.
+        let filler = (0..2000)
+            .map(|i| format!("paragraph {i} filler text\n\n"))
+            .collect::<String>();
         let mut highlighter = SyntaxHighlighter::new("markdown");
-        let old = Rope::from("# hello world\n*emphasis* and `code` here\n");
-        assert!(highlighter.update(None, &old, None));
+        let head = "# hello world\n*emphasis* and `code` here\n";
+        let old = format!("{head}{filler}");
+        assert!(highlighter.update(None, &Rope::from(old.as_str()), None));
         assert!(highlighter.tree().is_some());
 
-        // Swap the text without reparsing: the tree is now stale and its node
-        // offsets point into the middle of the new text's CJK characters.
-        let new = Rope::from("# 你好，世界\n你好，*世界* 与 `代码`\n");
-        highlighter.edit_tree(None, &new);
+        // Replace the ASCII text with CJK text, and give the parse no time.
+        let new_head = "# 你好，世界\n你好，*世界* 与 `代码`\n";
+        let edit = InputEdit {
+            start_byte: 0,
+            old_end_byte: head.len(),
+            new_end_byte: new_head.len(),
+            start_position: Point::new(0, 0),
+            old_end_position: Point::new(2, 0),
+            new_end_position: Point::new(2, 0),
+        };
+        let new = Rope::from(format!("{new_head}{filler}").as_str());
+        assert!(!highlighter.update(Some(edit), &new, Some(Duration::ZERO)));
+        assert!(highlighter.tree().is_some());
 
         let theme = HighlightTheme::default_dark();
         let styles = highlighter.styles(&(0..new.len()), theme.as_ref());
@@ -1436,6 +1450,77 @@ mod tests {
                 "style range {range:?} is not on char boundaries of the current text"
             );
         }
+    }
+
+    /// Every node of `tree` with its byte range, in document order.
+    #[cfg(feature = "tree-sitter-languages")]
+    fn tree_nodes(tree: &Tree) -> Vec<(&'static str, Range<usize>)> {
+        let mut nodes = Vec::new();
+        let mut cursor = tree.walk();
+        'walk: loop {
+            nodes.push((cursor.node().kind(), cursor.node().byte_range()));
+            if cursor.goto_first_child() {
+                continue;
+            }
+            while !cursor.goto_next_sibling() {
+                if !cursor.goto_parent() {
+                    break 'walk;
+                }
+            }
+        }
+        nodes
+    }
+
+    /// A change without an edit (#3315): the tree describes other text, so the
+    /// next parse must not start from it. An incremental parse from a tree that
+    /// never took the change reuses its nodes at their old offsets, here inside
+    /// a CJK character, and keeps them for every later edit.
+    #[cfg(feature = "tree-sitter-languages")]
+    #[test]
+    fn test_a_change_without_an_edit_is_parsed_afresh() {
+        fn point_at(text: &str, offset: usize) -> Point {
+            let before = &text[..offset];
+            let row = before.matches('\n').count();
+            Point::new(row, offset - before.rfind('\n').map_or(0, |i| i + 1))
+        }
+        fn append(highlighter: &mut SyntaxHighlighter, text: &str, tail: &str) -> String {
+            let appended = format!("{text}{tail}");
+            let edit = InputEdit {
+                start_byte: text.len(),
+                old_end_byte: text.len(),
+                new_end_byte: appended.len(),
+                start_position: point_at(text, text.len()),
+                old_end_position: point_at(text, text.len()),
+                new_end_position: point_at(&appended, appended.len()),
+            };
+            assert!(highlighter.update(Some(edit), &Rope::from(appended.as_str()), None));
+            appended
+        }
+        fn fresh(text: &str) -> Vec<(&'static str, Range<usize>)> {
+            let mut highlighter = SyntaxHighlighter::new("markdown");
+            assert!(highlighter.update(None, &Rope::from(text), None));
+            tree_nodes(highlighter.tree().unwrap())
+        }
+
+        let before = "# 标题\n<div id=\"a\">x</div>\n\nmiddle paragraph\n\n*a* b\n";
+        // "你\n" before the heading's line break: the old block start, byte 9, is now
+        // inside "你".
+        let after = before.replacen("# 标题\n", "# 标题你\n\n", 1);
+
+        let mut highlighter = SyntaxHighlighter::new("markdown");
+        assert!(highlighter.update(None, &Rope::from(before), None));
+        highlighter.edit_tree(None, &Rope::from(after.as_str()));
+        assert!(highlighter.tree().is_none());
+        let appended = append(&mut highlighter, &after, "X");
+        assert_eq!(tree_nodes(highlighter.tree().unwrap()), fresh(&appended));
+
+        // The same change through `update` without an edit.
+        let mut highlighter = SyntaxHighlighter::new("markdown");
+        assert!(highlighter.update(None, &Rope::from(before), None));
+        assert!(highlighter.update(None, &Rope::from(after.as_str()), None));
+        assert_eq!(tree_nodes(highlighter.tree().unwrap()), fresh(&after));
+        let appended = append(&mut highlighter, &after, "X");
+        assert_eq!(tree_nodes(highlighter.tree().unwrap()), fresh(&appended));
     }
 
     #[cfg(feature = "tree-sitter-languages")]

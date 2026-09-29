@@ -22,8 +22,11 @@ use crate::{
 
 use super::{
     InputBaseState, RangeDecorationStyle, TextDecoration,
+    cursor::CursorSelection,
     layout::{LastLayout, WhitespaceIndicators},
     mode::LayoutMode,
+    movement::MoveDirection,
+    state::{ScrollPadding, ScrollRequest},
 };
 
 fn diagnostic_highlight_style(
@@ -293,19 +296,6 @@ impl<M: InputModeKind> Element for EditorScrollbar<M> {
     }
 }
 
-fn clamp_auto_grow_vertical_scroll_offset(
-    mode: &LayoutMode,
-    scroll_top: Pixels,
-    scroll_height: Pixels,
-    input_height: Pixels,
-) -> Pixels {
-    if mode.is_auto_grow() {
-        scroll_top.clamp((input_height - scroll_height).min(px(0.)), px(0.))
-    } else {
-        scroll_top
-    }
-}
-
 fn editor_gutter_bounds(
     input_bounds: Bounds<Pixels>,
     line_number_width: Pixels,
@@ -510,13 +500,203 @@ impl<M: InputModeKind> TextElement<M> {
         });
     }
 
-    /// Lays out the carets and updates the scroll position for the active one.
+    /// The active selection as the caret shows it (a composition shows its caret at
+    /// its end), when it changed since the last paint and the viewport follows it.
+    fn caret_to_follow(state: &InputBaseState<M>) -> Option<CursorSelection> {
+        let mut selected_range = *state.active_selection();
+        if let Some(ime_marked_range) = &state.ime_marked_range {
+            selected_range = (ime_marked_range.end..ime_marked_range.end).into();
+        }
+        let is_selected_all = selected_range.len() == state.text.len();
+        (state.last_selected_range != Some(selected_range) && !is_selected_all)
+            .then_some(selected_range)
+    }
+
+    /// The vertical scroll this frame lays out and paints at: a scroll request, the
+    /// changed caret, else where the viewport is. Resolved from the display map before
+    /// any line is laid out, so the lines picked for layout are the ones it shows.
+    fn resolve_scroll_top(
+        state: &InputBaseState<M>,
+        line_height: Pixels,
+        viewport_height: Pixels,
+    ) -> Pixels {
+        if state.is_single_line() {
+            return px(0.);
+        }
+        let was = state.scroll_handle.offset().y;
+        let display_y = |offset: usize, line_end_affinity: bool| {
+            let wrap_row = state
+                .display_map
+                .offset_to_wrap_display_point_with_affinity(offset, line_end_affinity)
+                .row;
+            line_height * state.display_map.nearest_visible_display_row(wrap_row)
+        };
+        let surrounding_padding = cursor_surrounding_padding(
+            state.mode.is_auto_grow(),
+            state.cursor_surrounding_lines,
+            viewport_visible_lines(viewport_height, line_height),
+            line_height,
+        );
+
+        let scroll_top = match state.scroll_request {
+            Some(ScrollRequest::Offset(offset)) => offset.y,
+            Some(ScrollRequest::Reveal {
+                offset,
+                direction,
+                padding,
+            }) => {
+                let row_y = display_y(offset, false);
+                let edge = if matches!(padding, ScrollPadding::SurroundingLines)
+                    && state.is_code_editor()
+                {
+                    surrounding_padding
+                } else {
+                    line_height
+                };
+                let mut y = was;
+                if row_y - edge + line_height < -y {
+                    y = -row_y + edge - line_height;
+                } else if row_y + edge > -y + viewport_height {
+                    y = -(row_y - viewport_height + edge);
+                }
+                // Keep the edge on the side the caret moves towards.
+                match direction {
+                    Some(MoveDirection::Up) => y.max(was),
+                    Some(MoveDirection::Down) => y.min(was),
+                    _ => y,
+                }
+            }
+            None => match Self::caret_to_follow(state) {
+                // Vertical follow stands aside while auto-scroll drives the y axis.
+                Some(selected_range) if !state.auto_scroll.is_active() => {
+                    let caret = selected_range.cursor_offset();
+                    let affinity = state.cursor_line_end_affinity;
+                    let caret_y = display_y(caret, affinity);
+                    // Straight to the caret's line, however far: this runs only on the
+                    // frame the selection changed.
+                    let mut y = if was + caret_y > viewport_height - surrounding_padding {
+                        viewport_height - surrounding_padding - caret_y
+                    } else if was + caret_y < surrounding_padding {
+                        (surrounding_padding - caret_y).min(px(0.))
+                    } else {
+                        was
+                    };
+                    // Keep the selection's far end in view too.
+                    if selected_range.reversed {
+                        let start_y = display_y(selected_range.start, false);
+                        if y + start_y < px(0.) {
+                            y = -start_y;
+                        }
+                    } else {
+                        let end_y = display_y(selected_range.end, false);
+                        if y + end_y <= px(0.) {
+                            y = -end_y;
+                        }
+                    }
+                    y
+                }
+                _ => was,
+            },
+        };
+
+        // Clamp to the text's height as this layout wraps it, so the frame shows the
+        // offset that persists. Inline-completion ghost lines are left out: they only
+        // ever add height, so this range lies inside the one the paint persists.
+        let content_height = line_height * state.display_map.wrap_row_count()
+            + empty_bottom_height(
+                state.is_code_editor(),
+                state.scroll_beyond_last_line,
+                viewport_height,
+                line_height,
+            );
+        let min_top = (viewport_height - content_height).min(px(0.));
+        scroll_top.clamp(min_top, px(0.))
+    }
+
+    /// The horizontal scroll that keeps the requested offset or the changed caret in
+    /// view, found on the lines this frame laid out.
+    fn resolve_scroll_x(
+        state: &InputBaseState<M>,
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+        caret_x_for: impl Fn(usize, usize, bool) -> Option<Pixels>,
+    ) -> Pixels {
+        let was = state.scroll_handle.offset().x;
+        let line_number_width = last_layout.line_number_width;
+        // For Right alignment use 0 margin: the caret is clamped inside the bounds
+        // separately, so the text never scrolls for a caret at the edge, which would
+        // jump on the first click.
+        let safety_margin = match last_layout.text_align {
+            TextAlign::Left => RIGHT_MARGIN,
+            TextAlign::Right => px(0.),
+            TextAlign::Center => CURSOR_WIDTH,
+        };
+        let text_width = bounds.size.width - line_number_width;
+        let masked = |offset: usize| {
+            if state.masked {
+                masked_display_offset(&state.text, offset)
+            } else {
+                offset
+            }
+        };
+        let row_of = |offset: usize| state.text.offset_to_point(offset).row;
+
+        match state.scroll_request {
+            Some(ScrollRequest::Offset(offset)) => offset.x,
+            Some(ScrollRequest::Reveal { offset, .. }) => {
+                let Some(x) = caret_x_for(row_of(offset), masked(offset), false) else {
+                    return was.min(px(0.));
+                };
+                let x = if x - safety_margin < -was {
+                    -x + safety_margin
+                } else if x + safety_margin > -was + text_width {
+                    -(x - text_width + safety_margin)
+                } else {
+                    was
+                };
+                x.min(px(0.))
+            }
+            None => {
+                let Some(selected_range) = Self::caret_to_follow(state) else {
+                    return was;
+                };
+                let caret = selected_range.cursor_offset();
+                let caret_x =
+                    caret_x_for(row_of(caret), masked(caret), state.cursor_line_end_affinity)
+                        .unwrap_or_default();
+                let mut x = if was + caret_x > text_width - safety_margin {
+                    text_width - safety_margin - caret_x
+                } else if was + caret_x < px(0.) {
+                    was - caret_x
+                } else {
+                    was
+                };
+                // Keep the selection's far end in view too.
+                let far = if selected_range.reversed {
+                    selected_range.start
+                } else {
+                    selected_range.end
+                };
+                let far_x = caret_x_for(row_of(far), masked(far), false).unwrap_or_default();
+                if selected_range.reversed {
+                    if x + far_x < px(0.) {
+                        x = -far_x;
+                    }
+                } else if x + far_x <= px(0.) {
+                    x = -far_x;
+                }
+                x
+            }
+        }
+    }
+
+    /// Lays out the carets at the scroll this frame resolved: `scroll_top` from
+    /// before layout, the horizontal scroll from the laid-out lines.
     fn layout_cursors(
         &self,
         last_layout: &LastLayout,
         bounds: &mut Bounds<Pixels>,
-        scroll_size: Size<Pixels>,
-        _: &mut Window,
+        scroll_top: Pixels,
         cx: &mut App,
     ) -> (Vec<CursorRenderInfo>, Point<Pixels>, Option<usize>) {
         let state = self.state.read(cx);
@@ -525,160 +705,60 @@ impl<M: InputModeKind> TextElement<M> {
         let visible_range = &last_layout.visible_range;
         let lines = &last_layout.lines;
         let line_number_width = last_layout.line_number_width;
-
         let active_id = state.active_selection().id;
-        let mut scroll_offset = state.scroll_handle.offset();
         let mut current_row = None;
         let mut cursor_infos: Vec<CursorRenderInfo> = Vec::with_capacity(state.selections.len());
 
-        // Padding kept between the cursor and the viewport's top/bottom
-        // edges, used by the auto-scroll-into-view computation below.
-        let top_bottom_margin = cursor_surrounding_padding(
-            state.mode.is_auto_grow(),
-            state.cursor_surrounding_lines,
-            viewport_visible_lines(bounds.size.height, line_height),
-            line_height,
-        );
-
-        // Resolve a cursor or selection endpoint to a content-space position.
+        // A caret's position in content space, `None` when its line is not laid out.
         let visible_buffer_lines = &last_layout.visible_buffer_lines;
+        let position_in_line = |row: usize, offset: usize, affinity: bool| {
+            let vi = visible_buffer_lines.iter().position(|&bl| bl == row)?;
+            let line_start = last_layout.visible_line_byte_offsets[vi];
+            let local = offset.saturating_sub(line_start);
+            lines[vi].position_for_index(local, last_layout, affinity)
+        };
         let caret_for = |row: usize, offset: usize, affinity: bool| -> Point<Pixels> {
             // y of the top of buffer line `row` in content space.
             let top = line_height * state.display_map.buffer_line_to_display_row(row);
-            let line_origin = point(px(0.), top);
-
-            if let Some(vi) = visible_buffer_lines.iter().position(|&bl| bl == row) {
-                let line = &lines[vi];
-                let line_start = last_layout.visible_line_byte_offsets[vi];
-                let local = offset.saturating_sub(line_start);
-                if let Some(pos) = line.position_for_index(local, last_layout, affinity) {
-                    return line_origin + pos;
-                }
-            }
-            line_origin
+            point(px(0.), top) + position_in_line(row, offset, affinity).unwrap_or_default()
         };
 
+        let scroll_x =
+            Self::resolve_scroll_x(state, last_layout, bounds, |row, offset, affinity| {
+                position_in_line(row, offset, affinity).map(|pos| pos.x)
+            });
         let cursor_height = 0.85 * line_height;
 
         for selection in state.selections.iter() {
             let is_active = selection.id == active_id;
 
-            let mut selected_range = *selection;
             let mut cursor = selection.cursor_offset();
-            if is_active {
-                if let Some(ime_marked_range) = &state.ime_marked_range {
-                    selected_range = (ime_marked_range.end..ime_marked_range.end).into();
-                    cursor = ime_marked_range.end;
-                }
+            if is_active && let Some(ime_marked_range) = &state.ime_marked_range {
+                cursor = ime_marked_range.end;
             }
-            let is_selected_all = selected_range.len() == state.text.len();
 
             // Buffer rows from the raw (pre-mask) offsets, used to locate the cursor line.
             let cursor_row = state.text.offset_to_point(cursor).row;
 
-            // Skip inactive cursors that are far outside the visible range. The
-            // active cursor is always processed so scroll tracking keeps working.
+            // Skip inactive cursors that are far outside the visible range.
             if !is_active
                 && (cursor_row + 2 < visible_range.start || cursor_row > visible_range.end + 2)
             {
                 continue;
             }
-
-            let sel_start_row = state.text.offset_to_point(selected_range.start).row;
-            let sel_end_row = state.text.offset_to_point(selected_range.end).row;
+            if is_active {
+                current_row = Some(cursor_row);
+            }
             if state.masked {
-                selected_range.start = masked_display_offset(&state.text, selected_range.start);
-                selected_range.end = masked_display_offset(&state.text, selected_range.end);
                 cursor = masked_display_offset(&state.text, cursor);
             }
 
             let affinity = is_active && state.cursor_line_end_affinity;
             let cursor_pos = caret_for(cursor_row, cursor, affinity);
-            let cursor_start = caret_for(sel_start_row, selected_range.start, false);
-            let cursor_end = caret_for(sel_end_row, selected_range.end, false);
-
-            if is_active {
-                current_row = Some(cursor_row);
-
-                let selection_changed = state.last_selected_range != Some(selected_range);
-                let auto_scrolling = state.auto_scroll.is_active();
-                if selection_changed && !is_selected_all {
-                    // For Right alignment use 0 margin: cursor is clamped to bounds separately,
-                    // so we never scroll the text for cursor-at-edge, avoiding a first-click jump.
-                    let safety_margin = match last_layout.text_align {
-                        TextAlign::Left => RIGHT_MARGIN,
-                        TextAlign::Right => px(0.),
-                        TextAlign::Center => CURSOR_WIDTH,
-                    };
-
-                    scroll_offset.x = if scroll_offset.x + cursor_pos.x
-                        > (bounds.size.width - line_number_width - safety_margin)
-                    {
-                        // cursor is out of right
-                        bounds.size.width - line_number_width - safety_margin - cursor_pos.x
-                    } else if scroll_offset.x + cursor_pos.x < px(0.) {
-                        // cursor is out of left
-                        scroll_offset.x - cursor_pos.x
-                    } else {
-                        scroll_offset.x
-                    };
-
-                    // Vertical cursor-follow is suppressed while auto-scroll manages the y axis,
-                    // to prevent fighting the background scroll task.
-                    if !auto_scrolling {
-                        // Scroll straight to the caret's line. This runs only on
-                        // the frame the selection changed, so a one-line step
-                        // would leave a far-off caret (e.g. after typing at the
-                        // end of a long paste) outside the viewport.
-                        scroll_offset.y = if scroll_offset.y + cursor_pos.y
-                            > bounds.size.height - top_bottom_margin
-                        {
-                            // cursor is out of bottom
-                            bounds.size.height - top_bottom_margin - cursor_pos.y
-                        } else if scroll_offset.y + cursor_pos.y < top_bottom_margin {
-                            // cursor is out of top
-                            (top_bottom_margin - cursor_pos.y).min(px(0.))
-                        } else {
-                            scroll_offset.y
-                        };
-                    }
-
-                    // For selection to move scroll
-                    if selection.reversed {
-                        if scroll_offset.x + cursor_start.x < px(0.) {
-                            // selection start is out of left
-                            scroll_offset.x = -cursor_start.x;
-                        }
-                        if !auto_scrolling && scroll_offset.y + cursor_start.y < px(0.) {
-                            // selection start is out of top
-                            scroll_offset.y = -cursor_start.y;
-                        }
-                    } else {
-                        // TODO: Consider to remove this part,
-                        // maybe is not necessary (But selection_reversed is needed).
-                        if scroll_offset.x + cursor_end.x <= px(0.) {
-                            // selection end is out of left
-                            scroll_offset.x = -cursor_end.x;
-                        }
-                        if !auto_scrolling && scroll_offset.y + cursor_end.y <= px(0.) {
-                            // selection end is out of top
-                            scroll_offset.y = -cursor_end.y;
-                        }
-                    }
-                }
-            }
-
-            // Match the caret to the deferred scroll target (applied below) that
-            // the text paints at; otherwise the caret follows the cursor-scroll
-            // while the text uses the deferred offset, flashing it mid-field.
-            let cursor_scroll_x = state
-                .deferred_scroll_offset
-                .map(|offset| offset.x)
-                .unwrap_or(scroll_offset.x);
 
             // For Right alignment, clamp cursor within the right edge of bounds so it
-            // stays visible without having to shift the text via scroll_offset.
-            let cursor_x = bounds.left() + cursor_pos.x + line_number_width + cursor_scroll_x;
+            // stays visible without having to shift the text via the scroll offset.
+            let cursor_x = bounds.left() + cursor_pos.x + line_number_width + scroll_x;
             let cursor_x = if last_layout.text_align == TextAlign::Right {
                 cursor_x.min(bounds.right() - CURSOR_WIDTH)
             } else {
@@ -696,16 +776,7 @@ impl<M: InputModeKind> TextElement<M> {
             });
         }
 
-        if let Some(deferred_scroll_offset) = state.deferred_scroll_offset {
-            scroll_offset = deferred_scroll_offset;
-        }
-        scroll_offset.y = clamp_auto_grow_vertical_scroll_offset(
-            &state.mode,
-            scroll_offset.y,
-            scroll_size.height,
-            bounds.size.height,
-        );
-
+        let scroll_offset = point(scroll_x, scroll_top);
         bounds.origin = bounds.origin + scroll_offset;
 
         (cursor_infos, scroll_offset, current_row)
@@ -1011,6 +1082,7 @@ impl<M: InputModeKind> TextElement<M> {
         state: &InputBaseState<M>,
         line_height: Pixels,
         input_height: Pixels,
+        scroll_top: Pixels,
     ) -> (Range<usize>, Vec<usize>, Pixels) {
         // Add extra rows to avoid showing empty space when scroll to bottom.
         let extra_rows = 1;
@@ -1018,24 +1090,11 @@ impl<M: InputModeKind> TextElement<M> {
             return (0..1, vec![0], px(0.));
         }
 
-        let total_lines = state.display_map.wrap_row_count();
         let display_count = state.display_map.display_row_count();
         let buffer_line_count = state.display_map.buffer_line_count();
         if display_count == 0 || buffer_line_count == 0 {
             return (0..0, Vec::new(), px(0.));
         }
-
-        let mut scroll_top = if let Some(deferred_scroll_offset) = state.deferred_scroll_offset {
-            deferred_scroll_offset.y
-        } else {
-            state.scroll_handle.offset().y
-        };
-        scroll_top = clamp_auto_grow_vertical_scroll_offset(
-            &state.mode,
-            scroll_top,
-            line_height * total_lines,
-            input_height,
-        );
 
         // Display rows are uniformly `line_height` tall, so the visible window maps
         // directly to a display-row range.
@@ -1609,7 +1668,9 @@ impl<M: InputModeKind> TextElement<M> {
                     .iter()
                     .any(|span| !cache.widths.contains_key(span.token()))
         });
-        let (visible, _, _) = self.calculate_visible_range(state, line_height, viewport);
+        let scroll_top = Self::resolve_scroll_top(state, line_height, viewport);
+        let (visible, _, _) =
+            self.calculate_visible_range(state, line_height, viewport, scroll_top);
         let start = state.text.line_start_offset(visible.start);
         let end = state.text.line_end_offset(visible.end.saturating_sub(1));
         let spans = state.token_spans();
@@ -2503,8 +2564,9 @@ impl<M: InputModeKind> Element for TextElement<M> {
         );
         let state = self.state.read(cx);
 
+        let scroll_top = Self::resolve_scroll_top(state, line_height, bounds.size.height);
         let (visible_range, visible_buffer_lines, visible_top) =
-            self.calculate_visible_range(&state, line_height, bounds.size.height);
+            self.calculate_visible_range(state, line_height, bounds.size.height, scroll_top);
         let visible_start_offset = state.text.line_start_offset(visible_range.start);
         let visible_end_offset = state
             .text
@@ -2764,7 +2826,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
         let original_x = bounds.origin.x;
 
         let (cursor_infos, cursor_scroll_offset, current_row) =
-            self.layout_cursors(&last_layout, &mut bounds, scroll_size, window, cx);
+            self.layout_cursors(&last_layout, &mut bounds, scroll_top, cx);
         // Completion/code-action menus position at the active caret.
         last_layout.cursor_bounds = cursor_infos
             .iter()
@@ -3195,7 +3257,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             state.last_selected_range = Some(selected_range);
             state.scroll_size = prepaint.scroll_size;
             state.update_scroll_offset(Some(prepaint.cursor_scroll_offset), cx);
-            state.deferred_scroll_offset = None;
+            state.scroll_request = None;
 
             // Layout consumers need changed geometry, not another notification
             // for every paint of an unchanged input.
@@ -4080,30 +4142,6 @@ mod tests {
                 },
             ),
             Bounds::new(point(px(3.), px(18.)), size(px(55.), px(103.)))
-        );
-    }
-
-    #[test]
-    fn test_auto_grow_scroll_offset_is_clamped_to_current_viewport() {
-        let mode = LayoutMode::auto_grow(3, 8);
-
-        assert_eq!(
-            clamp_auto_grow_vertical_scroll_offset(&mode, px(-260.), px(340.), px(160.)),
-            px(-180.)
-        );
-        assert_eq!(
-            clamp_auto_grow_vertical_scroll_offset(&mode, px(-40.), px(340.), px(160.)),
-            px(-40.)
-        );
-        assert_eq!(
-            clamp_auto_grow_vertical_scroll_offset(&mode, px(20.), px(340.), px(160.)),
-            px(0.)
-        );
-
-        let plain_text = LayoutMode::plain_text();
-        assert_eq!(
-            clamp_auto_grow_vertical_scroll_offset(&plain_text, px(-260.), px(340.), px(160.)),
-            px(-260.)
         );
     }
 

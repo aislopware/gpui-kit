@@ -15,7 +15,7 @@ use crate::text::node::{CodeBlock, TableData};
 use crate::text::range_highlight::{PendingReveal, RevealProgress};
 use crate::text::state::{LineSpan, SelectionFormat, TextViewState};
 use crate::text::stream_fade::TextViewMotion;
-use crate::{GlobalState, TextSelection, text::TextViewStyle};
+use crate::{TextSelection, global_state::TextViewStateStack, text::TextViewStyle};
 
 /// Type for code block actions generator function.
 pub(crate) type CodeBlockActionsFn =
@@ -662,15 +662,9 @@ impl Element for TextViewContent {
             line_spans.clear();
         }
         let content = &mut self.content;
-        GlobalState::global(cx)
-            .text_view_state_stack
-            .borrow_mut()
-            .push(self.state.clone());
+        TextViewStateStack::push(self.state.clone(), cx);
         content.prepaint(window, cx);
-        GlobalState::global(cx)
-            .text_view_state_stack
-            .borrow_mut()
-            .pop();
+        TextViewStateStack::pop(cx);
     }
 
     fn paint(
@@ -691,15 +685,9 @@ impl Element for TextViewContent {
                 .update(cx, |state, _| state.selection_adapter.begin_frame());
         }
         let content = &mut self.content;
-        GlobalState::global(cx)
-            .text_view_state_stack
-            .borrow_mut()
-            .push(self.state.clone());
+        TextViewStateStack::push(self.state.clone(), cx);
         content.paint(window, cx);
-        GlobalState::global(cx)
-            .text_view_state_stack
-            .borrow_mut()
-            .pop();
+        TextViewStateStack::pop(cx);
 
         // Every list has scrolled by now, so the line of a reveal is where
         // it ends up this frame.
@@ -1004,12 +992,10 @@ impl Element for TextView {
                     state.text_view_style.selection().alpha(1.),
                 )
             };
-            let document_order = GlobalState::global(cx).next_selection_document_order();
             adapter.register(
                 prepaint.hitbox.clone(),
                 content_bounds,
                 scroll_offset,
-                document_order,
                 self_scroll,
                 window,
                 cx,

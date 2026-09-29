@@ -120,7 +120,7 @@ fn set_theme<'js>(ctx: Ctx<'js>, value: Value<'js>) -> JsResult<()> {
         Exception::throw_type(&ctx, &format!("invalid theme snapshot: {error}"))
     })?;
     crate::scope::with_current_app(|cx| {
-        let mut tokens = Theme::global(cx).tokens;
+        let mut tokens = Theme::global(cx).tokens.clone();
         apply_colors(&mut tokens.colors, &supplied.tokens.colors)
             .map_err(|e| Exception::throw_type(&ctx, &e))?;
         apply_scale(

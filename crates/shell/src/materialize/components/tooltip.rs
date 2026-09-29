@@ -67,7 +67,7 @@ struct TooltipLabel {
 
 impl Render for TooltipLabel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = Theme::global(cx).tokens;
+        let tokens = &Theme::global(cx).tokens;
         let (colors, radius, spacing) = (tokens.colors, tokens.radius, tokens.spacing);
 
         Tooltip::new("shell-tooltip")

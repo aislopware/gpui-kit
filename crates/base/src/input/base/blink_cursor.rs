@@ -134,11 +134,26 @@ impl BlinkCursor {
             return;
         }
 
-        self.epoch = self.epoch.wrapping_add(1);
         self.last_activity = Some(cx.background_executor().now());
-        self.paused = true;
         self.set_visible(true, cx);
+        // Typing pauses the blink on every keystroke. While a pause runs, its
+        // timer sleeps again for what is left when it wakes instead of being
+        // replaced: a timer costs a platform call to arm, which was a tenth of
+        // a keystroke's frame in a large file.
+        if self.paused && !self._task.is_ready() {
+            return;
+        }
+        self.epoch = self.epoch.wrapping_add(1);
+        self.paused = true;
         self.schedule(cx);
+    }
+
+    /// Whether a pause began less than [`PAUSE_DELAY`] after the last activity.
+    fn pause_running(&self, cx: &App) -> bool {
+        self.paused
+            && self
+                .last_activity
+                .is_some_and(|at| cx.background_executor().now() - at < PAUSE_DELAY)
     }
 
     pub(crate) fn visible(&self) -> bool {
@@ -184,6 +199,11 @@ impl BlinkCursor {
             timer.await;
             _ = this.update(cx, |this, cx| {
                 if epoch != this.epoch {
+                    return;
+                }
+                // A keystroke since the timer was armed moved the pause's end.
+                if this.pause_running(cx) {
+                    this.schedule(cx);
                     return;
                 }
 
@@ -239,6 +259,32 @@ mod tests {
         assert_eq!(cursor.read_with(cx, |cursor, _| cursor.visible()), visible);
         assert!(cursor.read_with(cx, |cursor, _| cursor._task.is_ready()));
         assert_eq!(notifications.get(), 0);
+    }
+
+    /// Typing pauses the blink on every keystroke. A burst of keystrokes keeps
+    /// one pause timer running instead of arming a timer per key.
+    #[gpui::test]
+    fn a_burst_of_pauses_arms_one_timer(cx: &mut TestAppContext) {
+        let cursor = cx.new(BlinkCursor::new);
+        cursor.update(cx, |cursor, cx| cursor.start(cx));
+        cx.run_until_parked();
+        cursor.update(cx, |cursor, cx| cursor.pause(cx));
+        let epoch = cursor.read_with(cx, |cursor, _| cursor.epoch);
+        for _ in 0..10 {
+            cx.executor().advance_clock(Duration::from_millis(50));
+            cursor.update(cx, |cursor, cx| cursor.pause(cx));
+            cx.run_until_parked();
+        }
+        assert_eq!(cursor.read_with(cx, |cursor, _| cursor.epoch), epoch);
+
+        // The pause still ends a full delay after the last keystroke.
+        cx.executor()
+            .advance_clock(PAUSE_DELAY - Duration::from_millis(1));
+        cx.run_until_parked();
+        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        cx.executor().advance_clock(Duration::from_millis(1));
+        cx.run_until_parked();
+        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
     }
 
     #[gpui::test]

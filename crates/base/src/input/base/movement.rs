@@ -8,7 +8,7 @@ use crate::input::{
     cursor::CursorSelection,
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MoveDirection {
     Up,
     Down,

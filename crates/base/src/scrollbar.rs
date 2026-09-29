@@ -2776,6 +2776,13 @@ mod tests {
                                 Modifiers::default(),
                             );
                         }
+                        // A move inside the max-fps interval defers its notify to a trailing
+                        // timer, and this handle's offset is plain shared state that a retained
+                        // or cached view cannot see change, so a frame drawn before the timer
+                        // replays the last thumb. Let the throttle deliver the move first.
+                        cx.executor()
+                            .advance_clock(Duration::from_secs_f64(1. / 30.));
+                        cx.run_until_parked();
                         cx.update(|window, cx| window.draw(cx).clear(cx));
                         if delta == 0. {
                             reference_offset = axis_value(handle.offset());

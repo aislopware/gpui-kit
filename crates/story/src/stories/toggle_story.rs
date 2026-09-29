@@ -5,7 +5,7 @@ use gpui_kit::{
 
 use gpui_kit::component::{
     IconName, Sizable, Size, StyledExt,
-    button::{Toggle, ToggleGroup, ToggleVariants},
+    button::{Toggle, ToggleGroup},
     h_flex, v_flex,
 };
 

@@ -1015,6 +1015,95 @@ mod tests {
         assert_eq!(RoleOverride::from(None), RoleOverride::Presentational);
     }
 
+    /// Frames drawn for another view do not build the view hosting a focused
+    /// input again, and its caret still blinks.
+    #[gpui::test]
+    fn a_focused_input_leaves_its_host_view_alone(cx: &mut gpui::TestAppContext) {
+        use gpui::{AppContext as _, Render};
+        use std::cell::Cell;
+
+        struct Ticker;
+        impl Render for Ticker {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                div().size_full()
+            }
+        }
+
+        struct Host {
+            input: Entity<InputState>,
+            builds: Rc<Cell<usize>>,
+        }
+        impl Render for Host {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                self.builds.set(self.builds.get() + 1);
+                div().size_full().child(Input::new(&self.input))
+            }
+        }
+
+        // The host is cached, so that it is kept with retention off too,
+        // where every other view is drawn from scratch.
+        struct Outer {
+            host: Entity<Host>,
+            ticker: Entity<Ticker>,
+        }
+        impl Render for Outer {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .child(
+                        self.host
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    )
+                    .child(self.ticker.clone())
+            }
+        }
+
+        cx.update(crate::init);
+        let builds = Rc::new(Cell::new(0));
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|cx| Host {
+                input: cx.new(|cx| InputState::new(window, cx)),
+                builds: builds.clone(),
+            });
+            let ticker = cx.new(|_| Ticker);
+            let outer = cx.new(|_| Outer { host, ticker });
+            crate::Root::new(outer, window, cx)
+        });
+        let outer = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<Outer>().unwrap()
+        });
+        let (host, ticker) =
+            outer.read_with(cx, |outer, _| (outer.host.clone(), outer.ticker.clone()));
+        let input = host.read_with(cx, |host, _| host.input.clone());
+        cx.update(|window, cx| {
+            window.activate_window();
+            input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        cx.run_until_parked();
+        // Focusing changes what the host draws over the next two frames.
+        for _ in 0..2 {
+            ticker.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+        let settled = builds.get();
+
+        for _ in 0..10 {
+            ticker.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+        assert_eq!(builds.get(), settled, "frames drawn for another view");
+
+        let mut carets = std::collections::BTreeSet::new();
+        for _ in 0..4 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(500));
+            cx.run_until_parked();
+            carets.insert(cx.update(|window, _| window.painted_quads().len()));
+        }
+        assert_eq!(carets.len(), 2, "the caret blinks on screen");
+    }
+
     #[gpui::test]
     fn test_on_paste_builder(cx: &mut gpui::TestAppContext) {
         use gpui::{AppContext as _, Render};

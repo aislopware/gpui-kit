@@ -3967,8 +3967,10 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
             .map(|range| self.range_to_utf16(&range.into()))
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.ime_marked_range = None;
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.ime_marked_range.take().is_some() {
+            cx.notify();
+        }
         self.undo_manager.commit_transaction();
     }
 
@@ -7577,6 +7579,28 @@ mod tests {
         });
     }
 
+    /// Ending a composition takes its underline off the screen.
+    #[gpui::test]
+    fn unmarking_text_removes_the_composition_underline(cx: &mut TestAppContext) {
+        let input_view = InputView::build_textarea(cx, |state| state.default_value(""));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+        let underlines = |cx: &mut VisualTestContext| {
+            cx.run_until_parked();
+            cx.update(|window, _| window.painted_underlines().len())
+        };
+
+        cx.update(|window, cx| {
+            input.update(cx, |s, cx| {
+                s.replace_and_mark_text_in_range(None, "n", Some(1..1), window, cx)
+            })
+        });
+        assert!(underlines(&mut cx) > 0, "the composition is underlined");
+
+        cx.update(|window, cx| input.update(cx, |s, cx| s.unmark_text(window, cx)));
+        assert_eq!(underlines(&mut cx), 0, "the ended composition is not");
+    }
+
     #[gpui::test]
     fn test_set_selected_range_clips_to_utf8_boundaries(cx: &mut TestAppContext) {
         let input_view = InputView::build(cx, |state| state.default_value("éx"));
@@ -10803,6 +10827,14 @@ impl InputBaseState<crate::input::EditorMode> {
     pub fn line_number_gap(mut self, gap: Pixels) -> Self {
         self.line_number_gap = gap;
         self
+    }
+
+    /// Set the space between the line numbers and the text at runtime.
+    pub fn set_line_number_gap(&mut self, gap: Pixels, cx: &mut Context<Self>) {
+        if self.line_number_gap != gap {
+            self.line_number_gap = gap;
+            cx.notify();
+        }
     }
 
     /// Set line number.

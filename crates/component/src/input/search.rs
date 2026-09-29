@@ -378,8 +378,20 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                             )
                             .on_prepaint({
                                 let view = cx.entity();
-                                move |bounds, _, cx| {
-                                    view.update(cx, |r, _| r.input_width = bounds.size.width)
+                                move |bounds, window, cx| {
+                                    // The replace field below takes this width. A
+                                    // notify raised while drawing draws nothing, hence
+                                    // the next frame.
+                                    let width = bounds.size.width;
+                                    if view.read(cx).input_width != width {
+                                        let view = view.clone();
+                                        window.on_next_frame(move |_, cx| {
+                                            view.update(cx, |r, cx| {
+                                                r.input_width = width;
+                                                cx.notify();
+                                            });
+                                        });
+                                    }
                                 }
                             }),
                     )

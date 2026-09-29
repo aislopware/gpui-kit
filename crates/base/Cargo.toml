@@ -45,6 +45,7 @@ gpui-fast = { workspace = true, optional = true }
 gpui_macros.workspace = true
 instant.workspace = true
 itertools = "0.13.0"
+memchr = "2.8.3"
 lsp-types.workspace = true
 markdown = { version = "1.0.0", features = ["serde"] }
 html5ever = "0.27"

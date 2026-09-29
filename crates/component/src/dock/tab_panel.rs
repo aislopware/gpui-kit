@@ -959,14 +959,12 @@ mod tests {
             area.update(cx, |area, cx| area.set_center(layout, window, cx));
         });
         cx.run_until_parked();
-        log.borrow_mut().draggable.clear();
-        cx.update(|window, cx| window.draw(cx).clear(cx));
 
-        assert_eq!(
-            log.borrow().draggable,
-            vec![false],
+        crate::dock::test_support::assert_every_frame_drew(
+            &log.borrow().draggable,
+            &[false],
             "the only visible panel in the dock has nowhere to go, so its tab \
-             must not start a drag"
+             must not start a drag",
         );
     }
 
@@ -987,13 +985,11 @@ mod tests {
             area.update(cx, |area, cx| area.set_center(layout, window, cx));
         });
         cx.run_until_parked();
-        log.borrow_mut().draggable.clear();
-        cx.update(|window, cx| window.draw(cx).clear(cx));
 
-        assert_eq!(
-            log.borrow().draggable,
-            vec![true, true],
-            "each group has somewhere to go, so both tabs start a drag"
+        crate::dock::test_support::assert_every_frame_drew(
+            &log.borrow().draggable,
+            &[true, true],
+            "each group has somewhere to go, so both tabs start a drag",
         );
     }
 

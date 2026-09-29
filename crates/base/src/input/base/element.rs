@@ -3875,7 +3875,7 @@ mod tests {
                     .line_number_width
             };
             let default = width(window, cx);
-            editor.update(cx, |state, _| state.line_number_gap = px(16.));
+            editor.update(cx, |state, cx| state.set_line_number_gap(px(16.), cx));
             let wider = width(window, cx);
             assert_eq!(wider - default, px(16.) - LINE_NUMBER_RIGHT_MARGIN);
         });

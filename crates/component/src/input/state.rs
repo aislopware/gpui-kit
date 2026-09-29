@@ -386,11 +386,18 @@ pub(super) fn sync_focused_input_registry(
         return;
     }
     WindowState::try_update(window, cx, |root, _, cx| {
-        if focused {
-            root.focused_input = Some(state.clone());
+        let focused_input = if focused {
+            Some(state)
         } else if root.focused_input.as_ref() == Some(&state) {
-            root.focused_input = None;
+            None
+        } else {
+            return;
+        };
+        // Runs in every render of every input: a notify for nothing changed
+        // would build every view reading the window state on every frame.
+        if root.focused_input != focused_input {
+            root.focused_input = focused_input;
+            cx.notify();
         }
-        cx.notify();
     });
 }

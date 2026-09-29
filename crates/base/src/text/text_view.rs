@@ -588,6 +588,142 @@ fn line_safe_clip_bottom(
     (clip < box_bottom - CLIP_EPSILON).then_some(clip)
 }
 
+/// Whether `current` is the handler `new` is, or neither is set.
+fn same_handler<T: ?Sized>(current: &Option<Arc<T>>, new: &Option<Arc<T>>) -> bool {
+    match (current, new) {
+        (Some(current), Some(new)) => Arc::ptr_eq(current, new),
+        (current, new) => current.is_none() && new.is_none(),
+    }
+}
+
+/// What a [`TextViewState`] renders, drawn as part of the state's own view:
+/// the `Inline`s in it find the state on the stack while they are prepainted
+/// and painted, and a pending reveal counts the frame once they are.
+///
+/// It belongs inside the state's view rather than in the [`TextView`] element
+/// around it: a renderer may build the state's view again without building
+/// the view that holds the element, as GPUI Fast's retained mode does when
+/// only the state changed.
+pub(super) struct TextViewContent {
+    state: Entity<TextViewState>,
+    content: AnyElement,
+}
+
+impl TextViewContent {
+    pub(super) fn new(state: Entity<TextViewState>, content: impl IntoElement) -> Self {
+        Self {
+            state,
+            content: content.into_any_element(),
+        }
+    }
+}
+
+impl IntoElement for TextViewContent {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for TextViewContent {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        (self.content.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        // `Inline`s report their line spans for the `max_lines` clip here.
+        if let Ok(mut line_spans) = self.state.read(cx).line_spans.lock() {
+            line_spans.clear();
+        }
+        let content = &mut self.content;
+        GlobalState::global(cx)
+            .text_view_state_stack
+            .borrow_mut()
+            .push(self.state.clone());
+        content.prepaint(window, cx);
+        GlobalState::global(cx)
+            .text_view_state_stack
+            .borrow_mut()
+            .pop();
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        _: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        // The `Inline`s register their runs for hit testing as they paint,
+        // and the `TextView` hands them over after: when this view is drawn
+        // from the last frame instead, it hands over the ones registered then.
+        if self.state.read(cx).selectable {
+            self.state
+                .update(cx, |state, _| state.selection_adapter.begin_frame());
+        }
+        let content = &mut self.content;
+        GlobalState::global(cx)
+            .text_view_state_stack
+            .borrow_mut()
+            .push(self.state.clone());
+        content.paint(window, cx);
+        GlobalState::global(cx)
+            .text_view_state_stack
+            .borrow_mut()
+            .pop();
+
+        // Every list has scrolled by now, so the line of a reveal is where
+        // it ends up this frame.
+        let state = &self.state;
+        if state.read(cx).pending_reveal.is_none() {
+            return;
+        }
+        let progress = state.update(cx, |state, _| {
+            state.pending_reveal.as_mut().map(PendingReveal::progress)
+        });
+        match progress {
+            Some(RevealProgress::Shown) => {
+                state.update(cx, |state, _| state.pending_reveal = None);
+            }
+            Some(RevealProgress::Hidden(line)) => {
+                if let Some(handler) = state.read(cx).reveal_handler.clone() {
+                    handler(line, window, cx);
+                }
+            }
+            Some(RevealProgress::NotLaidOut) | None => {}
+        }
+    }
+}
+
 impl Element for TextView {
     type RequestLayoutState = TextViewLayoutState;
     type PrepaintState = TextViewPrepaintState;
@@ -671,29 +807,60 @@ impl Element for TextView {
                 .and_then(|d| d.code_block_highlighter.clone())
         });
 
-        state.update(cx, |state, cx| {
-            state.code_block_actions = self.code_block_actions.clone();
-            state.code_block_highlighter = code_block_highlighter;
-            state.table_actions = self.table_actions.clone();
-            state.link_click_handler = self.link_click_handler.clone();
-            state.image_source = self.image_source.clone();
-            state.set_markdown_extensions(self.markdown_extensions.clone(), cx);
-            if let Some(motion) = &self.motion {
-                state.set_motion(motion.clone());
-            }
-            state.selectable = self.selectable;
-            state.selection_format = self.selection_format;
-            state.scrollable = self.scrollable;
-            state.max_lines = max_lines;
-            if let Some(text_view_style) = text_view_style {
-                state.selection_revision = state.selection_revision.wrapping_add(1);
-                state.text_view_style = text_view_style;
-            }
+        // The state is updated only when the element hands it something new:
+        // an update counts as a change for the state's view, which a
+        // renderer that draws unchanged views from the last frame, as GPUI
+        // Fast's retained mode does, would then build again whenever the view
+        // holding this element is.
+        let unchanged = {
+            let state = state.read(cx);
+            same_handler(&state.code_block_actions, &self.code_block_actions)
+                && same_handler(&state.code_block_highlighter, &code_block_highlighter)
+                && same_handler(&state.table_actions, &self.table_actions)
+                && same_handler(&state.link_click_handler, &self.link_click_handler)
+                && same_handler(&state.image_source, &self.image_source)
+                && match (&state.reveal_handler, &self.reveal_handler) {
+                    (Some(current), Some(new)) => Rc::ptr_eq(current, new),
+                    (current, new) => current.is_none() && new.is_none(),
+                }
+                && state.markdown_extensions.revision() == self.markdown_extensions.revision()
+                && self.motion.is_none()
+                && state.selectable == self.selectable
+                && state.selection_format == self.selection_format
+                && state.scrollable == self.scrollable
+                && state.max_lines == max_lines
+                && text_view_style.is_none()
+                && self
+                    .text
+                    .as_ref()
+                    .is_none_or(|text| state.holds_element_text(text))
+        };
+        if !unchanged {
+            state.update(cx, |state, cx| {
+                state.code_block_actions = self.code_block_actions.clone();
+                state.code_block_highlighter = code_block_highlighter;
+                state.table_actions = self.table_actions.clone();
+                state.link_click_handler = self.link_click_handler.clone();
+                state.reveal_handler = self.reveal_handler.clone();
+                state.image_source = self.image_source.clone();
+                state.set_markdown_extensions(self.markdown_extensions.clone(), cx);
+                if let Some(motion) = &self.motion {
+                    state.set_motion(motion.clone());
+                }
+                state.selectable = self.selectable;
+                state.selection_format = self.selection_format;
+                state.scrollable = self.scrollable;
+                state.max_lines = max_lines;
+                if let Some(text_view_style) = text_view_style {
+                    state.selection_revision = state.selection_revision.wrapping_add(1);
+                    state.text_view_style = text_view_style;
+                }
 
-            if let Some(text) = &self.text {
-                state.set_element_text(text, cx);
-            }
-        });
+                if let Some(text) = &self.text {
+                    state.set_element_text(text, cx);
+                }
+            });
+        }
 
         let focus_handle = state.read(cx).focus_handle.clone();
         let list_state = state.read(cx).list_state.clone();
@@ -752,20 +919,8 @@ impl Element for TextView {
     ) -> Self::PrepaintState {
         let state = request_layout.state.clone();
         let max_lines_active = state.read(cx).max_lines.is_some();
-        if max_lines_active {
-            if let Ok(mut line_spans) = state.read(cx).line_spans.lock() {
-                line_spans.clear();
-            }
-            // Descendant `Inline`s report their line spans through the state
-            // stack during prepaint (in addition to the paint-time push below).
-            GlobalState::global_mut(cx)
-                .text_view_state_stack
-                .push(state.clone());
-        }
+        // The line spans are collected by `TextViewContent`.
         request_layout.element.prepaint(window, cx);
-        if max_lines_active {
-            GlobalState::global_mut(cx).text_view_state_stack.pop();
-        }
 
         let mut clip_bottom = None;
         if max_lines_active {
@@ -825,13 +980,6 @@ impl Element for TextView {
         cx: &mut App,
     ) {
         let state = &request_layout.state;
-        if self.selectable {
-            state.update(cx, |state, _| state.selection_adapter.begin_frame());
-        }
-
-        GlobalState::global_mut(cx)
-            .text_view_state_stack
-            .push(state.clone());
         if let Some(clip_bottom) = prepaint.clip_bottom {
             // Snap the `max_lines` clip to the last whole line that fits, so a
             // line of glyphs is never cut in half.
@@ -843,26 +991,6 @@ impl Element for TextView {
             });
         } else {
             request_layout.element.paint(window, cx);
-        }
-        GlobalState::global_mut(cx).text_view_state_stack.pop();
-
-        // Every list has scrolled by now, so the line of a reveal is where
-        // it ends up this frame.
-        if state.read(cx).pending_reveal.is_some() {
-            let progress = state.update(cx, |state, _| {
-                state.pending_reveal.as_mut().map(PendingReveal::progress)
-            });
-            match progress {
-                Some(RevealProgress::Shown) => {
-                    state.update(cx, |state, _| state.pending_reveal = None);
-                }
-                Some(RevealProgress::Hidden(line)) => {
-                    if let Some(handler) = &self.reveal_handler {
-                        handler(line, window, cx);
-                    }
-                }
-                Some(RevealProgress::NotLaidOut) | None => {}
-            }
         }
 
         if self.selectable {
@@ -876,7 +1004,7 @@ impl Element for TextView {
                     state.text_view_style.selection().alpha(1.),
                 )
             };
-            let document_order = GlobalState::global_mut(cx).next_selection_document_order();
+            let document_order = GlobalState::global(cx).next_selection_document_order();
             adapter.register(
                 prepaint.hitbox.clone(),
                 content_bounds,
@@ -971,6 +1099,135 @@ mod tests {
                         ),
                 )
         }
+    }
+
+    struct TwoTextViews {
+        first: Entity<TextViewState>,
+        second: Entity<TextViewState>,
+    }
+
+    impl Render for TwoTextViews {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(300.))
+                .child(crate::TextSelectionLayer)
+                .child(TextView::new(&self.first).selectable(true))
+                .child(TextView::new(&self.second).selectable(true))
+        }
+    }
+
+    /// The view holding two text views is built again, as a streaming
+    /// message has it built, but not the text views, which did not change
+    /// and are drawn from the last frame. They keep the runs they laid out
+    /// for hit testing then.
+    #[gpui::test]
+    fn a_text_view_drawn_from_the_last_frame_keeps_its_hit_test_runs(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let (view, cx) = cx.add_window_view(|_, cx| TwoTextViews {
+            first: cx.new(|cx| TextViewState::markdown("First message", cx)),
+            second: cx.new(|cx| TextViewState::markdown("Second message", cx)),
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let second = view.read_with(cx, |view, _| view.second.clone());
+        let runs = |cx: &mut VisualTestContext| {
+            second.read_with(cx, |state, cx| {
+                state.selection_adapter.hit_test_run_count(cx)
+            })
+        };
+        assert!(runs(cx) > 0);
+
+        view.update(cx, |_, cx| cx.notify());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(runs(cx) > 0, "the second text view lost its hit test runs");
+    }
+
+    /// A panel of selectable Markdown and an input, cached beside a sibling
+    /// that changes every frame, is not built again: drawing them must write
+    /// no entity or global that the panel read.
+    #[gpui::test]
+    fn an_idle_text_view_does_not_invalidate_its_cached_panel(cx: &mut TestAppContext) {
+        use std::{cell::Cell, rc::Rc};
+
+        struct Ticker(usize);
+        impl Render for Ticker {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size(px(20.)).bg(if self.0 % 2 == 0 {
+                    gpui::red()
+                } else {
+                    gpui::blue()
+                })
+            }
+        }
+        struct Panel {
+            text: Entity<TextViewState>,
+            input: Entity<crate::input::InputState>,
+            renders: Rc<Cell<usize>>,
+        }
+        impl Render for Panel {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.renders.set(self.renders.get() + 1);
+                div()
+                    .size_full()
+                    .child(TextView::new(&self.text).selectable(true))
+                    .child(crate::input::Input::new(&self.input))
+            }
+        }
+        struct Shell {
+            ticker: Entity<Ticker>,
+            panel: Entity<Panel>,
+        }
+        impl Render for Shell {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().child(self.ticker.clone()).child(
+                    self.panel
+                        .clone()
+                        .cached(StyleRefinement::default().size_full()),
+                )
+            }
+        }
+
+        cx.update(crate::init);
+        let renders = Rc::new(Cell::new(0));
+        let mut ticker = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let text = cx.new(|cx| {
+                TextViewState::markdown(
+                    "# Title\n\nSome *markdown* with `code`.\n\n- one\n- two",
+                    cx,
+                )
+            });
+            let input =
+                cx.new(|cx| crate::input::InputState::new(window, cx).default_value("hello"));
+            let panel = cx.new(|_| Panel {
+                text,
+                input,
+                renders: renders.clone(),
+            });
+            let tick = cx.new(|_| Ticker(0));
+            ticker = Some(tick.clone());
+            let shell = cx.new(|_| Shell {
+                ticker: tick,
+                panel,
+            });
+            crate::Root::new(shell, window, cx)
+        });
+        let ticker = ticker.unwrap();
+        cx.run_until_parked();
+        // Settle the geometry the first frames report.
+        for _ in 0..3 {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            cx.run_until_parked();
+        }
+        let settled = renders.get();
+        for _ in 0..10 {
+            ticker.update(cx, |ticker, cx| {
+                ticker.0 += 1;
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+        assert_eq!(renders.get(), settled, "an idle panel was built again");
     }
 
     #[gpui::test]
@@ -3225,7 +3482,8 @@ mod tests {
         assert_eq!(selected(cx), "select value");
 
         // A press on the menu leaves the selection alone; one on the text
-        // clears it.
+        // clears it. The text pressed is clear of both handles: the bounds a
+        // handle had in the frame before still take a press.
         let menu = gpui::Bounds::new(point(px(0.), px(200.)), gpui::size(px(120.), px(32.)));
         cx.update(|window, cx| TextSelection::register_touch_ui(menu, window, cx));
         cx.simulate_event(MouseDownEvent {
@@ -3237,14 +3495,14 @@ mod tests {
         });
         assert_eq!(selected(cx), "select value");
         cx.simulate_event(MouseDownEvent {
-            position: point(px(10.), px(16.)),
+            position: point(px(120.), px(16.)),
             modifiers: Modifiers::default(),
             button: MouseButton::Left,
             click_count: 1,
             first_mouse: false,
         });
         cx.simulate_event(MouseUpEvent {
-            position: point(px(10.), px(16.)),
+            position: point(px(120.), px(16.)),
             modifiers: Modifiers::default(),
             button: MouseButton::Left,
             click_count: 1,

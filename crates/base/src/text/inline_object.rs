@@ -296,7 +296,7 @@ impl Element for InlineObject {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let view = GlobalState::global(cx).text_view_state().cloned();
+        let view = GlobalState::global(cx).text_view_state();
         let selectable = view
             .as_ref()
             .is_some_and(|view| view.read(cx).is_selectable());

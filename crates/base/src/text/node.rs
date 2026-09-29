@@ -241,7 +241,7 @@ impl Element for CustomBlockElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let view = GlobalState::global(cx).text_view_state().cloned();
+        let view = GlobalState::global(cx).text_view_state();
         let selection = view.as_ref().and_then(|view| {
             let state = view.read(cx);
             if !state.is_selectable() {

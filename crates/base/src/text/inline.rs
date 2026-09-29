@@ -970,10 +970,9 @@ impl Element for Inline {
         self.report_to_editor();
 
         // Report this element's laid-out extent so an ancestor TextView with
-        // `max_lines` can snap its clip to a whole-line boundary. The state
-        // stack only holds an entry during prepaint when that view set
-        // `max_lines`, so this is a no-op otherwise.
-        if let Some(text_view_state) = GlobalState::global(cx).text_view_state().cloned() {
+        // `max_lines` can snap its clip to a whole-line boundary. Only a view
+        // that set `max_lines` collects them.
+        if let Some(text_view_state) = GlobalState::global(cx).text_view_state() {
             let state = text_view_state.read(cx);
             if state.max_lines.is_some()
                 && let Ok(mut line_spans) = state.line_spans.lock()
@@ -1065,7 +1064,7 @@ impl Element for Inline {
                 .unwrap_or_else(|| crate::Theme::global(cx).tokens.colors.selection);
             Self::paint_selection(selection, &text_layout, &bounds, window, color);
             if let Some((start, end)) = Self::selection_edges(selection, &text_layout)
-                && let Some(text_view_state) = GlobalState::global(cx).text_view_state().cloned()
+                && let Some(text_view_state) = GlobalState::global(cx).text_view_state()
             {
                 text_view_state.update(cx, |state, _| {
                     state.selection_adapter.register_selection_edges(start, end);
@@ -1076,7 +1075,7 @@ impl Element for Inline {
         _ = text_layout.paint_foreground(window, cx);
 
         if is_selectable {
-            if let Some(text_view_state) = GlobalState::global(cx).text_view_state().cloned() {
+            if let Some(text_view_state) = GlobalState::global(cx).text_view_state() {
                 let copy_layout = PaintedSelectionLayout::new(&text_layout);
                 let text_bounds = Self::text_line_bounds(
                     &copy_layout,
@@ -1113,7 +1112,7 @@ impl Element for Inline {
                 let text_layout = text_layout.clone();
                 let inline_state = self.state.clone();
                 let text = self.text.clone();
-                let text_view_state = GlobalState::global(cx).text_view_state().cloned();
+                let text_view_state = GlobalState::global(cx).text_view_state();
                 let line_bounds = self.selection_bounds;
                 move |event: &MouseDownEvent, phase, window, cx| {
                     if !phase.bubble()
@@ -1215,7 +1214,7 @@ impl Element for Inline {
                 let links = self.links.clone();
                 let text_layout = text_layout.clone();
                 let hitbox = hitbox.clone();
-                let text_view_state = GlobalState::global(cx).text_view_state().cloned();
+                let text_view_state = GlobalState::global(cx).text_view_state();
                 let link_click_handler = self.link_click_handler.clone();
 
                 move |event: &MouseUpEvent, phase, window, cx| {

@@ -753,8 +753,8 @@ fn the_menu_comes_back_after_a_scroll_the_container_swallowed(cx: &mut TestAppCo
                 ScrollWheelEvent {
                     position,
                     delta: ScrollDelta::Pixels(point(px(0.), px(dy))),
-                    modifiers: Modifiers::default(),
                     touch_phase,
+                    ..Default::default()
                 }
                 .to_platform_input(),
                 cx,

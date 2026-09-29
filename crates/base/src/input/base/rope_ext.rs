@@ -29,6 +29,47 @@ pub struct InputEdit {
 
 use lsp_types::Position;
 
+/// The byte lengths of `count` lines from `first_row`, without their `\n`: 0 for rows past
+/// the end. One scan of the bytes, where looking each row up costs a tree descent per row.
+pub(crate) fn line_lens(rope: &Rope, first_row: usize, count: usize) -> Vec<usize> {
+    let mut lens = Vec::with_capacity(count);
+    if count == 0 || first_row >= rope.len_lines(LineType::LF) {
+        lens.resize(count, 0);
+        return lens;
+    }
+    let start = rope.line_to_byte_idx(first_row, LineType::LF);
+    let (chunks, chunk_start) = rope.chunks_at(start);
+    let mut skip = start - chunk_start;
+    let mut len = 0;
+    'chunks: for chunk in chunks {
+        let mut bytes = &chunk.as_bytes()[skip..];
+        skip = 0;
+        while let Some(newline) = memchr::memchr(b'\n', bytes) {
+            lens.push(len + newline);
+            if lens.len() == count {
+                break 'chunks;
+            }
+            len = 0;
+            bytes = &bytes[newline + 1..];
+        }
+        len += bytes.len();
+    }
+    if lens.len() < count {
+        lens.push(len);
+        lens.resize(count, 0);
+    }
+    lens
+}
+
+/// `line` without its trailing `\n`, keeping a `\r` before it.
+pub(crate) fn without_line_break(line: RopeSlice<'_>) -> RopeSlice<'_> {
+    // A `\n` byte is always a whole char in UTF-8, so the last byte says it.
+    match line.len().checked_sub(1) {
+        Some(line_end) if line.byte(line_end) == b'\n' => line.slice(..line_end),
+        _ => line,
+    }
+}
+
 /// An iterator over the lines of a `Rope`.
 pub struct RopeLines<'a> {
     rope: &'a Rope,
@@ -281,15 +322,7 @@ impl RopeExt for Rope {
             return self.slice(0..0);
         }
 
-        let line = self.line(row, LineType::LF);
-        if line.len() > 0 {
-            let line_end = line.len() - 1;
-            if line.is_char_boundary(line_end) && line.char(line_end) == '\n' {
-                return line.slice(..line_end);
-            }
-        }
-
-        line
+        without_line_break(self.line(row, LineType::LF))
     }
 
     fn slice_lines(&self, rows_range: Range<usize>) -> RopeSlice<'_> {
@@ -449,7 +482,7 @@ impl RopeExt for Rope {
 
 #[cfg(test)]
 mod tests {
-    use super::Point;
+    use super::{Point, line_lens};
     use ropey::Rope;
     use sum_tree::Bias;
 
@@ -504,6 +537,26 @@ mod tests {
 
         let rope1 = rope.clone();
         assert!(rope.eq(&rope1));
+    }
+
+    #[test]
+    fn test_line_lens() {
+        let rope = Rope::from("Hello\nWorld\r\n\nThis is a test 中文\nRope");
+        let all: Vec<_> = (0..7).map(|row| rope.line_len(row)).collect();
+        assert_eq!(line_lens(&rope, 0, 7), all);
+        assert_eq!(
+            line_lens(&rope, 2, 3),
+            vec![0, "This is a test 中文".len(), 4]
+        );
+        assert_eq!(line_lens(&rope, 9, 2), vec![0, 0]);
+        assert_eq!(line_lens(&Rope::from("a\n"), 0, 3), vec![1, 0, 0]);
+
+        // Lines that cross chunk boundaries.
+        let long = format!("{}\n", "x".repeat(3000)).repeat(40);
+        let rope = Rope::from(long.as_str());
+        let expected: Vec<_> = (0..41).map(|row| rope.line_len(row)).collect();
+        assert_eq!(line_lens(&rope, 0, 41), expected);
+        assert_eq!(line_lens(&rope, 17, 5), expected[17..22]);
     }
 
     #[test]

@@ -1036,7 +1036,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         let text: SharedString = text.into();
         self.with_edits_allowed(|this| {
             this.undo_manager.set_pending_intent(EditIntent::Atomic);
-            let range = 0..this.text.chars().map(|c| c.len_utf16()).sum();
+            let range = 0..this.text.len_utf16();
             this.replace_text_in_range_silent(Some(range), &text, window, cx);
             this.reset_highlighter(cx);
         });

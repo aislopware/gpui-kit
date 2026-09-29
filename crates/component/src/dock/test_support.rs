@@ -155,3 +155,21 @@ impl Render for HideableProbe {
             .on_prepaint(move |bounds, _, _| height.set(bounds.size.height))
     }
 }
+
+/// Asserts that `drawn`, what a renderer recorded since an action, holds at
+/// least one frame and that every frame recorded `frame`. How many frames an
+/// action draws depends on whether views are drawn from the last frame, so a
+/// test counts none of them.
+pub(crate) fn assert_every_frame_drew<T: PartialEq + std::fmt::Debug>(
+    drawn: &[T],
+    frame: &[T],
+    why: &str,
+) {
+    assert!(
+        !drawn.is_empty() && drawn.len() % frame.len() == 0,
+        "{why}: drew {drawn:?}, not frames of {frame:?}"
+    );
+    for drawn_frame in drawn.chunks(frame.len()) {
+        assert_eq!(drawn_frame, frame, "{why}");
+    }
+}

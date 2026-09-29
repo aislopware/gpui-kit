@@ -295,6 +295,77 @@ mod tests {
         });
     }
 
+    struct SelectableTextParagraph;
+
+    impl Render for SelectableTextParagraph {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(240.))
+                .h(px(32.))
+                .child(SelectableText::new("nested", "alpha beta"))
+        }
+    }
+
+    struct NestedSelectableTextView(gpui::Entity<SelectableTextParagraph>);
+
+    impl Render for NestedSelectableTextView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(TextSelectionLayer)
+                .child(self.0.clone())
+        }
+    }
+
+    /// The text sits in a view of its own, which nothing but the selection
+    /// changes, so the highlight appears and goes only if the selection
+    /// tells the view it drew from.
+    #[gpui::test]
+    fn the_highlight_follows_the_selection_in_a_view_of_its_own(cx: &mut TestAppContext) {
+        use gpui::AppContext as _;
+
+        let (_, cx) = cx
+            .add_window_view(|_, cx| NestedSelectableTextView(cx.new(|_| SelectableTextParagraph)));
+        cx.run_until_parked();
+        let quads =
+            |cx: &mut gpui::VisualTestContext| cx.update(|window, _| window.painted_quads().len());
+        let unselected = quads(cx);
+
+        cx.simulate_mouse_down(
+            point(px(1.), px(12.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(220.), px(12.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(220.), px(12.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        assert!(quads(cx) > unselected, "the selection is highlighted");
+
+        cx.simulate_mouse_down(
+            point(px(1.), px(200.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(1.), px(200.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.update(|window, cx| assert_eq!(TextSelection::selected_text(window, cx), ""));
+        assert_eq!(
+            quads(cx),
+            unselected,
+            "the cleared selection is not highlighted"
+        );
+    }
+
     #[test]
     fn wrapped_selection_paints_full_width_middle_lines() {
         let bounds = Bounds::new(point(px(10.), px(20.)), size(px(100.), px(100.)));

@@ -663,8 +663,7 @@ impl Element for InlineFlow {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let preserve_selection = crate::GlobalState::global(cx)
-            .text_view_state()
+        let preserve_selection = crate::global_state::TextViewStateStack::current(cx)
             .is_some_and(|view| view.read(cx).preserve_inline_selection);
         for item in &self.items {
             if !preserve_selection

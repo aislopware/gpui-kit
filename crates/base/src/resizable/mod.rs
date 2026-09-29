@@ -225,16 +225,24 @@ impl ResizableState {
         cx: &mut Context<Self>,
     ) {
         let size = bounds.size.along(self.axis);
+        let mut changed = false;
         // This check is only necessary to stop the very first panel from resizing on its own
         // it needs to be passed when the panel is freshly created so we get the initial size,
         // but its also fine when it sometimes passes later.
         if self.sizes[panel_ix].as_f32() == PANEL_MIN_SIZE.as_f32() {
             self.sizes[panel_ix] = size;
             self.panels[panel_ix].size = Some(size);
+            changed = true;
         }
-        self.panels[panel_ix].bounds = bounds;
-        self.panels[panel_ix].size_range = size_range;
-        cx.notify();
+        let panel = &mut self.panels[panel_ix];
+        changed |= panel.bounds != bounds || panel.size_range != size_range;
+        panel.bounds = bounds;
+        panel.size_range = size_range;
+        // Reported on every prepaint; a notify for an unchanged panel would
+        // build every view reading this state again on every frame.
+        if changed {
+            cx.notify();
+        }
     }
 
     /// Remove the panel at `panel_ix` and redistribute the remaining space.

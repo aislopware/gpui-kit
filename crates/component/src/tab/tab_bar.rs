@@ -26,6 +26,13 @@ struct TabIndicatorBounds {
     tabs: Vec<Bounds<Pixels>>,
 }
 
+/// The indicator is placed from the bounds the last prepaint measured, so
+/// when they move, the view drawing the bar has to be built again. A notify
+/// raised while drawing draws nothing, hence the next frame.
+fn redraw_indicator(view_id: gpui::EntityId, window: &mut Window) {
+    window.on_next_frame(move |_, cx| cx.notify(view_id));
+}
+
 impl TabIndicatorBounds {
     fn new(num_tabs: usize) -> Self {
         Self {
@@ -434,6 +441,7 @@ impl RenderOnce for TabBar {
 
         // Bounds tracking for tab indicator animation.
         // Uses Rc<RefCell> to avoid triggering re-renders from prepaint writes.
+        let view_id = window.current_view();
         let bounds_rc = if has_indicator && num_tabs > 0 {
             let rc: Rc<RefCell<TabIndicatorBounds>> = window
                 .use_keyed_state(format!("{}-tab-bounds", self.id), cx, |_, _| {
@@ -549,9 +557,12 @@ impl RenderOnce for TabBar {
                         this.style().flex_basis = flex_basis;
                         this
                     })
-                    .on_prepaint(move |bounds, _, _| {
-                        if let Some(slot) = rc.borrow_mut().tabs.get_mut(ix) {
+                    .on_prepaint(move |bounds, window, _| {
+                        if let Some(slot) = rc.borrow_mut().tabs.get_mut(ix)
+                            && *slot != bounds
+                        {
                             *slot = bounds;
+                            redraw_indicator(view_id, window);
                         }
                     })
                     .relative()
@@ -629,8 +640,12 @@ impl RenderOnce for TabBar {
                     // `on_prepaint` adds a canvas child. Keep that helper on
                     // the non-scrolling wrapper so it cannot shift tab indices.
                     .when_some(bounds_rc.clone(), |this, rc| {
-                        this.on_prepaint(move |bounds, _, _| {
-                            rc.borrow_mut().container = bounds;
+                        this.on_prepaint(move |bounds, window, _| {
+                            let mut tracked = rc.borrow_mut();
+                            if tracked.container != bounds {
+                                tracked.container = bounds;
+                                redraw_indicator(view_id, window);
+                            }
                         })
                     })
                     .child(

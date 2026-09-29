@@ -1,5 +1,9 @@
 use gpui::{Context, Pixels, Task, px};
 use instant::Duration;
+#[cfg(not(target_family = "wasm"))]
+use std::time::Instant;
+#[cfg(target_family = "wasm")]
+use web_time::Instant;
 
 static INTERVAL: Duration = Duration::from_millis(500);
 static PAUSE_DELAY: Duration = Duration::from_millis(300);
@@ -20,6 +24,10 @@ pub(crate) struct BlinkCursor {
     visible: bool,
     paused: bool,
     epoch: usize,
+    /// When the running pause ends. Each keystroke moves it later instead of
+    /// replacing the pause timer: a timer costs a platform call to arm, which
+    /// was a tenth of a keystroke's frame in a large file.
+    resume_at: Option<Instant>,
 
     _task: Task<()>,
 }
@@ -30,6 +38,7 @@ impl BlinkCursor {
             visible: false,
             paused: false,
             epoch: 0,
+            resume_at: None,
             _task: Task::ready(()),
         }
     }
@@ -45,6 +54,7 @@ impl BlinkCursor {
         self.epoch = 0;
         self.paused = false;
         self.visible = false;
+        self.resume_at = None;
         self._task = Task::ready(());
         cx.notify();
     }
@@ -95,25 +105,43 @@ impl BlinkCursor {
             return;
         }
 
-        self.paused = true;
-        self.visible = true;
-        cx.notify();
+        let resume_at = cx.background_executor().now() + PAUSE_DELAY;
+        let pausing = self.resume_at.replace(resume_at).is_some();
+        if !self.paused || !self.visible {
+            self.paused = true;
+            self.visible = true;
+            cx.notify();
+        }
+        if pausing {
+            return;
+        }
 
-        // Every pause replaces the pending timer, keeping repeated input visible.
         let epoch = self.next_epoch();
         self._task = cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(PAUSE_DELAY).await;
-
-            if let Some(this) = this.upgrade() {
-                this.update(cx, |this, cx| {
-                    if epoch != this.epoch {
-                        return;
-                    }
-
-                    this.paused = false;
-                    this.blink(epoch, cx);
+            loop {
+                let wait = this.read_with(cx, |this, cx| {
+                    let resume_at = this.resume_at.filter(|_| this.epoch == epoch)?;
+                    let now = cx.background_executor().now();
+                    Some(resume_at.saturating_duration_since(now))
                 });
+                match wait {
+                    Ok(Some(wait)) if !wait.is_zero() => {
+                        cx.background_executor().timer(wait).await;
+                    }
+                    Ok(Some(_)) => break,
+                    _ => return,
+                }
             }
+
+            let _ = this.update(cx, |this, cx| {
+                if epoch != this.epoch {
+                    return;
+                }
+
+                this.resume_at = None;
+                this.paused = false;
+                this.blink(epoch, cx);
+            });
         });
     }
 }
@@ -144,6 +172,32 @@ mod tests {
         cx.executor().advance_clock(INTERVAL);
         cx.run_until_parked();
         assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+    }
+
+    /// Typing pauses the blink on every keystroke. A burst of keystrokes keeps
+    /// one pause timer running instead of arming a timer per key.
+    #[gpui::test]
+    fn a_burst_of_pauses_arms_one_timer(cx: &mut TestAppContext) {
+        let cursor = cx.new(|_| BlinkCursor::new());
+        cursor.update(cx, |cursor, cx| cursor.start(cx));
+        cx.run_until_parked();
+        cursor.update(cx, |cursor, cx| cursor.pause(cx));
+        let epoch = cursor.read_with(cx, |cursor, _| cursor.epoch);
+        for _ in 0..10 {
+            cx.executor().advance_clock(Duration::from_millis(50));
+            cursor.update(cx, |cursor, cx| cursor.pause(cx));
+            cx.run_until_parked();
+        }
+        assert_eq!(cursor.read_with(cx, |cursor, _| cursor.epoch), epoch);
+
+        // The pause still ends a full delay after the last keystroke.
+        cx.executor()
+            .advance_clock(PAUSE_DELAY - Duration::from_millis(1));
+        cx.run_until_parked();
+        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        cx.executor().advance_clock(Duration::from_millis(1));
+        cx.run_until_parked();
+        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
     }
 
     #[gpui::test]

@@ -12,6 +12,10 @@ default = ["tree-sitter"]
 
 [dependencies]
 anyhow.workspace = true
+# GPUI's derives and `#[gpui_kit::test]` expand to `gpui::` paths. gpui-fast,
+# unlike the published gpui-pre, does not rewrite them to the Kit, so the crate
+# names GPUI directly (the Kit's `gpui` re-export is that same crate).
+gpui.workspace = true
 gpui-kit = { workspace = true, features = ["speech"] }
 gpui-fps.workspace = true
 

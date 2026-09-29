@@ -28,7 +28,7 @@ struct CachedTheme {
 pub(crate) fn sync(cx: &App) -> ThemeSnapshotKey {
     let theme = Theme::global(cx);
     let key = ThemeSnapshotKey {
-        tokens: theme.tokens,
+        tokens: theme.tokens.clone(),
         appearance: theme.appearance,
     };
     CACHED.with(|cached| {

@@ -272,8 +272,10 @@ import {{ AlertDialog, Notification }} from "gpui-component";
 export default class App extends View {{ render() {{ return {}; }} }}"#,
             expression
         );
-        let (mut context, view, _app) = mount_isolated(cx, &source);
+        // The mount renders the view, and a draw with nothing changed renders
+        // nothing again: clear the probe before the mount, not before the draw.
         window_effects::test_probe::take_slot_rejections();
+        let (mut context, view, _app) = mount_isolated(cx, &source);
         context.update(|window, cx| window.draw(cx).clear(cx));
         context.update(|window, cx| window.draw(cx).clear(cx));
         context.update(|_, cx| assert_eq!(view.read(cx).build_error(), None));

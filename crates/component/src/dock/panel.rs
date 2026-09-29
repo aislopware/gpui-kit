@@ -474,13 +474,11 @@ mod tests {
             area.update(cx, |area, cx| area.set_center(layout, window, cx));
         });
         cx.run_until_parked();
-        recovered.borrow_mut().tab_names.clear();
-        cx.update(|window, cx| window.draw(cx).clear(cx));
 
-        assert_eq!(
-            recovered.borrow().tab_names,
-            vec![Some(SharedString::from("Probe Tab"))],
-            "the skin read its own panel trait off base's handle"
+        crate::dock::test_support::assert_every_frame_drew(
+            &recovered.borrow().tab_names,
+            &[Some(SharedString::from("Probe Tab"))],
+            "the skin read its own panel trait off base's handle",
         );
 
         // And the handle it kept still answers once the frame that recovered
@@ -520,15 +518,14 @@ mod tests {
         cx.run_until_parked();
 
         let state = cx.read(|cx| area.read(cx).dump(cx));
+        recovered.borrow_mut().tab_names.clear();
         cx.update(|window, cx| area.update(cx, |area, cx| area.load(state, window, cx).unwrap()));
         cx.run_until_parked();
-        recovered.borrow_mut().tab_names.clear();
-        cx.update(|window, cx| window.draw(cx).clear(cx));
 
-        assert_eq!(
-            recovered.borrow().tab_names,
-            vec![Some(SharedString::from("Restored Tab"))],
-            "the rebuilt panel reached the tab bar as a handle, not a bare entity"
+        crate::dock::test_support::assert_every_frame_drew(
+            &recovered.borrow().tab_names,
+            &[Some(SharedString::from("Restored Tab"))],
+            "the rebuilt panel reached the tab bar as a handle, not a bare entity",
         );
     }
 
@@ -554,13 +551,11 @@ mod tests {
             area.update(cx, |area, cx| area.set_center(layout, window, cx));
         });
         cx.run_until_parked();
-        recovered.borrow_mut().tab_names.clear();
-        cx.update(|window, cx| window.draw(cx).clear(cx));
 
-        assert_eq!(
-            recovered.borrow().tab_names,
-            vec![None],
-            "an unwrapped panel is reported as unrecoverable, not wrongly recovered"
+        crate::dock::test_support::assert_every_frame_drew(
+            &recovered.borrow().tab_names,
+            &[None],
+            "an unwrapped panel is reported as unrecoverable, not wrongly recovered",
         );
     }
 }

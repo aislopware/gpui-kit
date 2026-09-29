@@ -2,7 +2,6 @@ use gpui::Corners;
 use std::{
     cell::RefCell,
     collections::HashMap,
-    mem,
     ops::Range,
     rc::Rc,
     sync::{Arc, Mutex, Weak},
@@ -212,7 +211,9 @@ pub(super) struct Inline {
     text: SharedString,
     links: Rc<Vec<(Range<usize>, LinkMark)>>,
     highlights: Vec<(Range<usize>, InlineHighlight)>,
-    styled_text: StyledText,
+    /// The shaped text and what it was shaped from, `None` while the table
+    /// holds it (see [`RetainedLayout`]) or before the first layout.
+    shaped: Option<Box<RetainedLayout>>,
     /// The resolved style from a parent deferred layout, when there is one.
     text_style: Option<TextStyle>,
     paint_origin: Option<Point<Pixels>>,
@@ -223,12 +224,6 @@ pub(super) struct Inline {
     /// The start of a pending reveal, when it is in this text.
     reveal: Option<RevealAt>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
-    /// What this frame's layout was shaped with, to hand the shaped text to
-    /// the next frame (see [`RetainedLayout`]).
-    retained_key: Option<(Vec<TextRun>, TextStyle)>,
-    /// The shaped text is in the table, not in `styled_text`, until paint
-    /// takes it back.
-    handed_over: bool,
 
     state: Arc<Mutex<InlineState>>,
 }
@@ -259,16 +254,58 @@ pub(crate) struct InlineState {
 /// travels through the background parse, so the layouts live in a
 /// thread-local table keyed by the state's address, with a `Weak` to tell a
 /// live state from a reused address.
+///
+/// The table holds a layout for every paragraph shaped since the last sweep,
+/// on screen or not, so it holds boxes: its buckets stay small enough to stay
+/// in cache, and a layout moves between the table and its element as a
+/// pointer.
 struct RetainedLayout {
     state: Weak<Mutex<InlineState>>,
-    styled_text: StyledText,
+    /// `None` only while `with_runs` rebuilds it.
+    styled_text: Option<StyledText>,
     text: SharedString,
     runs: Vec<TextRun>,
     text_style: TextStyle,
 }
 
+impl RetainedLayout {
+    fn layout(&self) -> Option<&TextLayout> {
+        self.styled_text.as_ref().map(StyledText::layout)
+    }
+}
+
+/// Hashes the table's keys, `Arc` addresses: distinct, so one multiply spreads
+/// them, and SipHash's resistance to chosen keys buys nothing here.
+#[derive(Default)]
+struct AddressHasher(u64);
+
+impl std::hash::Hasher for AddressHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.write_u64(u64::from(byte));
+        }
+    }
+
+    fn write_usize(&mut self, address: usize) {
+        self.write_u64(address as u64);
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.0 = (self.0 ^ value)
+            .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            .rotate_left(26);
+    }
+}
+
+type RetainedLayouts =
+    HashMap<usize, Box<RetainedLayout>, std::hash::BuildHasherDefault<AddressHasher>>;
+
 thread_local! {
-    static RETAINED_LAYOUTS: RefCell<HashMap<usize, RetainedLayout>> = RefCell::new(HashMap::new());
+    static RETAINED_LAYOUTS: RefCell<RetainedLayouts> = RefCell::new(RetainedLayouts::default());
 }
 
 /// Dead entries (states that were dropped without a final paint, e.g. a
@@ -280,7 +317,7 @@ fn state_key(state: &Arc<Mutex<InlineState>>) -> usize {
 }
 
 /// Takes the layout retained for `state`, if the previous frame left one.
-fn take_retained_layout(state: &Arc<Mutex<InlineState>>) -> Option<RetainedLayout> {
+fn take_retained_layout(state: &Arc<Mutex<InlineState>>) -> Option<Box<RetainedLayout>> {
     RETAINED_LAYOUTS.with(|layouts| {
         let retained = layouts.borrow_mut().remove(&state_key(state))?;
         // The address may belong to a new state by now.
@@ -299,7 +336,7 @@ fn has_retained_layout(state: &Arc<Mutex<InlineState>>) -> bool {
     RETAINED_LAYOUTS.with(|layouts| layouts.borrow().contains_key(&state_key(state)))
 }
 
-fn retain_layout(state: &Arc<Mutex<InlineState>>, retained: RetainedLayout) {
+fn retain_layout(state: &Arc<Mutex<InlineState>>, retained: Box<RetainedLayout>) {
     RETAINED_LAYOUTS.with(|layouts| {
         let mut layouts = layouts.borrow_mut();
         if layouts.len() >= RETAINED_SWEEP_AT {
@@ -327,38 +364,23 @@ impl Inline {
     /// table holds one layout per state, and an element must never be left
     /// to paint without its shaped text.
     fn retain_styled_text(&mut self) {
-        if self.handed_over || self.retained_key.is_none() || has_retained_layout(&self.state) {
+        if self.shaped.is_none() || has_retained_layout(&self.state) {
             return;
         }
-        let Some((runs, text_style)) = self.retained_key.take() else {
-            return;
-        };
-        retain_layout(
-            &self.state,
-            RetainedLayout {
-                state: Arc::downgrade(&self.state),
-                styled_text: mem::replace(&mut self.styled_text, StyledText::new("")),
-                text: self.text.clone(),
-                runs,
-                text_style,
-            },
-        );
-        self.handed_over = true;
+        if let Some(shaped) = self.shaped.take() {
+            retain_layout(&self.state, shaped);
+        }
     }
 
     /// Takes the shaped text back from the table for painting. `false` when
     /// it is gone, in which case there is nothing to paint with.
     fn reclaim_styled_text(&mut self) -> bool {
-        if !self.handed_over {
-            return true;
+        if self.shaped.is_none() {
+            self.shaped = take_retained_layout(&self.state);
         }
-        let Some(retained) = take_retained_layout(&self.state) else {
-            return false;
-        };
-        self.styled_text = retained.styled_text;
-        self.retained_key = Some((retained.runs, retained.text_style));
-        self.handed_over = false;
-        true
+        self.shaped
+            .as_ref()
+            .is_some_and(|shaped| shaped.styled_text.is_some())
     }
 
     pub(super) fn new(
@@ -375,8 +397,8 @@ impl Inline {
         Self {
             links: Rc::new(links),
             highlights,
-            text: text.clone(),
-            styled_text: StyledText::new(text),
+            text,
+            shaped: None,
             text_style: None,
             paint_origin: None,
             selection_bounds: None,
@@ -384,8 +406,6 @@ impl Inline {
             range_backgrounds: Vec::new(),
             reveal: None,
             link_click_handler,
-            retained_key: None,
-            handed_over: false,
             state,
         }
     }
@@ -436,7 +456,9 @@ impl Inline {
         let Some(reveal) = &self.reveal else {
             return;
         };
-        let text_layout = self.styled_text.layout();
+        let Some(text_layout) = self.shaped.as_ref().and_then(|shaped| shaped.layout()) else {
+            return;
+        };
         let bounds = text_layout.bounds();
         let line_height = text_layout.line_height();
         let glyphs = glyph_boxes(
@@ -522,12 +544,13 @@ impl Inline {
 
     fn layout_selections(
         &self,
+        text_view_state: Option<&gpui::Entity<crate::text::TextViewState>>,
         text_layout: &TextLayout,
         bounds: &Bounds<Pixels>,
         window: &mut Window,
         cx: &mut App,
     ) -> (bool, bool, Option<Selection>) {
-        let Some(text_view_state) = crate::global_state::TextViewStateStack::current(cx) else {
+        let Some(text_view_state) = text_view_state else {
             return (false, false, None);
         };
 
@@ -887,19 +910,38 @@ impl Element for Inline {
         let runs = text_runs(self.text.len(), &text_style, &self.highlights);
 
         // Reuse the previous frame's shaped text when it was shaped from the
-        // same text, runs and style; `StyledText` consumes its runs on every
-        // layout, so they are handed over again either way.
-        let retained = take_retained_layout(&self.state).filter(|retained| {
-            retained.text == self.text && retained.runs == runs && retained.text_style == text_style
-        });
-        self.styled_text = match retained {
-            Some(retained) => retained.styled_text.with_runs(runs.clone()),
-            None => StyledText::new(self.text.clone()).with_runs(runs.clone()),
+        // same text, runs and style, else its box; `StyledText` consumes its
+        // runs on every layout, so they are handed over again either way.
+        let mut shaped = match take_retained_layout(&self.state) {
+            Some(mut retained) => {
+                if retained.text != self.text
+                    || retained.runs != runs
+                    || retained.text_style != text_style
+                {
+                    retained.styled_text = None;
+                    retained.text = self.text.clone();
+                    retained.text_style = text_style;
+                }
+                retained
+            }
+            None => Box::new(RetainedLayout {
+                state: Arc::downgrade(&self.state),
+                styled_text: None,
+                text: self.text.clone(),
+                runs: Vec::new(),
+                text_style,
+            }),
         };
-        self.retained_key = Some((runs, text_style));
+        let styled_text = shaped
+            .styled_text
+            .take()
+            .unwrap_or_else(|| StyledText::new(self.text.clone()))
+            .with_runs(runs.clone());
+        shaped.runs = runs;
+        let styled_text = shaped.styled_text.insert(styled_text);
         let (layout_id, _) =
-            self.styled_text
-                .request_layout(global_element_id, inspector_id, window, cx);
+            styled_text.request_layout(global_element_id, inspector_id, window, cx);
+        self.shaped = Some(shaped);
 
         (layout_id, ())
     }
@@ -914,24 +956,29 @@ impl Element for Inline {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let bounds = Bounds::new(self.paint_origin.unwrap_or(bounds.origin), bounds.size);
-        self.styled_text
-            .prepaint(id, inspector_id, bounds, &mut (), window, cx);
+        if let Some(styled_text) = self
+            .shaped
+            .as_mut()
+            .and_then(|shaped| shaped.styled_text.as_mut())
+        {
+            styled_text.prepaint(id, inspector_id, bounds, &mut (), window, cx);
+        }
 
         // Report this element's laid-out extent so an ancestor TextView with
         // `max_lines` can snap its clip to a whole-line boundary. Only a view
         // that set `max_lines` collects them.
-        if let Some(text_view_state) = crate::global_state::TextViewStateStack::current(cx) {
-            let state = text_view_state.read(cx);
+        let line_height = window.line_height();
+        crate::global_state::TextViewStateStack::read_current(cx, |state| {
             if state.max_lines.is_some()
                 && let Ok(mut line_spans) = state.line_spans.lock()
             {
                 line_spans.push(LineSpan {
                     top: bounds.top(),
                     bottom: bounds.bottom(),
-                    line_height: window.line_height(),
+                    line_height,
                 });
             }
-        }
+        });
 
         self.request_reveal(window);
 
@@ -959,16 +1006,30 @@ impl Element for Inline {
             // paint an unmeasured placeholder.
             return;
         }
-        let text_layout = self.styled_text.layout().clone();
+        let Some(styled_text) = self
+            .shaped
+            .as_mut()
+            .and_then(|shaped| shaped.styled_text.as_mut())
+        else {
+            return;
+        };
+        let text_layout = styled_text.layout().clone();
         if !self.range_backgrounds.is_empty() {
             self.paint_range_highlights(&text_layout, window);
         }
-        self.styled_text
-            .paint(global_id, None, bounds, &mut (), &mut (), window, cx);
+        if let Some(styled_text) = self
+            .shaped
+            .as_mut()
+            .and_then(|shaped| shaped.styled_text.as_mut())
+        {
+            styled_text.paint(global_id, None, bounds, &mut (), &mut (), window, cx);
+        }
 
+        // One handle for this paint and the listeners it registers.
+        let text_view_state = crate::global_state::TextViewStateStack::current(cx);
         // layout selections
         let (is_selectable, is_selection, selection) =
-            self.layout_selections(&text_layout, &bounds, window, cx);
+            self.layout_selections(text_view_state.as_ref(), &text_layout, &bounds, window, cx);
 
         let Ok(mut state) = self.state.lock() else {
             return;
@@ -1013,7 +1074,7 @@ impl Element for Inline {
         }
 
         if is_selectable {
-            if let Some(text_view_state) = crate::global_state::TextViewStateStack::current(cx) {
+            if let Some(text_view_state) = &text_view_state {
                 let text_bounds = Self::text_line_bounds(
                     &text_layout,
                     text_layout.line_height(),
@@ -1036,7 +1097,7 @@ impl Element for Inline {
                 let text_layout = text_layout.clone();
                 let inline_state = self.state.clone();
                 let text = self.text.clone();
-                let text_view_state = crate::global_state::TextViewStateStack::current(cx);
+                let text_view_state = text_view_state.clone();
                 let line_bounds = self.selection_bounds;
                 move |event: &MouseDownEvent, phase, window, cx| {
                     if !phase.bubble()
@@ -1138,7 +1199,7 @@ impl Element for Inline {
                 let links = self.links.clone();
                 let text_layout = text_layout.clone();
                 let hitbox = hitbox.clone();
-                let text_view_state = crate::global_state::TextViewStateStack::current(cx);
+                let text_view_state = text_view_state.clone();
                 let link_click_handler = self.link_click_handler.clone();
 
                 move |event: &MouseUpEvent, phase, window, cx| {

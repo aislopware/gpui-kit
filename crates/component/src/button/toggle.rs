@@ -121,6 +121,17 @@ impl Toggle {
     }
 }
 
+impl Toggle {
+    /// Use the outline variant.
+    ///
+    /// The same as the variants trait's `outline`, kept on the type itself: GPUI's
+    /// `Styled` has an `outline` of its own, and a trait method of the same name
+    /// would be ambiguous wherever both traits are in scope.
+    pub fn outline(self) -> Self {
+        self.with_variant(ToggleVariant::Outline)
+    }
+}
+
 impl ToggleVariants for Toggle {
     fn with_variant(mut self, variant: ToggleVariant) -> Self {
         self.variant = variant;
@@ -293,6 +304,17 @@ impl Sizable for ToggleGroup {
     }
 }
 
+impl ToggleGroup {
+    /// Use the outline variant.
+    ///
+    /// The same as the variants trait's `outline`, kept on the type itself: GPUI's
+    /// `Styled` has an `outline` of its own, and a trait method of the same name
+    /// would be ambiguous wherever both traits are in scope.
+    pub fn outline(self) -> Self {
+        self.with_variant(ToggleVariant::Outline)
+    }
+}
+
 impl ToggleVariants for ToggleGroup {
     fn with_variant(mut self, variant: ToggleVariant) -> Self {
         self.variant = variant;
@@ -416,6 +438,17 @@ mod tests {
         StatefulInteractiveElement, TestAppContext, VisualTestContext, point, px,
     };
     use std::cell::{Cell, RefCell};
+
+    /// `Styled` (in scope through `use super::*`) has an `outline` too; the
+    /// variant builder must still be the one a bare `.outline()` reaches.
+    #[test]
+    fn outline_picks_the_variant_with_styled_in_scope() {
+        assert_eq!(Toggle::new("t").outline().variant, ToggleVariant::Outline);
+        assert_eq!(
+            ToggleGroup::new("g").outline().variant,
+            ToggleVariant::Outline
+        );
+    }
 
     struct ToggleHarness {
         disabled: bool,

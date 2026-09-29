@@ -2,7 +2,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Sizable, Size, StyledExt as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::{Dialog, DialogClose, DialogDescription, DialogFooter, DialogHeader, DialogTitle},
-    group_box::{GroupBox, GroupBoxVariants as _},
+    group_box::GroupBox,
     h_flex,
     input::InputState,
     kbd::Kbd,

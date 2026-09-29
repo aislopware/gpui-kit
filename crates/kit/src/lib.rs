@@ -85,19 +85,14 @@ macro_rules! actions {
 // A future switch to official GPUI crates is an internal dependency migration,
 // not a reason to steer Kit users toward gpui:: paths or require import changes.
 // Keep the existing gpui namespace re-export hidden for source compatibility;
-// it is not the recommended application API. It names this crate rather than
-// the GPUI crate: `gpui_kit::gpui::Window` is still GPUI's `Window` through the
-// glob below, and applications can alias the Kit as `gpui`
-// (`extern crate gpui_kit as gpui;`) so GPUI macro output resolves through the
-// Kit whichever GPUI it is built on. Pointing this at the GPUI crate would make
-// that alias ambiguous (E0659) wherever `gpui_kit::*` is glob-imported.
+// it is not the recommended application API.
 //
 // With test-support, the glob below includes GPUI's test macro. Test modules
 // should import their Kit types explicitly to avoid shadowing Rust's #[test].
 pub use ::gpui::*;
 
 #[doc(hidden)]
-pub use crate as gpui;
+pub use ::gpui;
 
 /// UI integration testing: render real components in headless windows, dispatch
 /// pointer and keyboard events, and assert state, focus, layout and callbacks.

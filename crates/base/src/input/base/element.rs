@@ -2553,6 +2553,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             cursor_bounds: None,
             text_align: state.text_align,
             content_width: bounds.size.width,
+            document_revision: state.document_revision,
         };
 
         let run = TextRun {
@@ -3176,7 +3177,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             cx,
         );
 
-        self.state.update(cx, |state, cx| {
+        let composition_moved = self.state.update(cx, |state, cx| {
             let geometry_changed = state.last_bounds != Some(bounds)
                 || state.input_bounds != input_bounds
                 || state.scroll_size != prepaint.scroll_size
@@ -3198,7 +3199,13 @@ impl<M: InputModeKind> Element for TextElement<M> {
             if geometry_changed {
                 cx.notify();
             }
+            geometry_changed && state.ime_marked_range.is_some()
         });
+        // An input method asks where its text is as soon as it marks it, before this
+        // paint laid the text out. Ask it to ask again now the layout shows it.
+        if composition_moved {
+            window.invalidate_character_coordinates();
+        }
 
         if let Some(hitbox) = prepaint.hover_definition_hitbox.as_ref()
             && !window.modifiers().alt

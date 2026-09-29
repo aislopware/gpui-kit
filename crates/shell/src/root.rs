@@ -805,7 +805,7 @@ impl ShellRoot {
 
 impl Render for ShellRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = Theme::global(cx).tokens;
+        let tokens = &Theme::global(cx).tokens;
         let (colors, radius, spacing) = (tokens.colors, tokens.radius, tokens.spacing);
 
         div()

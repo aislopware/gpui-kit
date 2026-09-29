@@ -8,7 +8,7 @@ use gpui::{
     App, Font, IndentAdjustment, LineFragment, Pixels, Point, ShapedLine, Size, TextAlign, Window,
     point, px, size,
 };
-use ropey::Rope;
+use ropey::{LineType, Rope};
 use smallvec::SmallVec;
 use sum_tree::{Bias, Dimensions, SumTree};
 use unicode_segmentation::UnicodeSegmentation as _;
@@ -16,6 +16,7 @@ use unicode_segmentation::UnicodeSegmentation as _;
 use crate::input::{
     Point as TreeSitterPoint, RopeExt,
     layout::{LastLayout, WhitespaceIndicators},
+    rope_ext::{line_lens, without_line_break},
 };
 
 /// Controls how soft-wrapped continuation lines are indented.
@@ -546,47 +547,61 @@ impl TextWrapper {
         let mut new_lines = Vec::with_capacity(new_end_row.saturating_sub(new_start_row) + 1);
         let wrap_width = self.wrap_width;
 
+        let Some(wrap_width) = wrap_width else {
+            // Unwrapped, a line is one row of its length: nothing to read but the line breaks.
+            // Looking each row up instead was most of the time setting a large text took.
+            let row_count = new_end_row - new_start_row + 1;
+            new_lines.extend(
+                line_lens(changed_text, new_start_row, row_count)
+                    .into_iter()
+                    .map(|len| LineItem {
+                        len,
+                        indent: 0,
+                        wrapped_lines: smallvec::smallvec![0..len],
+                    }),
+            );
+            self.splice_lines(start_row, end_row, new_lines);
+            self.text = changed_text.clone();
+            return;
+        };
+
+        let mut line_start = changed_text.line_start_offset(new_start_row);
+        let mut changed_lines = changed_text.lines_at(new_start_row, LineType::LF);
         // line not contains `\n`.
-        for row in new_start_row..=new_end_row {
-            let line = changed_text.slice_line(row);
+        for _ in new_start_row..=new_end_row {
+            let line = changed_lines
+                .next()
+                .map_or_else(|| changed_text.slice(0..0), without_line_break);
             let mut wrapped_lines = SmallVec::<[Range<usize>; 1]>::new();
             let mut prev_boundary_ix = 0;
             let mut indent_chars = 0;
 
-            // If wrap_width is Pixels::MAX, skip wrapping to disable word wrap
-            if let Some(wrap_width) = wrap_width {
-                // Borrowed for lines within a single rope chunk.
-                let line_str: Cow<str> = line.into();
-                match self.wrapping_indent {
-                    WrappingIndent::Same => {
-                        // Here only have wrapped line, if there is no wrap meet, the `line_wraps`
-                        // result will empty.
-                        for boundary in
-                            wrap_line(&line_str, wrap_width, changed_text.line_start_offset(row))
-                        {
-                            wrapped_lines.push(prev_boundary_ix..boundary.ix);
-                            prev_boundary_ix = boundary.ix;
-                            indent_chars = boundary.next_indent;
-                        }
+            // Borrowed for lines within a single rope chunk.
+            let line_str: Cow<str> = line.into();
+            match self.wrapping_indent {
+                WrappingIndent::Same => {
+                    // Here only have wrapped line, if there is no wrap meet, the `line_wraps`
+                    // result will empty.
+                    for boundary in wrap_line(&line_str, wrap_width, line_start) {
+                        wrapped_lines.push(prev_boundary_ix..boundary.ix);
+                        prev_boundary_ix = boundary.ix;
+                        indent_chars = boundary.next_indent;
                     }
-                    WrappingIndent::None => {
-                        // The first visual line keeps the line's leading indentation, so it is
-                        // wrapped as is.
-                        let boundaries =
-                            wrap_line(&line_str, wrap_width, changed_text.line_start_offset(row));
-                        if let Some(first_ix) = boundaries.first().map(|b| b.ix) {
-                            wrapped_lines.push(prev_boundary_ix..first_ix);
-                            prev_boundary_ix = first_ix;
+                }
+                WrappingIndent::None => {
+                    // The first visual line keeps the line's leading indentation, so it is
+                    // wrapped as is.
+                    let boundaries = wrap_line(&line_str, wrap_width, line_start);
+                    if let Some(first_ix) = boundaries.first().map(|b| b.ix) {
+                        wrapped_lines.push(prev_boundary_ix..first_ix);
+                        prev_boundary_ix = first_ix;
 
-                            for boundary in wrap_line(
-                                &line_str[first_ix..],
-                                wrap_width,
-                                changed_text.line_start_offset(row) + first_ix,
-                            ) {
-                                let ix = first_ix + boundary.ix;
-                                wrapped_lines.push(prev_boundary_ix..ix);
-                                prev_boundary_ix = ix;
-                            }
+                        for boundary in
+                            wrap_line(&line_str[first_ix..], wrap_width, line_start + first_ix)
+                        {
+                            let ix = first_ix + boundary.ix;
+                            wrapped_lines.push(prev_boundary_ix..ix);
+                            prev_boundary_ix = ix;
                         }
                     }
                 }
@@ -602,8 +617,16 @@ impl TextWrapper {
                 indent: indent_chars,
                 wrapped_lines,
             });
+            // +1 for the `\n`.
+            line_start += line.len() + 1;
         }
 
+        self.splice_lines(start_row, end_row, new_lines);
+        self.text = changed_text.clone();
+    }
+
+    /// Replace the rows `start_row..=end_row` with `new_lines`.
+    fn splice_lines(&mut self, start_row: usize, end_row: usize, new_lines: Vec<LineItem>) {
         if self.lines.is_empty() {
             self.lines = SumTree::from_iter(new_lines, &());
         } else {
@@ -617,8 +640,6 @@ impl TextWrapper {
             drop(cursor);
             self.lines = new_tree;
         }
-
-        self.text = changed_text.clone();
     }
 
     /// Update the text wrapper and recalculate the wrapped lines.

@@ -30,6 +30,9 @@ pub(super) struct LastLayout {
     pub(super) cursor_bounds: Option<Bounds<Pixels>>,
     pub(super) text_align: TextAlign,
     pub(super) content_width: Pixels,
+    /// The text revision this layout shows. Until the next paint an edit leaves the
+    /// layout describing the text before it.
+    pub(super) document_revision: u64,
 }
 
 impl LastLayout {

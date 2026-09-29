@@ -35,17 +35,30 @@ use super::{
     undo_manager::{EditIntent, UndoManager},
 };
 use crate::actions::{SelectDown, SelectLeft, SelectRight, SelectUp};
-use crate::input::blink_cursor::CURSOR_WIDTH;
 use crate::input::movement::MoveDirection;
-use crate::input::{
-    InputExtras as _, Position, RopeExt as _, element::RIGHT_MARGIN, layout::LastLayout,
-};
+use crate::input::{InputExtras as _, Position, RopeExt as _, layout::LastLayout};
 use crate::{AutoScroll, StepAction};
 
 /// Vertical clearance to retain when revealing a text position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScrollPadding {
     Minimal,
     SurroundingLines,
+}
+
+/// Where the next layout scrolls to. The layout resolves it before it picks the
+/// lines to lay out, so the frame it paints shows the lines at the new scroll.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ScrollRequest {
+    /// This offset, as given.
+    Offset(Point<Pixels>),
+    /// Bring this byte offset into view.
+    Reveal {
+        offset: usize,
+        /// If set, the scroll only moves this way.
+        direction: Option<MoveDirection>,
+        padding: ScrollPadding,
+    },
 }
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
@@ -427,8 +440,8 @@ pub struct InputBaseState<M: InputModeKind> {
     /// The maximum value for [`super::NumberInput`]. See [`Self::max`].
     pub(crate) number_max: Option<f64>,
     pub(crate) scroll_handle: ScrollHandle,
-    /// The deferred scroll offset to apply on next layout.
-    pub(crate) deferred_scroll_offset: Option<Point<Pixels>>,
+    /// Where the next layout scrolls to.
+    pub(crate) scroll_request: Option<ScrollRequest>,
     /// The size of the scrollable content.
     pub(crate) scroll_size: gpui::Size<Pixels>,
     pub(super) editor_scrollbar_snapshot: Cell<Option<EditorScrollbarSnapshot>>,
@@ -792,7 +805,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             longest_line_width: Cell::new(None),
             editor_paddings: Edges::default(),
             line_number_gap: super::element::LINE_NUMBER_RIGHT_MARGIN,
-            deferred_scroll_offset: None,
+            scroll_request: None,
             placeholder: SharedString::default(),
             mask_pattern: MaskPattern::default(),
             mask_pattern_set: false,
@@ -1103,10 +1116,10 @@ impl<M: InputModeKind> InputBaseState<M> {
     fn reset_scroll_to_start(&mut self) {
         // Move scroll to the start. For single-line the caret is at the end, so
         // override the cursor-follow scroll for the next painted frame to keep
-        // the start visible; the deferred offset is consumed during that paint.
+        // the start visible; the request is consumed during that paint.
         self.scroll_handle.set_offset(point(px(0.), px(0.)));
         if self.is_single_line() {
-            self.deferred_scroll_offset = Some(point(px(0.), px(0.)));
+            self.scroll_request = Some(ScrollRequest::Offset(point(px(0.), px(0.))));
         }
     }
 
@@ -2589,6 +2602,8 @@ impl<M: InputModeKind> InputBaseState<M> {
 
     /// Reveal an offset with independently chosen direction restriction and padding.
     /// Search uses surrounding lines without restricting movement to match order.
+    ///
+    /// The next layout resolves it, against the text, size and wrapping it lays out.
     pub(crate) fn scroll_to_with_padding(
         &mut self,
         offset: usize,
@@ -2596,90 +2611,11 @@ impl<M: InputModeKind> InputBaseState<M> {
         padding: ScrollPadding,
         cx: &mut Context<Self>,
     ) {
-        let Some(last_layout) = self.last_layout.as_ref() else {
-            return;
-        };
-        let Some(bounds) = self.last_bounds.as_ref() else {
-            return;
-        };
-
-        let mut scroll_offset = self.scroll_handle.offset();
-        let was_offset = scroll_offset;
-        let line_height = last_layout.line_height;
-
-        let point = self.text.offset_to_point(offset);
-
-        let row = point.row;
-
-        // Resolve the wrapped row even when the target is outside the last layout.
-        let display_pos = self
-            .display_map
-            .buffer_pos_to_display_pos(crate::input::BufferPoint::new(row, point.column));
-        let row_offset_y = line_height * display_pos.row;
-
-        // For Right alignment use 0 margin: the cursor indicator is clamped inside bounds
-        // in layout_cursors, so shifting the text here would cause a first-click visual jump.
-        let safety_margin = match last_layout.text_align {
-            TextAlign::Left => RIGHT_MARGIN,
-            TextAlign::Right => px(0.),
-            TextAlign::Center => CURSOR_WIDTH,
-        };
-        if let Some(vi) = last_layout
-            .visible_buffer_lines
-            .iter()
-            .position(|&line| line == row)
-        {
-            let line = &last_layout.lines[vi];
-            let local_offset = offset.saturating_sub(last_layout.visible_line_byte_offsets[vi]);
-            if let Some(pos) = line.position_for_index(local_offset, last_layout, false) {
-                let bounds_width = bounds.size.width - last_layout.line_number_width;
-                let col_offset_x = pos.x;
-                if col_offset_x - safety_margin < -scroll_offset.x {
-                    // If the position is out of the visible area, scroll to make it visible
-                    scroll_offset.x = -col_offset_x + safety_margin;
-                } else if col_offset_x + safety_margin > -scroll_offset.x + bounds_width {
-                    scroll_offset.x = -(col_offset_x - bounds_width + safety_margin);
-                }
-            }
-        }
-
-        // Scroll the row into view. Use the same edge clearance helper as
-        // `TextElement::layout_cursors` so both scroll-into-view paths agree
-        // (a mismatch flickered on `Down` at end-of-buffer with a small
-        // `cursor_surrounding_lines` override).
-        let edge_height =
-            if matches!(padding, ScrollPadding::SurroundingLines) && self.is_code_editor() {
-                super::element::cursor_surrounding_padding(
-                    self.mode.is_auto_grow(),
-                    self.cursor_surrounding_lines,
-                    super::element::viewport_visible_lines(bounds.size.height, line_height),
-                    line_height,
-                )
-            } else {
-                line_height
-            };
-        if row_offset_y - edge_height + line_height < -scroll_offset.y {
-            // Scroll up
-            scroll_offset.y = -row_offset_y + edge_height - line_height;
-        } else if row_offset_y + edge_height > -scroll_offset.y + bounds.size.height {
-            // Scroll down
-            scroll_offset.y = -(row_offset_y - bounds.size.height + edge_height);
-        }
-
-        // Avoid necessary scroll, when it was already in the correct position.
-        if direction == Some(MoveDirection::Up) {
-            scroll_offset.y = scroll_offset.y.max(was_offset.y);
-        } else if direction == Some(MoveDirection::Down) {
-            scroll_offset.y = scroll_offset.y.min(was_offset.y);
-        }
-
-        // Clamp the deferred target into the same safe range that
-        // `update_scroll_offset` enforces on persist, so paint never shows an
-        // over-scrolled frame before the post-paint clamp pulls it back.
-        let safe_y_min = (-self.scroll_size.height + self.input_bounds.size.height).min(px(0.));
-        scroll_offset.x = scroll_offset.x.min(px(0.));
-        scroll_offset.y = scroll_offset.y.clamp(safe_y_min, px(0.));
-        self.deferred_scroll_offset = Some(scroll_offset);
+        self.scroll_request = Some(ScrollRequest::Reveal {
+            offset,
+            direction,
+            padding,
+        });
         cx.notify();
     }
 
@@ -3056,7 +2992,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     ///
     /// The offset will be clamped to the valid range, and applied after the next layout.
     pub fn set_scroll_offset(&mut self, offset: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
-        self.deferred_scroll_offset = Some(offset);
+        self.scroll_request = Some(ScrollRequest::Offset(offset));
         cx.notify();
     }
 
@@ -6154,7 +6090,236 @@ mod tests {
         });
     }
 
-    /// Regression test: `scroll_to` at end-of-buffer must produce a deferred
+    /// An auto-grow textarea that shrank keeps no vertical offset from its taller
+    /// text: the first frame lays out and paints at the offset clamped to the text
+    /// and height it has now, the same one the retained state keeps.
+    #[gpui::test]
+    fn test_auto_grow_shrink_paints_clamped_vertical_offset(cx: &mut TestAppContext) {
+        let mut input = None;
+        let window = cx.open_window(size(px(720.), px(400.)), |window, cx| {
+            cx.set_global(Theme::default());
+            super::super::init(cx);
+            let state = cx.new(|cx| crate::input::TextareaState::new(window, cx).auto_grow(1, 6));
+            input = Some(state.clone());
+            TestRoot(state)
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let input = input.unwrap();
+        let text = (1..=10)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| state.set_value(text, window, cx));
+            window.draw(cx).clear(cx);
+        });
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                let line_height = state.last_layout.as_ref().expect("laid out").line_height;
+                state.set_value("line 1\nline 2", window, cx);
+                // The offset the ten lines allowed, with no caret move to follow.
+                state
+                    .scroll_handle
+                    .set_offset(point(px(0.), -4. * line_height));
+                state.last_selected_range = Some(*state.active_selection());
+            });
+            window.draw(cx).clear(cx);
+        });
+        input.read_with(&cx, |state, _| {
+            assert_eq!(state.scroll_handle.offset().y, px(0.));
+            let text_bounds = state.text_bounds().expect("painted");
+            assert_eq!(text_bounds.origin.y, state.input_bounds().origin.y);
+            assert_eq!(
+                state.last_layout.as_ref().expect("laid out").visible_range,
+                0..2
+            );
+        });
+    }
+
+    /// Open an editor of `rows` numbered lines in a 720×400 window, set its text
+    /// and caret with `place`, and draw frames one at a time: the first painted
+    /// frame is the one under test.
+    fn far_caret_editor(
+        cx: &mut TestAppContext,
+        drawn_first: bool,
+        place: impl FnOnce(
+            &mut InputBaseState<EditorMode>,
+            &mut Window,
+            &mut Context<InputBaseState<EditorMode>>,
+        ),
+    ) -> (Entity<InputBaseState<EditorMode>>, VisualTestContext) {
+        let mut input = None;
+        let window = cx.open_window(size(px(720.), px(400.)), |window, cx| {
+            cx.set_global(Theme::default());
+            super::super::init(cx);
+            let state = cx.new(|cx| crate::input::EditorState::new(window, cx).language("rust"));
+            input = Some(state.clone());
+            TestRoot(state)
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let input = input.unwrap();
+        if drawn_first {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            input.read_with(&cx, |state, _| assert!(state.last_layout.is_some()));
+        }
+        cx.update(|window, cx| input.update(cx, |state, cx| place(state, window, cx)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        (input, cx)
+    }
+
+    /// The first painted frame after the caret moved to `row` lays out the
+    /// lines its scroll offset shows, and the caret is among them.
+    fn assert_first_frame_shows_row(
+        input: &Entity<InputBaseState<EditorMode>>,
+        cx: &VisualTestContext,
+        row: usize,
+    ) {
+        input.read_with(cx, |state, _| {
+            let layout = state.last_layout.as_ref().expect("laid out");
+            let viewport = state.input_bounds();
+            let scroll_y = state.scroll_handle.offset().y;
+            let first_shown = (-scroll_y / layout.line_height).floor() as usize;
+            let last_shown = ((-scroll_y + viewport.size.height) / layout.line_height) as usize;
+            assert!(
+                layout.visible_range.start <= first_shown && last_shown < layout.visible_range.end,
+                "painted lines {:?} miss the shown rows {first_shown}..={last_shown}",
+                layout.visible_range,
+            );
+            assert!(
+                (first_shown..=last_shown).contains(&row),
+                "caret row {row} not in the shown rows {first_shown}..={last_shown}",
+            );
+            let (caret, _) = state.cursor_layout().expect("caret painted");
+            let top = caret.origin.y - viewport.origin.y + scroll_y;
+            assert!(
+                top >= px(0.) && top + caret.size.height <= viewport.size.height,
+                "caret top {top:?} outside the viewport {viewport:?}",
+            );
+        });
+    }
+
+    fn numbered_lines(rows: usize) -> String {
+        (0..rows)
+            .map(|i| format!("fn line_{i}() -> u32 {{ {i} }}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// A file opened at a line near its end, before the editor ever laid out:
+    /// the caret's scroll is resolved before the lines are picked, so the first
+    /// frame paints the caret's lines, not the old lines at the caret's scroll.
+    #[gpui::test]
+    fn test_far_caret_before_first_layout_paints_in_first_frame(cx: &mut TestAppContext) {
+        let (input, cx) = far_caret_editor(cx, false, |state, window, cx| {
+            state.set_value(numbered_lines(20_000), window, cx);
+            let at = state.text.line_start_offset(19_989);
+            state.set_selected_range(at..at, cx);
+        });
+        assert_first_frame_shows_row(&input, &cx, 19_989);
+    }
+
+    /// The same once the editor has laid out a short text: the reveal must not
+    /// be clamped to the old text's scroll height.
+    #[gpui::test]
+    fn test_far_caret_after_new_text_paints_in_first_frame(cx: &mut TestAppContext) {
+        let (input, cx) = far_caret_editor(cx, true, |state, window, cx| {
+            state.set_value(numbered_lines(20_000), window, cx);
+            let at = state.text.line_start_offset(19_989);
+            state.set_selected_range(at..at, cx);
+        });
+        assert_first_frame_shows_row(&input, &cx, 19_989);
+    }
+
+    /// A far reveal from a horizontal offset the text no longer allows, as after a
+    /// deletion shortened the lines, to a caret that is in view at that offset. The
+    /// first frame lays out the caret's lines, and paints text and caret at the
+    /// offset clamped to the text's width now: the one the retained state keeps.
+    #[gpui::test]
+    fn test_far_reveal_from_stale_horizontal_offset_paints_clamped_in_first_frame(
+        cx: &mut TestAppContext,
+    ) {
+        let (start_row, row) = (19_989, 10_000);
+        let line = "abcdefghij".repeat(8);
+        let (input, mut cx) = far_caret_editor(cx, true, |state, window, cx| {
+            state.set_soft_wrap(false, window, cx);
+            state.set_value(vec![line.as_str(); 20_000].join("\n"), window, cx);
+            let at = state.text.line_start_offset(start_row);
+            state.set_selected_range(at..at, cx);
+        });
+        assert_first_frame_shows_row(&input, &cx, start_row);
+
+        // An offset just past the clamped range, and a column in view at it.
+        let (stale_x, column) = input.read_with(&cx, |state, _| {
+            let layout = state.last_layout.as_ref().expect("laid out");
+            let viewport = state.input_bounds();
+            let clamped = clamp_horizontal_scroll_offset(
+                px(f32::MIN),
+                state.scroll_size.width,
+                viewport.size.width,
+                state.text_align,
+            );
+            assert!(clamped < px(0.), "the lines must overflow the viewport");
+            let stale_x = clamped - px(20.);
+            let vi = layout
+                .visible_buffer_lines
+                .iter()
+                .position(|&shown| shown == start_row)
+                .expect("start row laid out");
+            let text_width = viewport.size.width - layout.line_number_width;
+            let column = (0..line.len())
+                .find(|&column| {
+                    layout.lines[vi]
+                        .position_for_index(column, layout, false)
+                        .is_some_and(|pos| pos.x + stale_x >= text_width / 2.)
+                })
+                .expect("a column in view");
+            (stale_x, column)
+        });
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state
+                    .scroll_handle
+                    .set_offset(point(stale_x, state.scroll_handle.offset().y));
+                let at = state.text.line_start_offset(row) + column;
+                state.set_selected_range(at..at, cx);
+            });
+            window.draw(cx).clear(cx);
+        });
+        assert_first_frame_shows_row(&input, &cx, row);
+        let painted = input.read_with(&cx, |state, _| {
+            let viewport = state.input_bounds();
+            let offset = state.scroll_handle.offset();
+            assert_eq!(
+                offset.x,
+                stale_x + px(20.),
+                "retained offset is not the clamped one"
+            );
+            let text_bounds = state.text_bounds().expect("painted");
+            assert_eq!(
+                text_bounds.origin.x - viewport.origin.x,
+                offset.x,
+                "text painted at a different offset than the retained one",
+            );
+            let (caret, _) = state.cursor_layout().expect("caret painted");
+            assert!(
+                caret.left() >= viewport.left() && caret.right() <= viewport.right(),
+                "caret {caret:?} outside the viewport {viewport:?}",
+            );
+            offset
+        });
+
+        cx.update(|window, cx| {
+            input.update(cx, |_, cx| cx.notify());
+            window.draw(cx).clear(cx);
+        });
+        input.read_with(&cx, |state, _| {
+            assert_eq!(state.scroll_handle.offset(), painted, "paint jittered");
+        });
+    }
+
+    /// Regression test: `scroll_to` at end-of-buffer must resolve to a
     /// scroll target within the safe scroll range, so the painted frame
     /// matches what `update_scroll_offset` persists (no jitter). A small
     /// `cursor_surrounding_lines` override used to mismatch the hardcoded
@@ -6195,28 +6360,31 @@ mod tests {
         });
 
         // Move cursor to end with downward direction — same code path as a
-        // `Down` keystroke at EOB. `scroll_to` runs synchronously inside
-        // `move_to`; inspect `deferred_scroll_offset` in the same closure
-        // before the next paint consumes and clears it.
-        cx.update(|_, cx| {
+        // `Down` keystroke at EOB. The frame that resolves the reveal must
+        // paint the offset that persists: a second frame does not move it.
+        cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 let end = state.text.len();
                 state.move_to(end, Some(MoveDirection::Down), cx);
-
-                let deferred = state
-                    .deferred_scroll_offset
-                    .expect("scroll_to should populate deferred_scroll_offset");
-                let safe_y_min =
-                    (-state.scroll_size.height + state.input_bounds.size.height).min(px(0.));
-
-                assert!(
-                    deferred.y >= safe_y_min,
-                    "deferred_scroll_offset.y = {:?} below safe_y_min = {:?} \
-                     — paint would jitter (Bug C regression)",
-                    deferred.y,
-                    safe_y_min,
-                );
             });
+            window.draw(cx).clear(cx);
+        });
+        let (painted, safe_y_min) = input.read_with(&cx, |state, _| {
+            let safe_y_min =
+                (-state.scroll_size.height + state.input_bounds.size.height).min(px(0.));
+            (state.scroll_handle.offset(), safe_y_min)
+        });
+        assert!(
+            painted.y >= safe_y_min,
+            "painted scroll y = {:?} below safe_y_min = {safe_y_min:?} (Bug C regression)",
+            painted.y,
+        );
+        cx.update(|window, cx| {
+            input.update(cx, |_, cx| cx.notify());
+            window.draw(cx).clear(cx);
+        });
+        input.read_with(&cx, |state, _| {
+            assert_eq!(state.scroll_handle.offset(), painted, "paint jittered");
         });
     }
 
@@ -7339,7 +7507,7 @@ mod tests {
         let value = format!("https://example.com/v1/users?{}", "x=1&".repeat(120));
         let len = value.len();
 
-        // Right after `set_value`, before the next paint consumes the deferred
+        // Right after `set_value`, before the next paint consumes the scroll request
         // offset: caret is at the end, and the view is forced back to the start.
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
@@ -7351,8 +7519,8 @@ mod tests {
                     "single-line caret should be at the end after set_value"
                 );
                 assert_eq!(
-                    state.deferred_scroll_offset,
-                    Some(point(px(0.), px(0.))),
+                    state.scroll_request,
+                    Some(ScrollRequest::Offset(point(px(0.), px(0.)))),
                     "the view should be forced back to the start"
                 );
             });
@@ -7390,7 +7558,7 @@ mod tests {
         let len = value.len();
 
         // Right after `replace_all`, before the next paint consumes the
-        // deferred offset: caret is at the end, and the view is forced back
+        // scroll request: caret is at the end, and the view is forced back
         // to the start.
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
@@ -7408,9 +7576,9 @@ mod tests {
                     "the scroll offset should be reset to the start"
                 );
                 assert_eq!(
-                    state.deferred_scroll_offset,
-                    Some(point(px(0.), px(0.))),
-                    "single-line should set a deferred scroll offset to keep the start visible"
+                    state.scroll_request,
+                    Some(ScrollRequest::Offset(point(px(0.), px(0.)))),
+                    "single-line should request a scroll to keep the start visible"
                 );
             });
         });
@@ -7464,7 +7632,7 @@ mod tests {
 
     /// `replace_all` on a multi-line (non-code-editor) input clears the
     /// selection to `0..0` and resets the scroll offset, but does not set a
-    /// deferred scroll offset (single-line only).
+    /// scroll request (single-line only).
     #[gpui::test]
     fn test_replace_all_multi_line(cx: &mut TestAppContext) {
         let input_view = InputView::build_textarea(cx, |state| state);
@@ -7487,8 +7655,8 @@ mod tests {
                     "the scroll offset should be reset to the start"
                 );
                 assert!(
-                    state.deferred_scroll_offset.is_none(),
-                    "multi-line should not set a deferred scroll offset"
+                    state.scroll_request.is_none(),
+                    "multi-line should not request a scroll"
                 );
             });
         });

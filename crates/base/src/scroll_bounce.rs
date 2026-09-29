@@ -89,7 +89,10 @@ impl ScrollBounceMotion {
 /// document. Put fixed chrome (scrollbars, toolbars) outside this wrapper.
 ///
 /// Enabled by default on iOS and Android. Other platforms pass through unless
-/// explicitly enabled; their input must emit `Ended` at finger release, before momentum.
+/// explicitly enabled; their input must emit `Ended` at finger release, and mark
+/// the momentum after it with [`ScrollWheelEvent::momentum_phase`]. Precise
+/// deltas with no phase at all come from a wheel, which scrolls the child
+/// without rubber-banding.
 /// Reduced motion disables displacement. Keyboard, focus, and line-wheel input
 /// remain owned by the child. No colors, padding, or dimensions are imposed.
 pub struct ScrollBounce {
@@ -144,34 +147,16 @@ struct State {
     sampled_at: Option<Instant>,
     ongoing_scroll: OngoingScroll,
     short_drag_distance: Option<f32>,
-    last_wheel_at: Option<Instant>,
-    /// Sign of the stream being suppressed, when it is known to be momentum
-    /// that cannot reverse. `None` suppresses both directions.
-    suppressed_direction: Option<f32>,
-}
-
-impl State {
-    /// Release the edge. A stretch made outside a gesture is momentum (or a
-    /// phaseless wheel) hitting the edge; that stream only pushes outward,
-    /// so an inward packet is a new scroll and ends the suppression. After a
-    /// gesture's own release the suppressed momentum may point either way.
-    fn release(&mut self, from_rest: bool) {
-        self.physics.release();
-        self.suppressed_direction =
-            (from_rest && self.physics.suppress_momentum).then(|| self.physics.offset().signum());
-    }
+    /// Between a gesture's `Started` and its `Ended`: a finger drives the
+    /// packets that carry no momentum phase. Outside a gesture such packets
+    /// come from a wheel.
+    touching: bool,
 }
 
 // GPUI starts a normal touch pan only after its 8 px touch slop, but a touch
 // catching a fling starts at zero displacement. A short catch should stop the
 // old fling rather than turn a few fast pixels into a new one.
 const CATCH_DRAG_SLOP: f32 = 8.;
-
-// Momentum arrives once per frame until it stops, so a longer silence means
-// the suppressed stream has ended. Smooth-scrolling mouse drivers on macOS
-// send precise deltas with no phase: they never send the `Started` that
-// otherwise ends suppression, and would stay locked after one bounce.
-const MOMENTUM_GAP: Duration = Duration::from_millis(250);
 
 /// `ScrollbarHandle` has no `max_offset`; recover it from the definition
 /// `content_size = viewport + max_offset`. Both dispatch phases clamp against
@@ -273,6 +258,7 @@ impl Element for ScrollBounce {
             let on_scroll = self.on_scroll.clone();
             let mut before = 0.;
             let mut allow_end_bounce = false;
+            let mut wheel = false;
             window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                 let ScrollDelta::Pixels(mut delta) = event.delta else {
                     return;
@@ -281,6 +267,25 @@ impl Element for ScrollBounce {
                     return;
                 }
                 let mut state = state.borrow_mut();
+                let momentum = event.momentum_phase;
+                // A finger's own release; momentum reports its end in `momentum`.
+                let ended = momentum.is_none()
+                    && matches!(event.touch_phase, TouchPhase::Ended | TouchPhase::Cancelled);
+                if phase == DispatchPhase::Capture {
+                    if momentum.is_none() && event.touch_phase == TouchPhase::Started {
+                        state.touching = true;
+                    }
+                    // Precise deltas with no phase at all come from a wheel, as
+                    // smooth-scrolling mouse drivers send them. A wheel does not
+                    // rubber-band, and never stretches an edge it could lock.
+                    wheel = momentum.is_none() && !state.touching;
+                    if ended {
+                        state.touching = false;
+                    }
+                }
+                if wheel {
+                    return;
+                }
                 // Lock the gesture to the axis it started on, so a diagonal
                 // swipe cannot wobble out of the stretch from one packet to
                 // the next. Both dispatch phases see the same packet, and the
@@ -291,7 +296,6 @@ impl Element for ScrollBounce {
                 if delta.x.abs() > delta.y.abs() {
                     return;
                 }
-                let ended = matches!(event.touch_phase, TouchPhase::Ended | TouchPhase::Cancelled);
                 let mut scrolled = false;
                 let mut changed = false;
                 if phase == DispatchPhase::Capture {
@@ -314,25 +318,22 @@ impl Element for ScrollBounce {
                     // The current Ended packet may still cross an edge; only
                     // momentum packets after it should be suppressed.
                     allow_end_bounce = suppress_short_drag_momentum;
-                    let now = cx.background_executor().now();
-                    let paused = state
-                        .last_wheel_at
-                        .replace(now)
-                        .is_some_and(|at| now.saturating_duration_since(at) >= MOMENTUM_GAP);
-                    let reversed = state.suppressed_direction.is_some_and(|direction| {
-                        delta.y != px(0.) && delta.y.as_f32().signum() != direction
-                    });
-                    if paused || reversed {
-                        state.physics.suppress_momentum = false;
-                    }
-                    if state.physics.suppress_momentum {
+                    // The momentum of a gesture whose release left the edge
+                    // stretched, or that caught a fling, is not the list's to
+                    // follow. Its stream ends at its own `Ended`.
+                    if state.physics.suppress_momentum
+                        && let Some(momentum) = momentum
+                    {
+                        if matches!(momentum, TouchPhase::Ended | TouchPhase::Cancelled) {
+                            state.physics.suppress_momentum = false;
+                        }
                         cx.stop_propagation();
                         return;
                     }
                     if state.physics.offset() != 0. {
-                        // Outside a gesture (a phaseless wheel once suppression
-                        // lifts) a packet grabs the returning edge and lets it
-                        // go again, as it would at rest.
+                        // Outside a gesture (momentum reaching a returning edge)
+                        // a packet grabs the edge and lets it go again, as it
+                        // would at rest.
                         let from_rest = !state.physics.dragging;
                         if from_rest {
                             state.physics.begin(bounds.size.height.as_f32());
@@ -346,7 +347,7 @@ impl Element for ScrollBounce {
                             scrolled = true;
                         }
                         if ended || from_rest {
-                            state.release(from_rest);
+                            state.physics.release();
                         }
                         changed = true;
                         cx.stop_propagation();
@@ -355,7 +356,6 @@ impl Element for ScrollBounce {
                     }
                     if suppress_short_drag_momentum {
                         state.physics.suppress_momentum = true;
-                        state.suppressed_direction = None;
                     }
                 } else {
                     // Div applies deltas immediately but clamps during its next
@@ -388,7 +388,7 @@ impl Element for ScrollBounce {
                         }
                         state.physics.pull(residual);
                         if !dragging || ended {
-                            state.release(!dragging);
+                            state.physics.release();
                         }
                         changed = true;
                     }
@@ -537,6 +537,22 @@ mod tests {
             touch_phase: phase,
             ..Default::default()
         });
+    }
+
+    /// A step of the momentum after a swipe, as AppKit reports it.
+    fn fling(cx: &mut VisualTestContext, delta: f32, momentum: TouchPhase) {
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(100.), px(100.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(delta))),
+            touch_phase: TouchPhase::Moved,
+            momentum_phase: Some(momentum),
+            ..Default::default()
+        });
+    }
+
+    /// A smooth-scrolling mouse: precise deltas, no phase of either kind.
+    fn wheel(cx: &mut VisualTestContext, delta: f32) {
+        scroll(cx, delta, TouchPhase::Moved);
     }
 
     struct ListTest(gpui::ListState);
@@ -699,10 +715,9 @@ mod tests {
         scroll(cx, 0., TouchPhase::Ended);
         draw(cx);
         let released = handle.bounds().origin.y;
-        // The iOS backend emits Moved packets for momentum after finger-up.
-        // Even a large inward packet must not move the logical list while
-        // the returning edge owns this gesture.
-        scroll(cx, -400., TouchPhase::Moved);
+        // Even a large inward momentum packet must not move the logical list
+        // while the returning edge owns this gesture.
+        fling(cx, -400., TouchPhase::Started);
         draw(cx);
         assert_eq!(handle.offset().y, px(0.));
         assert!(handle.bounds().origin.y <= released);
@@ -714,8 +729,10 @@ mod tests {
         assert_eq!(handle.bounds().origin.y, origin);
     }
 
+    /// Smooth-scrolling mouse drivers send precise deltas with no phase. A wheel
+    /// does not rubber-band: at an edge it stops, and it scrolls back at once.
     #[gpui::test]
-    fn phaseless_wheel_scrolls_back_right_after_bouncing(cx: &mut TestAppContext) {
+    fn a_phaseless_wheel_never_stretches_or_locks_the_edge(cx: &mut TestAppContext) {
         let handle = gpui::ListState::new(30, gpui::ListAlignment::Top, px(0.)).measure_all();
         let (_, cx) = cx.add_window_view({
             let handle = handle.clone();
@@ -725,18 +742,23 @@ mod tests {
         handle.set_offset(point(px(0.), px(-1000.)));
         draw(cx);
         let origin = handle.viewport_bounds().origin.y;
-        // Smooth-scrolling mouse drivers on macOS: precise deltas, no phase.
-        scroll(cx, -50., TouchPhase::Moved);
+        for _ in 0..3 {
+            wheel(cx, -50.);
+            draw(cx);
+            assert_eq!(handle.viewport_bounds().origin.y, origin);
+            assert_eq!(handle.offset().y, px(-1000.));
+        }
+        wheel(cx, 200.);
         draw(cx);
-        assert!(handle.viewport_bounds().origin.y < origin);
-        scroll(cx, 200., TouchPhase::Moved);
-        draw(cx);
-        assert!(handle.offset().y > px(-1000.));
+        assert_eq!(handle.offset().y, px(-800.));
         assert_eq!(handle.viewport_bounds().origin.y, origin);
     }
 
+    /// Momentum that reaches an edge stretches it once. The rest of the stream
+    /// is swallowed, whichever way it points, up to the stream's own `Ended`;
+    /// nothing waits on a pause.
     #[gpui::test]
-    fn phaseless_wheel_bounces_again_only_after_a_pause(cx: &mut TestAppContext) {
+    fn momentum_bounces_once_and_stops_at_its_end(cx: &mut TestAppContext) {
         let handle = ScrollHandle::new();
         let (_, cx) = cx.add_window_view({
             let handle = handle.clone();
@@ -746,19 +768,65 @@ mod tests {
             }
         });
         draw(cx);
-        scroll(cx, 50., TouchPhase::Moved);
+        handle.set_offset(point(px(0.), px(-30.)));
         draw(cx);
-        let bounced = handle.bounds().origin.y;
-        // Momentum after an edge hit keeps pushing outward; it must not
-        // stretch further.
-        scroll(cx, 50., TouchPhase::Moved);
+        let origin = handle.bounds().origin.y;
+        scroll(cx, 10., TouchPhase::Started);
+        scroll(cx, 0., TouchPhase::Ended);
         draw(cx);
-        assert!(handle.bounds().origin.y <= bounced);
-        cx.executor().advance_clock(MOMENTUM_GAP);
-        scroll(cx, 50., TouchPhase::Moved);
+        assert_eq!(handle.offset().y, px(-20.));
+        fling(cx, 50., TouchPhase::Started);
         draw(cx);
-        assert!(handle.bounds().origin.y > bounced);
         assert_eq!(handle.offset().y, px(0.));
+        let bounced = handle.bounds().origin.y;
+        assert!(bounced > origin);
+        for delta in [50., -80.] {
+            fling(cx, delta, TouchPhase::Moved);
+            draw(cx);
+            assert_eq!(handle.offset().y, px(0.), "momentum moved the list");
+            assert!(
+                handle.bounds().origin.y <= bounced,
+                "momentum stretched again"
+            );
+        }
+        fling(cx, -80., TouchPhase::Ended);
+        draw(cx);
+        assert_eq!(handle.offset().y, px(0.));
+        // The stream is over: a wheel right after it scrolls at once.
+        wheel(cx, -40.);
+        draw(cx);
+        assert_eq!(handle.offset().y, px(-40.));
+    }
+
+    /// A touch fling (the gesture recognizer's momentum) ends with a packet whose
+    /// touch phase is `Ended` too. That is the end of the momentum, not a finger
+    /// release, and it ends the suppression like AppKit's does.
+    #[gpui::test]
+    fn a_touch_fling_ends_its_suppression_at_its_last_step(cx: &mut TestAppContext) {
+        let handle = ScrollHandle::new();
+        let (_, cx) = cx.add_window_view({
+            let handle = handle.clone();
+            move |_, _| ScrollTest {
+                handle,
+                enabled: true,
+            }
+        });
+        draw(cx);
+        scroll(cx, 100., TouchPhase::Started);
+        scroll(cx, 0., TouchPhase::Ended);
+        draw(cx);
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(100.), px(100.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-300.))),
+            touch_phase: TouchPhase::Ended,
+            momentum_phase: Some(TouchPhase::Ended),
+            ..Default::default()
+        });
+        draw(cx);
+        assert_eq!(handle.offset().y, px(0.));
+        wheel(cx, -40.);
+        draw(cx);
+        assert_eq!(handle.offset().y, px(-40.));
     }
 
     #[gpui::test]
@@ -780,7 +848,7 @@ mod tests {
         scroll(cx, -60., TouchPhase::Started);
         scroll(cx, 0., TouchPhase::Ended);
         draw(cx);
-        scroll(cx, -100., TouchPhase::Moved);
+        fling(cx, -100., TouchPhase::Started);
         draw(cx);
         scroll(cx, 0., TouchPhase::Ended);
         draw(cx);
@@ -795,14 +863,14 @@ mod tests {
 
         // The recognizer can synthesize a large reverse momentum packet from
         // that 8 px movement. It must not move the logical viewport.
-        scroll(cx, 100., TouchPhase::Moved);
+        fling(cx, 100., TouchPhase::Started);
         draw(cx);
         assert_eq!(handle.offset().y, stopped);
 
         // A fresh gesture restores ordinary scrolling and momentum.
         scroll(cx, -20., TouchPhase::Started);
         scroll(cx, 0., TouchPhase::Ended);
-        scroll(cx, -10., TouchPhase::Moved);
+        fling(cx, -10., TouchPhase::Started);
         draw(cx);
         assert_eq!(handle.offset().y, stopped - px(30.));
     }
@@ -826,7 +894,7 @@ mod tests {
         scroll(cx, 0., TouchPhase::Ended);
         draw(cx);
         assert_eq!(handle.offset().y, px(-176.));
-        scroll(cx, 40., TouchPhase::Moved);
+        fling(cx, 40., TouchPhase::Started);
         draw(cx);
         assert_eq!(handle.offset().y, px(-136.));
     }

@@ -75,14 +75,16 @@ export default class App extends View {
     let mut context = VisualTestContext::from_window(*window.deref(), cx);
     let view = mounted.borrow().clone().unwrap();
 
-    delegate_collections::test_probe::take_rows();
+    // The probe records every render. GPUI renders the view when something it
+    // read changed (at mount, and in the frame a refresh asks for); a draw with
+    // nothing changed renders nothing. So each check reads what the probe
+    // gathered since the last one, never clearing it just before the draw.
     context.update(|window, cx| window.draw(cx).clear(cx));
     let initial = delegate_collections::test_probe::take_rows();
     assert!(!initial.is_empty());
     assert!(initial.iter().all(|id| id == "alpha"), "{initial:?}");
     context.update(|_, cx| view.update(cx, |view, cx| view.refresh(cx)));
     context.run_until_parked();
-    delegate_collections::test_probe::take_rows();
     context.update(|window, cx| window.draw(cx).clear(cx));
     let refreshed = delegate_collections::test_probe::take_rows();
     assert!(!refreshed.is_empty());

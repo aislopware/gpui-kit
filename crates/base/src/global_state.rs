@@ -53,6 +53,12 @@ impl TextViewStateStack {
         cx.try_global::<Self>()?.text_views.borrow().last().cloned()
     }
 
+    /// Reads the innermost text view being drawn, without taking a handle to it.
+    pub(crate) fn read_current<R>(cx: &App, read: impl FnOnce(&TextViewState) -> R) -> Option<R> {
+        let stack = cx.try_global::<Self>()?.text_views.borrow();
+        Some(read(stack.last()?.read(cx)))
+    }
+
     pub(crate) fn push(state: Entity<TextViewState>, cx: &App) {
         cx.global::<Self>().text_views.borrow_mut().push(state);
     }

@@ -131,6 +131,17 @@ impl Styled for GroupBox {
     }
 }
 
+impl GroupBox {
+    /// Use the outline variant.
+    ///
+    /// The same as the variants trait's `outline`, kept on the type itself: GPUI's
+    /// `Styled` has an `outline` of its own, and a trait method of the same name
+    /// would be ambiguous wherever both traits are in scope.
+    pub fn outline(self) -> Self {
+        self.with_variant(GroupBoxVariant::Outline)
+    }
+}
+
 impl GroupBoxVariants for GroupBox {
     fn with_variant(mut self, variant: GroupBoxVariant) -> Self {
         self.variant = variant;
@@ -212,5 +223,17 @@ mod test {
         assert_eq!(GroupBoxVariant::Normal.as_str(), "normal");
         assert_eq!(GroupBoxVariant::Fill.as_str(), "fill");
         assert_eq!(GroupBoxVariant::Outline.as_str(), "outline");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Styled` (in scope here) has an `outline` too; the variant builder must
+    /// still be the one a bare `.outline()` reaches.
+    #[test]
+    fn outline_picks_the_variant_with_styled_in_scope() {
+        assert_eq!(GroupBox::new().outline().variant, GroupBoxVariant::Outline);
     }
 }

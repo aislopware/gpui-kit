@@ -6,7 +6,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
     collapsible::Collapsible,
-    group_box::{GroupBox, GroupBoxVariants as _},
+    group_box::GroupBox,
     h_flex,
     progress::Progress,
     tag::Tag,

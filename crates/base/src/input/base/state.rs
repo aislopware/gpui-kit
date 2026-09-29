@@ -1977,13 +1977,6 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     pub(super) fn enter(&mut self, action: &Enter, window: &mut Window, cx: &mut Context<Self>) {
-        // The same Enter press can confirm an IME candidate. It must not also
-        // insert a newline, pick a menu item or emit PressEnter for the host to
-        // read as send.
-        if self.is_composing() {
-            return;
-        }
-
         if M::handle_context_menu_action(self, Box::new(action.clone()), window, cx) {
             return;
         }
@@ -4388,6 +4381,35 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
     }
 }
 
+impl<M: InputModeKind> InputBaseState<M> {
+    /// The listener for a key action. While an input method composes, the key is
+    /// the composition's: the action stands aside, and stops there, rather than
+    /// edit or move over the marked text.
+    pub(super) fn key_action<A: gpui::Action>(
+        entity: &Entity<Self>,
+        f: impl Fn(&mut Self, &A, &mut Window, &mut Context<Self>) + 'static,
+    ) -> impl Fn(&A, &mut Window, &mut App) + 'static {
+        let entity = entity.downgrade();
+        move |action, window, cx| {
+            entity
+                .update(cx, |state, cx| {
+                    if !state.is_composing() {
+                        f(state, action, window, cx);
+                    }
+                })
+                .ok();
+        }
+    }
+
+    /// The listener, registered only while composing, that keeps a key this input
+    /// otherwise leaves to its ancestors.
+    fn composing_key<A: gpui::Action>(
+        entity: &Entity<Self>,
+    ) -> impl Fn(&A, &mut Window, &mut App) + 'static {
+        Self::key_action(entity, |_, _: &A, _, cx| cx.propagate())
+    }
+}
+
 impl<M: InputModeKind> Focusable for InputBaseState<M> {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -4425,59 +4447,107 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .when(self.is_editable(), |this| {
-                this.on_action(window.listener_for(&entity, InputBaseState::backspace))
-                    .on_action(window.listener_for(&entity, InputBaseState::delete))
-                    .on_action(
-                        window.listener_for(&entity, InputBaseState::delete_to_beginning_of_line),
-                    )
-                    .on_action(window.listener_for(&entity, InputBaseState::delete_to_end_of_line))
-                    .on_action(window.listener_for(&entity, InputBaseState::delete_previous_word))
-                    .on_action(window.listener_for(&entity, InputBaseState::delete_next_word))
-                    .on_action(window.listener_for(&entity, InputBaseState::enter))
-                    .on_action(window.listener_for(&entity, InputBaseState::escape))
-                    .on_action(window.listener_for(&entity, InputBaseState::paste))
-                    .on_action(window.listener_for(&entity, InputBaseState::cut))
-                    .on_action(window.listener_for(&entity, InputBaseState::undo))
-                    .on_action(window.listener_for(&entity, InputBaseState::redo))
+                this.on_action(Self::key_action(&entity, InputBaseState::backspace))
+                    .on_action(Self::key_action(&entity, InputBaseState::delete))
+                    .on_action(Self::key_action(
+                        &entity,
+                        InputBaseState::delete_to_beginning_of_line,
+                    ))
+                    .on_action(Self::key_action(
+                        &entity,
+                        InputBaseState::delete_to_end_of_line,
+                    ))
+                    .on_action(Self::key_action(
+                        &entity,
+                        InputBaseState::delete_previous_word,
+                    ))
+                    .on_action(Self::key_action(&entity, InputBaseState::delete_next_word))
+                    .on_action(Self::key_action(&entity, InputBaseState::enter))
+                    .on_action(Self::key_action(&entity, InputBaseState::escape))
+                    .on_action(Self::key_action(&entity, InputBaseState::paste))
+                    .on_action(Self::key_action(&entity, InputBaseState::cut))
+                    .on_action(Self::key_action(&entity, InputBaseState::undo))
+                    .on_action(Self::key_action(&entity, InputBaseState::redo))
                     .when(self.is_multi_line(), |this| {
-                        this.on_action(window.listener_for(&entity, InputBaseState::indent_inline))
-                            .on_action(window.listener_for(&entity, InputBaseState::outdent_inline))
-                            .on_action(window.listener_for(&entity, InputBaseState::indent_block))
-                            .on_action(window.listener_for(&entity, InputBaseState::outdent_block))
+                        this.on_action(Self::key_action(&entity, InputBaseState::indent_inline))
+                            .on_action(Self::key_action(&entity, InputBaseState::outdent_inline))
+                            .on_action(Self::key_action(&entity, InputBaseState::indent_block))
+                            .on_action(Self::key_action(&entity, InputBaseState::outdent_block))
                     })
             })
-            .on_action(window.listener_for(&entity, InputBaseState::left))
-            .on_action(window.listener_for(&entity, InputBaseState::right))
-            .on_action(window.listener_for(&entity, InputBaseState::select_left))
-            .on_action(window.listener_for(&entity, InputBaseState::select_right))
-            .when(self.is_multi_line(), |this| {
-                this.on_action(window.listener_for(&entity, InputBaseState::up))
-                    .on_action(window.listener_for(&entity, InputBaseState::down))
-                    .on_action(window.listener_for(&entity, InputBaseState::select_up))
-                    .on_action(window.listener_for(&entity, InputBaseState::select_down))
-                    .on_action(window.listener_for(&entity, InputBaseState::page_up))
-                    .on_action(window.listener_for(&entity, InputBaseState::page_down))
-                    .on_action(window.listener_for(&entity, InputBaseState::add_cursor_above))
-                    .on_action(window.listener_for(&entity, InputBaseState::add_cursor_below))
+            .on_action(Self::key_action(&entity, InputBaseState::left))
+            .on_action(Self::key_action(&entity, InputBaseState::right))
+            .on_action(Self::key_action(&entity, InputBaseState::select_left))
+            .on_action(Self::key_action(&entity, InputBaseState::select_right))
+            .when(self.is_composing() && !self.is_multi_line(), |this| {
+                // A single line leaves these keys to what holds it (Tab to move focus,
+                // arrows to a list). While an input method composes they are the
+                // composition's, so the field keeps them.
+                this.on_action(Self::composing_key::<IndentInline>(&entity))
+                    .on_action(Self::composing_key::<OutdentInline>(&entity))
+                    .on_action(Self::composing_key::<Indent>(&entity))
+                    .on_action(Self::composing_key::<Outdent>(&entity))
+                    .on_action(Self::composing_key::<MoveUp>(&entity))
+                    .on_action(Self::composing_key::<MoveDown>(&entity))
+                    .on_action(Self::composing_key::<SelectUp>(&entity))
+                    .on_action(Self::composing_key::<SelectDown>(&entity))
+                    .on_action(Self::composing_key::<MovePageUp>(&entity))
+                    .on_action(Self::composing_key::<MovePageDown>(&entity))
+                    .on_action(Self::composing_key::<AddCursorAbove>(&entity))
+                    .on_action(Self::composing_key::<AddCursorBelow>(&entity))
             })
-            .on_action(window.listener_for(&entity, InputBaseState::on_action_select_all))
-            .on_action(window.listener_for(&entity, InputBaseState::select_to_start_of_line))
-            .on_action(window.listener_for(&entity, InputBaseState::select_to_end_of_line))
-            .on_action(window.listener_for(&entity, InputBaseState::select_to_previous_word))
-            .on_action(window.listener_for(&entity, InputBaseState::select_to_next_word))
-            .on_action(window.listener_for(&entity, InputBaseState::home))
-            .on_action(window.listener_for(&entity, InputBaseState::end))
-            .on_action(window.listener_for(&entity, InputBaseState::move_to_start))
-            .on_action(window.listener_for(&entity, InputBaseState::move_to_end))
-            .on_action(window.listener_for(&entity, InputBaseState::move_to_previous_word))
-            .on_action(window.listener_for(&entity, InputBaseState::move_to_next_word))
-            .on_action(window.listener_for(&entity, InputBaseState::select_to_start))
-            .on_action(window.listener_for(&entity, InputBaseState::select_to_end))
-            .on_action(window.listener_for(&entity, InputBaseState::show_character_palette))
+            .when(self.is_multi_line(), |this| {
+                this.on_action(Self::key_action(&entity, InputBaseState::up))
+                    .on_action(Self::key_action(&entity, InputBaseState::down))
+                    .on_action(Self::key_action(&entity, InputBaseState::select_up))
+                    .on_action(Self::key_action(&entity, InputBaseState::select_down))
+                    .on_action(Self::key_action(&entity, InputBaseState::page_up))
+                    .on_action(Self::key_action(&entity, InputBaseState::page_down))
+                    .on_action(Self::key_action(&entity, InputBaseState::add_cursor_above))
+                    .on_action(Self::key_action(&entity, InputBaseState::add_cursor_below))
+            })
+            .on_action(Self::key_action(
+                &entity,
+                InputBaseState::on_action_select_all,
+            ))
+            .on_action(Self::key_action(
+                &entity,
+                InputBaseState::select_to_start_of_line,
+            ))
+            .on_action(Self::key_action(
+                &entity,
+                InputBaseState::select_to_end_of_line,
+            ))
+            .on_action(Self::key_action(
+                &entity,
+                InputBaseState::select_to_previous_word,
+            ))
+            .on_action(Self::key_action(
+                &entity,
+                InputBaseState::select_to_next_word,
+            ))
+            .on_action(Self::key_action(&entity, InputBaseState::home))
+            .on_action(Self::key_action(&entity, InputBaseState::end))
+            .on_action(Self::key_action(&entity, InputBaseState::move_to_start))
+            .on_action(Self::key_action(&entity, InputBaseState::move_to_end))
+            .on_action(Self::key_action(
+                &entity,
+                InputBaseState::move_to_previous_word,
+            ))
+            .on_action(Self::key_action(&entity, InputBaseState::move_to_next_word))
+            .on_action(Self::key_action(&entity, InputBaseState::select_to_start))
+            .on_action(Self::key_action(&entity, InputBaseState::select_to_end))
+            .on_action(Self::key_action(
+                &entity,
+                InputBaseState::show_character_palette,
+            ))
             .on_action({
                 let entity = entity.clone();
                 move |_: &ActivateToken, window, cx| {
                     let state = entity.read(cx);
+                    if state.is_composing() {
+                        return;
+                    }
                     let activation = state
                         .token_spans()
                         .iter()
@@ -4499,9 +4569,9 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
                     }
                 }
             })
-            .on_action(window.listener_for(&entity, InputBaseState::copy))
-            .on_action(window.listener_for(&entity, InputBaseState::on_action_search))
-            .on_action(window.listener_for(&entity, InputBaseState::on_action_replace))
+            .on_action(Self::key_action(&entity, InputBaseState::copy))
+            .on_action(Self::key_action(&entity, InputBaseState::on_action_search))
+            .on_action(Self::key_action(&entity, InputBaseState::on_action_replace))
             .on_mouse_down(
                 MouseButton::Left,
                 window.listener_for(&entity, InputBaseState::on_mouse_down),
@@ -7718,36 +7788,206 @@ mod tests {
         });
     }
 
-    /// Confirming an active IME candidate must not insert a newline.
+    /// Every key an input binds, pressed while an input method composes. Each one
+    /// belongs to the composition (Enter confirms a candidate, Tab or an arrow
+    /// picks one, Escape cancels), so none may edit, move or select over the
+    /// marked text.
+    const KEYS_WHILE_COMPOSING: &[&str] = &[
+        "tab",
+        "shift-tab",
+        "enter",
+        "shift-enter",
+        "secondary-enter",
+        "escape",
+        "backspace",
+        "delete",
+        "left",
+        "right",
+        "up",
+        "down",
+        "home",
+        "end",
+        "pageup",
+        "pagedown",
+        "shift-left",
+        "shift-right",
+        "shift-up",
+        "shift-down",
+        "shift-home",
+        "shift-end",
+        "secondary-a",
+        "secondary-x",
+        "secondary-v",
+        "secondary-z",
+        "secondary-shift-z",
+        "secondary-]",
+        "secondary-[",
+        "secondary-backspace",
+        "alt-backspace",
+        "alt-delete",
+    ];
+
+    /// Open `make`'s input focused, holding "ab\ncd" with "ni" marked after "ab".
+    fn composing_input<M: InputModeKind>(
+        cx: &mut TestAppContext,
+        make: impl FnOnce(&mut Window, &mut Context<InputBaseState<M>>) -> InputBaseState<M> + 'static,
+    ) -> (Entity<InputBaseState<M>>, VisualTestContext) {
+        let view = InputView::build_with(cx, make);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+        cx.write_to_clipboard(ClipboardItem::new_string("pasted".to_string()));
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value(
+                    if state.is_multi_line() {
+                        "ab\ncd"
+                    } else {
+                        "abcd"
+                    },
+                    window,
+                    cx,
+                );
+                state.set_selected_range(2..2, cx);
+                state.focus(window, cx);
+                state.replace_and_mark_text_in_range(None, "ni", Some(2..2), window, cx);
+                assert!(state.is_composing());
+            });
+        });
+        cx.run_until_parked();
+        (input, cx)
+    }
+
+    fn assert_keys_leave_the_composition<M: InputModeKind>(
+        input: &Entity<InputBaseState<M>>,
+        cx: &mut VisualTestContext,
+    ) {
+        let before = input.read_with(cx, |state, _| {
+            (
+                state.value(),
+                state.ime_marked_range,
+                state.selected_range(),
+            )
+        });
+        for key in KEYS_WHILE_COMPOSING {
+            cx.simulate_keystrokes(key);
+            let after = input.read_with(cx, |state, _| {
+                (
+                    state.value(),
+                    state.ime_marked_range,
+                    state.selected_range(),
+                )
+            });
+            assert_eq!(after, before, "{key} acted on the composition");
+        }
+    }
+
     #[gpui::test]
-    fn test_enter_confirms_composition_without_inserting_newline(cx: &mut TestAppContext) {
-        let input_view = InputView::build_textarea(cx, |state| state.default_value(""));
-        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
-        let input = input_view.input;
+    fn test_keys_stand_aside_while_the_editor_composes(cx: &mut TestAppContext) {
+        let (input, mut cx) = composing_input(cx, |window, cx| {
+            crate::input::EditorState::new(window, cx).language("rust")
+        });
+        assert_keys_leave_the_composition(&input, &mut cx);
+    }
+
+    #[gpui::test]
+    fn test_keys_stand_aside_while_a_textarea_composes(cx: &mut TestAppContext) {
+        let (input, mut cx) = composing_input(cx, |window, cx| {
+            crate::input::TextareaState::new(window, cx)
+        });
+        assert_keys_leave_the_composition(&input, &mut cx);
+    }
+
+    #[gpui::test]
+    fn test_keys_stand_aside_while_an_input_composes(cx: &mut TestAppContext) {
+        let (input, mut cx) =
+            composing_input(cx, |window, cx| crate::input::InputState::new(window, cx));
+        assert_keys_leave_the_composition(&input, &mut cx);
+    }
+
+    /// Once the composition is committed, the keys act again: Enter breaks the
+    /// line after the committed word and Tab indents.
+    #[gpui::test]
+    fn test_keys_act_again_after_the_composition_commits(cx: &mut TestAppContext) {
+        let (input, mut cx) = composing_input(cx, |window, cx| {
+            crate::input::EditorState::new(window, cx).language("rust")
+        });
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "你", window, cx);
+                assert!(!state.is_composing());
+            });
+        });
+        cx.simulate_keystrokes("enter tab");
+        input.read_with(&cx, |state, _| {
+            let tab = state.mode.tab_size().to_string();
+            assert_eq!(state.value(), format!("ab你\n{tab}\ncd"));
+        });
+    }
+
+    gpui::actions!(input_composing_test, [HostTab, HostUp]);
+
+    /// A single-line field leaves Tab and the arrows to what holds it, a focus
+    /// ring or a list, except while it composes: then the key is the composition's.
+    #[gpui::test]
+    fn test_a_composing_input_keeps_the_keys_its_host_binds(cx: &mut TestAppContext) {
+        struct Host {
+            input: Entity<InputBaseState<InputMode>>,
+            presses: Rc<Cell<usize>>,
+        }
+        impl Render for Host {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let presses = self.presses.clone();
+                let up = self.presses.clone();
+                div()
+                    .key_context("ComposingHost")
+                    .on_action(move |_: &HostTab, _, _| presses.set(presses.get() + 1))
+                    .on_action(move |_: &HostUp, _, _| up.set(up.get() + 1))
+                    .child(self.input.clone())
+            }
+        }
+
+        let presses = Rc::new(Cell::new(0));
+        let mut input = None;
+        let window = cx.update(|cx| {
+            cx.set_global(Theme::default());
+            super::super::init(cx);
+            cx.bind_keys([
+                gpui::KeyBinding::new("tab", HostTab, Some("ComposingHost")),
+                gpui::KeyBinding::new("up", HostUp, Some("ComposingHost")),
+            ]);
+            let presses = presses.clone();
+            cx.open_window(Default::default(), |window, cx| {
+                let state = cx.new(|cx| crate::input::InputState::new(window, cx));
+                input = Some(state.clone());
+                cx.new(|_| Host {
+                    input: state,
+                    presses,
+                })
+            })
+            .unwrap()
+        });
+        let input = input.unwrap();
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.focus(window, cx);
+                state.replace_and_mark_text_in_range(None, "ni", Some(2..2), window, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("tab up shift-tab");
+        assert_eq!(presses.get(), 0, "the host took a key from the composition");
+        input.read_with(&cx, |state, _| assert_eq!(state.value(), "ni"));
 
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
-                state.replace_and_mark_text_in_range(None, "ni", Some(2..2), window, cx);
-                assert!(state.is_composing());
-                for secondary in [false, true] {
-                    let enter = Enter {
-                        secondary,
-                        shift: false,
-                    };
-                    state.enter(&enter, window, cx);
-                    assert_eq!(state.value(), "ni");
-                }
-
-                state.replace_text_in_range(None, "你", window, cx);
-                assert!(!state.is_composing());
-                let enter = Enter {
-                    secondary: false,
-                    shift: false,
-                };
-                state.enter(&enter, window, cx);
-                assert_eq!(state.value(), "你\n");
+                state.replace_text_in_range(None, "你", window, cx)
             });
         });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("tab up");
+        assert_eq!(presses.get(), 2, "the host lost its keys after the commit");
     }
 
     /// An input method asks where its marked text is before a paint lays it

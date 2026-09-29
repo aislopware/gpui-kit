@@ -13,7 +13,7 @@ use gpui::{
 };
 use ropey::Rope;
 use smallvec::SmallVec;
-use std::{ops::Range, rc::Rc};
+use std::{borrow::Cow, ops::Range, rc::Rc};
 
 use crate::{
     Scrollbar,
@@ -1124,7 +1124,7 @@ impl<M: InputModeKind> TextElement<M> {
         style: &TextStyle,
         window: &mut Window,
         _cx: &App,
-    ) -> Option<WhitespaceIndicators> {
+    ) -> Option<Rc<WhitespaceIndicators>> {
         if !state.show_whitespaces {
             return None;
         }
@@ -1167,7 +1167,7 @@ impl<M: InputModeKind> TextElement<M> {
             None,
         );
 
-        Some(WhitespaceIndicators { space, tab })
+        Some(Rc::new(WhitespaceIndicators { space, tab }))
     }
 
     /// Compute inline completion ghost lines for rendering.
@@ -1906,7 +1906,7 @@ impl<M: InputModeKind> TextElement<M> {
         font_size: Pixels,
         runs: &[TextRun],
         bg_segments: &[(Range<usize>, Hsla)],
-        whitespace_indicators: Option<WhitespaceIndicators>,
+        whitespace_indicators: Option<Rc<WhitespaceIndicators>>,
         window: &mut Window,
     ) -> Vec<LineLayout> {
         let is_single_line = state.is_single_line();
@@ -1961,7 +1961,8 @@ impl<M: InputModeKind> TextElement<M> {
         let mut run_offset = 0;
 
         for (vi, &buffer_line) in last_layout.visible_buffer_lines.iter().enumerate() {
-            let line_text: String = display_text.slice_line(buffer_line).into();
+            // Borrowed for a line within one rope chunk; the shaped line takes its own copy.
+            let line_text: Cow<str> = display_text.slice_line(buffer_line).into();
             let line_item = state
                 .display_map
                 .line(buffer_line)
@@ -1984,7 +1985,7 @@ impl<M: InputModeKind> TextElement<M> {
                     )
                 };
 
-                let sub_line: SharedString = line_text[range.clone()].to_string().into();
+                let sub_line = SharedString::new(&line_text[range.clone()]);
                 let line_runs =
                     align_runs_to_char_boundaries(&sub_line, &line_runs).unwrap_or(line_runs);
                 let shaped_line = window

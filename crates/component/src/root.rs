@@ -1,5 +1,5 @@
 use crate::{
-    ActiveTheme, ElementExt, Placement,
+    ActiveTheme, Placement,
     dialog::{ANIMATION_DURATION, Dialog},
     input::AnyInputState,
     native_menu::FallbackMenuOverlay,
@@ -30,7 +30,6 @@ pub(crate) struct WindowState {
     pub(crate) tooltip_overlay: Entity<gpui_base::TooltipOverlay>,
     pub(crate) native_menu_overlay: Entity<FallbackMenuOverlay>,
     touch_selection_overlay: Entity<WindowTouchSelectionOverlay>,
-    sheet_size: Option<DefiniteLength>,
     pending_focus_restore: Option<WeakFocusHandle>,
 }
 
@@ -80,7 +79,6 @@ impl WindowState {
                 .new(|_| gpui_base::TooltipOverlay::new().render_with(render_tooltip)),
             native_menu_overlay: cx.new(|_| FallbackMenuOverlay::new()),
             touch_selection_overlay: cx.new(|cx| WindowTouchSelectionOverlay::new(window, cx)),
-            sheet_size: None,
             pending_focus_restore: None,
         }
     }
@@ -126,19 +124,19 @@ impl WindowState {
         Self::entity(window, cx).expect(ROOT_MISSING).read(cx)
     }
 
+    /// `sheet` is the placement and size of the open sheet, which the
+    /// notifications stay clear of.
     fn notification_layer(
         root: &Entity<WindowState>,
+        sheet: Option<(Placement, DefiniteLength)>,
         cx: &App,
     ) -> Option<impl IntoElement + use<>> {
-        let active_sheet_placement = root.read(cx).active_sheet.clone().map(|d| d.placement);
-
-        let sheet_size = root.read(cx).sheet_size;
-        let (mt, mr, mb, ml) = match active_sheet_placement {
-            Some(Placement::Top) => (sheet_size, None, None, None),
-            Some(Placement::Right) => (None, sheet_size, None, None),
-            Some(Placement::Bottom) => (None, None, sheet_size, None),
-            Some(Placement::Left) => (None, None, None, sheet_size),
-            _ => (None, None, None, None),
+        let (mt, mr, mb, ml) = match sheet {
+            Some((Placement::Top, size)) => (Some(size), None, None, None),
+            Some((Placement::Right, size)) => (None, Some(size), None, None),
+            Some((Placement::Bottom, size)) => (None, None, Some(size), None),
+            Some((Placement::Left, size)) => (None, None, None, Some(size)),
+            None => (None, None, None, None),
         };
 
         Some(
@@ -157,7 +155,7 @@ impl WindowState {
         root: Entity<WindowState>,
         window: &mut Window,
         cx: &mut App,
-    ) -> Option<impl IntoElement + use<>> {
+    ) -> Option<(impl IntoElement + use<>, (Placement, DefiniteLength))> {
         if let Some(active_sheet) = root.read(cx).active_sheet.clone() {
             let mut sheet = Sheet::new(window, cx);
             sheet = (active_sheet.builder)(sheet, window, cx);
@@ -165,14 +163,9 @@ impl WindowState {
             sheet.placement = active_sheet.placement;
             sheet.selection_scope = active_sheet.selection_scope;
 
-            let size = sheet.size;
+            let placement = (sheet.placement, sheet.size);
 
-            return Some(
-                div()
-                    .relative()
-                    .child(sheet)
-                    .on_prepaint(move |_, _, cx| root.update(cx, |r, _| r.sheet_size = Some(size))),
-            );
+            return Some((div().relative().child(sheet), placement));
         }
 
         None
@@ -483,12 +476,13 @@ struct WindowStateLayers {
 impl RenderOnce for WindowStateLayers {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let root = self.root;
+        let (sheet, sheet_placement) = WindowState::sheet_layer(root.clone(), window, cx).unzip();
         div()
             .absolute()
             .inset_0()
             .debug_selector(|| "root-layers".to_string())
-            .children(WindowState::sheet_layer(root.clone(), window, cx))
+            .children(sheet)
             .children(WindowState::dialog_layer(&root, window, cx))
-            .children(WindowState::notification_layer(&root, cx))
+            .children(WindowState::notification_layer(&root, sheet_placement, cx))
     }
 }

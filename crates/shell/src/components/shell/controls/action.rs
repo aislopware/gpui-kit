@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gpui_component::{
     Disableable as _, Selectable as _, Sizable as _,
-    button::{Button, ButtonVariants as _, Toggle, ToggleVariants as _},
+    button::{Button, ButtonVariants as _, Toggle},
     checkbox::Checkbox,
     switch::Switch,
 };

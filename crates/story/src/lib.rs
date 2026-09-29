@@ -8,7 +8,7 @@ use gpui_kit::component::{
         BasePanel, Panel, PanelControl, PanelEvent, PanelInfo, PanelState, TitleStyle,
         panel_handle, register_panel,
     },
-    group_box::{GroupBox, GroupBoxVariants as _},
+    group_box::GroupBox,
     h_flex,
     menu::PopupMenu,
     notification::Notification,

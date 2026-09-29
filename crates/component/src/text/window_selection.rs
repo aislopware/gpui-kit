@@ -2124,6 +2124,97 @@ mod tests {
         );
     }
 
+    /// What one mouse move of a drag cost: frames drawn and views built. The
+    /// text views are watched with a notify budget, so a selection that never
+    /// settles, where every frame notifies a view that draws the next one,
+    /// fails the test instead of drawing forever.
+    fn move_cost(
+        cx: &mut VisualTestContext,
+        watched: &[Entity<TextViewState>],
+        to: gpui::Point<Pixels>,
+    ) -> (u64, u64) {
+        const NOTIFY_BUDGET: u32 = 16;
+        let notifies = Rc::new(Cell::new(0u32));
+        let _budget = cx.update(|_, cx| {
+            watched
+                .iter()
+                .map(|state| {
+                    let notifies = notifies.clone();
+                    cx.observe(state, move |_, _| {
+                        notifies.set(notifies.get() + 1);
+                        assert!(
+                            notifies.get() <= NOTIFY_BUDGET,
+                            "one mouse move notified the text views more than \
+                             {NOTIFY_BUDGET} times: the selection never settles"
+                        );
+                    })
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.update(|window, _| window.reset_layout_stats());
+        cx.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::default());
+        let stats = cx.update(|window, _| window.layout_stats());
+        (stats.frames, stats.views_built)
+    }
+
+    /// Dragging from a scrolled TextView's first block onto plain text below
+    /// it: the TextView takes its selection order from where it paints, and
+    /// that order has to hold on frames that draw it alone.
+    #[gpui::test]
+    fn a_drag_out_of_a_text_view_draws_a_bounded_number_of_frames(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let content =
+                cx.new(|cx| CrossRendererVirtualView::new(crate::text::SelectionFormat::Plain, cx));
+            Root::new(content, window, cx)
+        });
+        let content = root.read_with(cx, |root, _| {
+            root.view()
+                .clone()
+                .downcast::<CrossRendererVirtualView>()
+                .unwrap()
+        });
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+        let (text_view, bounds) = content.read_with(cx, |content, cx| {
+            (
+                content.text_view.clone(),
+                content.text_view.read(cx).bounds(),
+            )
+        });
+        cx.simulate_mouse_down(
+            bounds.origin + point(px(1.), px(1.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+
+        for to in [
+            point(px(1.), bounds.bottom() + px(20.)),
+            point(px(40.), bounds.bottom() + px(20.)),
+            point(px(80.), bounds.bottom() + px(20.)),
+        ] {
+            let (frames, _) = move_cost(cx, std::slice::from_ref(&text_view), to);
+            assert_eq!(frames, 1, "one mouse move drew {frames} frames");
+        }
+    }
+
+    /// A drag across two TextViews, moving inside the second.
+    #[gpui::test]
+    fn a_drag_across_text_views_draws_a_bounded_number_of_frames(cx: &mut TestAppContext) {
+        let (chat, cx) = setup(true, cx);
+        let watched = chat.read_with(cx, |chat, _| [chat.first.clone(), chat.second.clone()]);
+        cx.simulate_mouse_down(
+            point(px(1.), px(15.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+
+        for x in [40., 80., 120., 160.] {
+            let (frames, _) = move_cost(cx, &watched, point(px(x), px(70.)));
+            assert_eq!(frames, 1, "one mouse move drew {frames} frames");
+        }
+    }
+
     /// A view with a selectable TextView used as Root content. Root mounts the
     /// Dialog/Sheet layers automatically, so a real modal can be opened above it.
     struct ModalScopeTestView {

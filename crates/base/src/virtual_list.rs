@@ -32,6 +32,9 @@ struct VirtualListScrollHandleState {
     items_count: usize,
     /// Content bounds size (excluding padding and border) from the last frame.
     last_content_size: Option<Size<Pixels>>,
+    /// The item layout and content bounds of the last frame, to scroll to an
+    /// item as soon as it is asked for.
+    last_geometry: Option<(ItemSizeLayout, Bounds<Pixels>)>,
     pub deferred_scroll_to_item: Option<DeferredScrollToItem>,
 }
 
@@ -92,6 +95,7 @@ impl VirtualListScrollHandle {
                 axis: Axis::Vertical,
                 items_count: 0,
                 last_content_size: None,
+                last_geometry: None,
                 deferred_scroll_to_item: None,
             })),
             base_handle: ScrollHandle::default(),
@@ -109,14 +113,32 @@ impl VirtualListScrollHandle {
     }
 
     /// Scroll to the item at the given index, with an additional offset items.
+    ///
+    /// The list scrolls right away, by the item layout it was last drawn
+    /// with. That moves the [`ScrollHandle`] it tracks, which is what tells
+    /// a renderer that draws unchanged views from the last frame, such as
+    /// GPUI Fast's retained mode, to draw the list again. The request is
+    /// still applied on the next layout, against the items as they are then.
     fn scroll_to_item_with_offset(&self, ix: usize, strategy: ScrollStrategy, offset: usize) {
-        let mut state = self.state.borrow_mut();
-        state.deferred_scroll_to_item = Some(DeferredScrollToItem {
+        let request = DeferredScrollToItem {
             item_index: ix,
             strategy,
             offset,
             scroll_strict: false,
-        });
+        };
+        let mut state = self.state.borrow_mut();
+        if let Some((size_layout, content_bounds)) = &state.last_geometry {
+            let scrolled = scroll_offset_to_item(
+                state.axis,
+                self.base_handle.offset(),
+                size_layout,
+                content_bounds,
+                &request,
+            );
+            self.base_handle
+                .set_offset(clamp_scroll_offset(scrolled, size_layout, content_bounds));
+        }
+        state.deferred_scroll_to_item = Some(request);
     }
 
     /// Scrolls to the bottom of the list.
@@ -268,44 +290,13 @@ impl VirtualList {
         content_bounds: &Bounds<Pixels>,
         scroll_to_item: DeferredScrollToItem,
     ) -> Point<Pixels> {
-        let Some(bounds) = size_layout.item_bounds(
-            scroll_to_item.item_index + scroll_to_item.offset,
+        let scroll_offset = scroll_offset_to_item(
             self.axis,
+            scroll_offset,
+            size_layout,
             content_bounds,
-        ) else {
-            return scroll_offset;
-        };
-
-        let mut scroll_offset = scroll_offset;
-        match scroll_to_item.strategy {
-            ScrollStrategy::Center => {
-                if self.axis.is_vertical() {
-                    scroll_offset.y = content_bounds.top() + content_bounds.size.height.half()
-                        - bounds.top()
-                        - bounds.size.height.half()
-                } else {
-                    scroll_offset.x = content_bounds.left() + content_bounds.size.width.half()
-                        - bounds.left()
-                        - bounds.size.width.half()
-                }
-            }
-            _ => {
-                // Ref: https://github.com/zed-industries/zed/blob/0d145289e0867a8d5d63e5e1397a5ca69c9d49c3/crates/gpui/src/elements/div.rs#L3026
-                if self.axis.is_vertical() {
-                    if bounds.top() + scroll_offset.y < content_bounds.top() {
-                        scroll_offset.y = content_bounds.top() - bounds.top()
-                    } else if bounds.bottom() + scroll_offset.y > content_bounds.bottom() {
-                        scroll_offset.y = content_bounds.bottom() - bounds.bottom();
-                    }
-                } else {
-                    if bounds.left() + scroll_offset.x < content_bounds.left() {
-                        scroll_offset.x = content_bounds.left() - bounds.left();
-                    } else if bounds.right() + scroll_offset.x > content_bounds.right() {
-                        scroll_offset.x = content_bounds.right() - bounds.right();
-                    }
-                }
-            }
-        }
+            &scroll_to_item,
+        );
         self.scroll_handle.set_offset(scroll_offset);
         scroll_offset
     }
@@ -334,6 +325,66 @@ impl VirtualList {
         );
         item_to_measure.layout_as_root(available_space, window, cx)
     }
+}
+
+/// `scroll_offset` scrolled so that the item `request` asks for is where its
+/// strategy puts it, laid out as `size_layout` inside `content_bounds`.
+fn scroll_offset_to_item(
+    axis: Axis,
+    mut scroll_offset: Point<Pixels>,
+    size_layout: &ItemSizeLayout,
+    content_bounds: &Bounds<Pixels>,
+    request: &DeferredScrollToItem,
+) -> Point<Pixels> {
+    let Some(bounds) =
+        size_layout.item_bounds(request.item_index + request.offset, axis, content_bounds)
+    else {
+        return scroll_offset;
+    };
+    match request.strategy {
+        ScrollStrategy::Center => {
+            if axis.is_vertical() {
+                scroll_offset.y = content_bounds.top() + content_bounds.size.height.half()
+                    - bounds.top()
+                    - bounds.size.height.half()
+            } else {
+                scroll_offset.x = content_bounds.left() + content_bounds.size.width.half()
+                    - bounds.left()
+                    - bounds.size.width.half()
+            }
+        }
+        _ => {
+            // Ref: https://github.com/zed-industries/zed/blob/0d145289e0867a8d5d63e5e1397a5ca69c9d49c3/crates/gpui/src/elements/div.rs#L3026
+            if axis.is_vertical() {
+                if bounds.top() + scroll_offset.y < content_bounds.top() {
+                    scroll_offset.y = content_bounds.top() - bounds.top()
+                } else if bounds.bottom() + scroll_offset.y > content_bounds.bottom() {
+                    scroll_offset.y = content_bounds.bottom() - bounds.bottom();
+                }
+            } else {
+                if bounds.left() + scroll_offset.x < content_bounds.left() {
+                    scroll_offset.x = content_bounds.left() - bounds.left();
+                } else if bounds.right() + scroll_offset.x > content_bounds.right() {
+                    scroll_offset.x = content_bounds.right() - bounds.right();
+                }
+            }
+        }
+    }
+    scroll_offset
+}
+
+/// `scroll_offset` kept within the content laid out as `size_layout`.
+fn clamp_scroll_offset(
+    scroll_offset: Point<Pixels>,
+    size_layout: &ItemSizeLayout,
+    content_bounds: &Bounds<Pixels>,
+) -> Point<Pixels> {
+    scroll_offset
+        .max(&point(
+            content_bounds.size.width - size_layout.content_size.width,
+            content_bounds.size.height - size_layout.content_size.height,
+        ))
+        .min(&point(px(0.), px(0.)))
 }
 
 /// Frame state used by the [VirtualItem].
@@ -636,6 +687,7 @@ impl Element for VirtualList {
         scroll_state.axis = axis;
         scroll_state.items_count = self.items_count;
         scroll_state.last_content_size = Some(content_bounds.size);
+        scroll_state.last_geometry = Some((layout.size_layout.clone(), content_bounds));
 
         let mut scroll_offset = self.scroll_handle.offset();
         if let Some(scroll_to_item) = scroll_state.deferred_scroll_to_item.take() {
@@ -647,12 +699,7 @@ impl Element for VirtualList {
             );
         }
 
-        scroll_offset = scroll_offset
-            .max(&point(
-                content_bounds.size.width - layout.size_layout.content_size.width,
-                content_bounds.size.height - layout.size_layout.content_size.height,
-            ))
-            .min(&point(px(0.), px(0.)));
+        scroll_offset = clamp_scroll_offset(scroll_offset, &layout.size_layout, &content_bounds);
         if scroll_offset != self.scroll_handle.offset() {
             self.scroll_handle.set_offset(scroll_offset);
         }

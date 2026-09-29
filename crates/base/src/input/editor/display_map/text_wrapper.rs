@@ -1851,6 +1851,7 @@ mod tests {
             cursor_bounds: None,
             text_align: TextAlign::Left,
             content_width: px(0.),
+            document_revision: 0,
         }
     }
 
@@ -2158,6 +2159,7 @@ mod tests {
             cursor_bounds: None,
             text_align: TextAlign::Left,
             content_width: px(0.),
+            document_revision: 0,
         };
 
         assert_eq!(

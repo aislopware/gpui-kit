@@ -79,6 +79,9 @@ fn cursor_blink(cx: &App) -> CursorBlink {
         .normalized()
 }
 
+/// Under [`App::reduce_motion`] a running cursor holds steady: [`Self::visible`]
+/// reports it shown, and the loop flips and repaints nothing until motion is
+/// allowed again, when the next tick resumes the blink.
 pub(crate) struct BlinkCursor {
     visible: bool,
     paused: bool,
@@ -156,8 +159,9 @@ impl BlinkCursor {
                 .is_some_and(|at| cx.background_executor().now() - at < PAUSE_DELAY)
     }
 
-    pub(crate) fn visible(&self) -> bool {
-        self.visible
+    pub(crate) fn visible(&self, cx: &App) -> bool {
+        // A running cursor holds steady under reduced motion.
+        self.visible || (self.last_activity.is_some() && cx.reduce_motion())
     }
 
     fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
@@ -209,7 +213,14 @@ impl BlinkCursor {
 
                 if this.blink_delay(cx).is_some() {
                     this.paused = false;
-                    this.set_visible(!this.visible, cx);
+                    if cx.reduce_motion() {
+                        // Steady: `visible` already reports it shown, so there is
+                        // nothing to repaint. The tick goes on so the blink
+                        // resumes, shown first, once motion is allowed.
+                        this.visible = true;
+                    } else {
+                        this.set_visible(!this.visible, cx);
+                    }
                 }
                 this.schedule(cx);
             });
@@ -256,7 +267,7 @@ mod tests {
 
         advance(cx, Duration::from_secs(3));
 
-        assert_eq!(cursor.read_with(cx, |cursor, _| cursor.visible()), visible);
+        assert_eq!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)), visible);
         assert!(cursor.read_with(cx, |cursor, _| cursor._task.is_ready()));
         assert_eq!(notifications.get(), 0);
     }
@@ -281,16 +292,58 @@ mod tests {
         cx.executor()
             .advance_clock(PAUSE_DELAY - Duration::from_millis(1));
         cx.run_until_parked();
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         cx.executor().advance_clock(Duration::from_millis(1));
         cx.run_until_parked();
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
+    }
+
+    /// Under reduced motion a focused input's cursor holds steady and repaints
+    /// nothing; once motion is allowed again it blinks without being refocused.
+    #[gpui::test]
+    fn reduced_motion_holds_the_cursor_steady(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let cursor = cx.new(BlinkCursor::new);
+        cursor.update(cx, |cursor, cx| cursor.start(cx));
+        cx.run_until_parked();
+
+        let notifies = Rc::new(Cell::new(0usize));
+        let counter = notifies.clone();
+        let _observer =
+            cx.update(|cx| cx.observe(&cursor, move |_, _| counter.set(counter.get() + 1)));
+        for _ in 0..6 {
+            cx.executor().advance_clock(INTERVAL);
+            cx.run_until_parked();
+            assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
+        }
+        assert_eq!(notifies.get(), 0, "a steady cursor repaints its input");
+
+        // Turned on while in the hidden phase, it shows at once.
+        cx.update(|cx| cx.set_reduce_motion(false));
+        cx.executor().advance_clock(INTERVAL);
+        cx.run_until_parked();
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
+        cx.update(|cx| cx.set_reduce_motion(true));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
+
+        // Motion allowed again: it blinks, with no focus change to restart it.
+        cx.update(|cx| cx.set_reduce_motion(false));
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            cx.executor().advance_clock(INTERVAL);
+            cx.run_until_parked();
+            seen.push(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
+        }
+        assert!(
+            seen.contains(&true) && seen.contains(&false),
+            "blinks again: {seen:?}"
+        );
     }
 
     #[gpui::test]
     fn repeated_pauses_keep_cursor_visible_until_idle(cx: &mut TestAppContext) {
         let cursor = cx.new(BlinkCursor::new);
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         // Only a focused input blinks, and only a blinking cursor pauses.
         cursor.update(cx, |cursor, cx| cursor.start(cx));
         cx.run_until_parked();
@@ -299,14 +352,14 @@ mod tests {
             cx.run_until_parked();
             cx.executor().advance_clock(Duration::from_millis(200));
             cx.run_until_parked();
-            assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+            assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         }
         cx.executor().advance_clock(Duration::from_millis(100));
         cx.run_until_parked();
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         cx.executor().advance_clock(INTERVAL);
         cx.run_until_parked();
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
     }
 
     #[gpui::test]
@@ -318,17 +371,17 @@ mod tests {
         cursor.update(cx, |cursor, cx| cursor.start(cx));
         cursor.update(cx, |cursor, cx| cursor.start(cx));
         cx.run_until_parked();
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
 
         // The restart drops the first cycle's timer, so the cursor stays
         // visible for a full interval before it blinks off.
         cx.executor()
             .advance_clock(INTERVAL - Duration::from_millis(1));
         cx.run_until_parked();
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         cx.executor().advance_clock(Duration::from_millis(1));
         cx.run_until_parked();
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
     }
 
     #[gpui::test]
@@ -341,7 +394,7 @@ mod tests {
         cx.run_until_parked();
         cx.executor().advance_clock(PAUSE_DELAY);
         cx.run_until_parked();
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
 
         let notifies = Rc::new(Cell::new(0usize));
         let counter = notifies.clone();
@@ -371,16 +424,16 @@ mod tests {
         cx.run_until_parked();
         cursor.update(cx, |cursor, cx| cursor.stop(cx));
         cx.run_until_parked();
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
 
         // Focusing again shows the cursor and blinks it, rather than leaving a
         // stale pause to swallow the start.
         cursor.update(cx, |cursor, cx| cursor.start(cx));
         cx.run_until_parked();
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         cx.executor().advance_clock(INTERVAL);
         cx.run_until_parked();
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
     }
 
     #[gpui::test]
@@ -401,12 +454,12 @@ mod tests {
         cx.executor().advance_clock(Duration::from_secs(3));
         cx.run_until_parked();
 
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         assert_eq!(notifications.get(), 0, "a stopped cursor kept blinking");
 
         cursor.update(cx, |cursor, cx| cursor.start(cx));
         cx.run_until_parked();
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
     }
 
     #[gpui::test]
@@ -425,7 +478,7 @@ mod tests {
         cx.executor().advance_clock(Duration::from_secs(3));
         cx.run_until_parked();
 
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         assert_eq!(notifications.get(), 0, "a stopped cursor kept blinking");
     }
 
@@ -441,21 +494,21 @@ mod tests {
         cursor.update(cx, |cursor, cx| cursor.start(cx));
 
         advance(cx, INTERVAL);
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         advance(cx, Duration::from_millis(249));
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         advance(cx, Duration::from_millis(1));
         assert_idle(&cursor, true, cx);
 
         cursor.update(cx, |cursor, cx| cursor.pause(cx));
         advance(cx, PAUSE_DELAY);
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         advance(cx, Duration::from_millis(450));
         assert_idle(&cursor, true, cx);
 
         cursor.update(cx, |cursor, cx| cursor.start(cx));
         advance(cx, INTERVAL);
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
     }
 
     #[gpui::test]
@@ -471,7 +524,7 @@ mod tests {
         advance(cx, Duration::from_millis(100));
         cursor.update(cx, |cursor, cx| cursor.pause(cx));
         advance(cx, Duration::from_millis(199));
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         assert!(!cursor.read_with(cx, |cursor, _| cursor._task.is_ready()));
         advance(cx, Duration::from_millis(1));
         assert_idle(&cursor, true, cx);
@@ -498,10 +551,10 @@ mod tests {
         let cursor = cx.new(BlinkCursor::new);
         cursor.update(cx, |cursor, cx| cursor.start(cx));
         advance(cx, INTERVAL);
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
 
         cx.update(|cx| set_cursor_blink(CursorBlink::steady(), cx));
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         advance(cx, Duration::from_secs(1));
 
         cx.update(|cx| {
@@ -521,14 +574,14 @@ mod tests {
             )
         });
         advance(cx, Duration::from_millis(100));
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         advance(cx, Duration::from_millis(400));
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         assert!(cursor.read_with(cx, |cursor, _| cursor._task.is_ready()));
 
         cx.update(|cx| set_cursor_blink(CursorBlink::blinking(Duration::from_millis(100)), cx));
         advance(cx, Duration::from_millis(100));
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
     }
 
     #[gpui::test]
@@ -541,11 +594,11 @@ mod tests {
 
         cx.update(|cx| set_cursor_blink(CursorBlink::blinking(Duration::from_secs(1)), cx));
         advance(cx, Duration::from_millis(250));
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         advance(cx, Duration::from_millis(749));
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         advance(cx, Duration::from_millis(1));
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
 
         cx.update(|cx| set_cursor_blink(CursorBlink::steady(), cx));
         assert_idle(&cursor, true, cx);
@@ -558,12 +611,12 @@ mod tests {
         let cursor = cx.new(BlinkCursor::new);
         cursor.update(cx, |cursor, cx| cursor.start(cx));
         advance(cx, INTERVAL);
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
 
         cx.update(|cx| set_cursor_blink(policy, cx));
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         advance(cx, Duration::from_millis(249));
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         advance(cx, Duration::from_millis(1));
         assert_idle(&cursor, true, cx);
     }
@@ -579,12 +632,12 @@ mod tests {
         let cursor = cx.new(BlinkCursor::new);
         cursor.update(cx, |cursor, cx| cursor.start(cx));
         advance(cx, INTERVAL);
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
 
         cx.update(|cx| crate::Theme::global_mut(cx).appearance = crate::ThemeAppearance::Dark);
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         advance(cx, Duration::from_millis(249));
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         advance(cx, Duration::from_millis(1));
         assert_idle(&cursor, true, cx);
     }
@@ -604,9 +657,9 @@ mod tests {
             )
         });
         advance(cx, Duration::from_millis(199));
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         advance(cx, Duration::from_millis(1));
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         advance(cx, Duration::from_millis(100));
         assert_idle(&cursor, true, cx);
     }
@@ -637,7 +690,7 @@ mod tests {
 
         blurred.update(cx, |cursor, cx| cursor.start(cx));
         advance(cx, INTERVAL);
-        assert!(!blurred.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!blurred.read_with(cx, |cursor, cx| cursor.visible(cx)));
     }
 
     #[gpui::test]
@@ -645,7 +698,7 @@ mod tests {
         let cursor = cx.new(BlinkCursor::new);
         cursor.update(cx, |cursor, cx| cursor.start(cx));
         advance(cx, INTERVAL);
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
 
         cx.update(|cx| {
             set_cursor_blink(

@@ -78,7 +78,7 @@ impl OtpState {
         self.masked
     }
     pub fn cursor_visible(&self, cx: &App) -> bool {
-        self.blink_cursor.read(cx).visible()
+        self.blink_cursor.read(cx).visible(cx)
     }
     pub fn masked(mut self, masked: bool) -> Self {
         self.masked = masked;

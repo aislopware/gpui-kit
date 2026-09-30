@@ -217,6 +217,10 @@ The transition owns lifecycle mechanics only:
 The caller chooses what the value means and applies it to opacity, color,
 geometry, or another interpolatable property.
 
+Reduced motion also holds an input's caret steady: a focused input shows its
+cursor without blinking and repaints nothing for it, and blinks again once
+motion is allowed.
+
 For a value that can be retargeted while it is still moving, base provides a
 spring instead:
 

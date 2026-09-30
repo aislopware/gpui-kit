@@ -3329,7 +3329,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     pub(crate) fn show_cursor(&self, window: &Window, cx: &App) -> bool {
         (self.focus_handle.is_focused(window) || M::is_context_menu_open(self, cx))
             && !self.disabled
-            && self.blink_cursor.read(cx).visible()
+            && self.blink_cursor.read(cx).visible(cx)
             && window.is_window_active()
     }
 
@@ -8898,7 +8898,7 @@ mod tests {
             .advance_clock(std::time::Duration::from_millis(300));
         cx.run_until_parked();
         view.input.read_with(&cx, |state, cx| {
-            assert!(!state.blink_cursor.read(cx).visible());
+            assert!(!state.blink_cursor.read(cx).visible(cx));
         });
         // Copy consumes its shortcut without editing text or moving selections.
         for _ in 0..5 {
@@ -8911,7 +8911,7 @@ mod tests {
                 .advance_clock(std::time::Duration::from_millis(200));
             cx.run_until_parked();
             view.input.read_with(&cx, |state, cx| {
-                assert!(state.blink_cursor.read(cx).visible());
+                assert!(state.blink_cursor.read(cx).visible(cx));
             });
         }
     }
@@ -8935,7 +8935,7 @@ mod tests {
                 .advance_clock(std::time::Duration::from_millis(500));
             cx.run_until_parked();
             view.input.read_with(&cx, |state, cx| {
-                assert!(!state.blink_cursor.read(cx).visible(), "action {action}");
+                assert!(!state.blink_cursor.read(cx).visible(cx), "action {action}");
             });
 
             cx.update(|window, cx| {
@@ -8948,7 +8948,7 @@ mod tests {
                         4 => state.replace_text_in_range(None, "x", window, cx),
                         _ => state.backspace(&Backspace, window, cx),
                     }
-                    assert!(state.blink_cursor.read(cx).visible(), "action {action}");
+                    assert!(state.blink_cursor.read(cx).visible(cx), "action {action}");
                 });
             });
         }

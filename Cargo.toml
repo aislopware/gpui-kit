@@ -181,6 +181,15 @@ cap-std = { opt-level = 3 }
 # `rquickjs`. Route those dependencies through a source-compatible facade so
 # the shell and LLRT share the exact same quickjs-jit types and VM.
 rquickjs = { path = "crates/shell/rquickjs-compat" }
+# Our fork builds GPUI from our gpui-fast fork, whose `compat/` crates stand in for the
+# gpui-pre snapshots under their names (longbridge/gpui-fast#23). An application on this
+# fork patches the same way in its own root manifest.
+gpui-pre = { git = "https://github.com/aislopware/gpui-fast.git" }
+gpui-pre-platform = { git = "https://github.com/aislopware/gpui-fast.git" }
+gpui-pre-web = { git = "https://github.com/aislopware/gpui-fast.git" }
+gpui-pre-macros = { git = "https://github.com/aislopware/gpui-fast.git" }
+gpui-pre-reqwest-client = { git = "https://github.com/aislopware/gpui-fast.git" }
+gpui-pre-sum-tree = { git = "https://github.com/aislopware/gpui-fast.git" }
 
 [workspace.metadata.typos]
 files.extend-exclude = ["**/fixtures/*"]

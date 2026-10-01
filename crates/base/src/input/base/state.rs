@@ -405,6 +405,9 @@ pub struct InputBaseState<M: InputModeKind> {
     ///
     /// Always contains at least one selection where index 0 is the active cursor.
     pub(super) selections: Selections,
+    /// The word a caret's first "select next occurrence" selected, with the document revision it
+    /// was selected at: while that selection stands, later presses match whole words only.
+    pub(super) occurrence_word: Option<(usize, usize, u64)>,
     /// Range for save the selected word, use to keep word range when drag move.
     pub(super) selected_word_range: Option<CursorSelection>,
     /// The marked range is the temporary insert text on IME typing.
@@ -775,6 +778,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             token_layout_cache: None,
             pressed_token: None,
             selections: Selections::default(),
+            occurrence_word: None,
             selected_word_range: None,
             ime_marked_range: None,
             input_bounds: Bounds::default(),

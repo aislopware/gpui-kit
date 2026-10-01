@@ -5,6 +5,11 @@ version = "0.7.0"
 publish = false
 edition.workspace = true
 
+# `gpui` is named only by the code GPUI's derives and `#[gpui_kit::test]` expand to
+# (see its comment below), which cargo-machete does not read.
+[package.metadata.cargo-machete]
+ignored = ["gpui"]
+
 [dependencies]
 # GPUI's derives and `#[gpui_kit::test]` expand to `gpui::` paths. gpui-fast,
 # unlike the published gpui-pre, does not rewrite them to the Kit, so the crate

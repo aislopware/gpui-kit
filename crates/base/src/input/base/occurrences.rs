@@ -1,5 +1,7 @@
 //! Selecting the occurrences of a selection: the next one added as another selection, or all
-//! of them at once. With only a caret, the first press selects the word under it.
+//! of them at once. With only a caret, the first press selects the word under it, and the
+//! presses after it match that word whole, as Sublime Text and VS Code do; a selection made by
+//! hand matches anywhere.
 
 use gpui::{Context, Window, actions};
 
@@ -39,8 +41,43 @@ impl<M: InputModeKind> InputBaseState<M> {
         active.end = word.end;
         active.reversed = false;
         active.column_anchor = None;
+        self.occurrence_word = Some((word.start, word.end, self.document_revision));
         cx.notify();
         true
+    }
+
+    /// Whether the occurrences are of a word a caret selected, still selected and unedited.
+    fn occurrences_are_words(&mut self) -> bool {
+        let words = self.occurrence_word.is_some_and(|(start, end, revision)| {
+            revision == self.document_revision
+                && self
+                    .selections
+                    .iter()
+                    .any(|s| s.start == start && s.end == end)
+        });
+        if !words {
+            self.occurrence_word = None;
+        }
+        words
+    }
+
+    /// The starts of `needle` in `text`, only where it stands as a whole word when `words`.
+    fn occurrence_starts<'a>(
+        text: &'a str,
+        needle: &'a str,
+        words: bool,
+    ) -> impl Iterator<Item = usize> + 'a {
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        text.match_indices(needle)
+            .map(|(at, _)| at)
+            .filter(move |&at| {
+                !words
+                    || (!text[..at].chars().next_back().is_some_and(is_word)
+                        && !text[at + needle.len()..]
+                            .chars()
+                            .next()
+                            .is_some_and(is_word))
+            })
     }
 
     /// The selected text the occurrences are of: the newest selection's.
@@ -83,19 +120,14 @@ impl<M: InputModeKind> InputBaseState<M> {
         let Some((needle, from)) = self.occurrence_needle() else {
             return;
         };
+        let words = self.occurrences_are_words();
         let text = self.text.to_string();
-        let after = text
-            .get(from..)
-            .unwrap_or_default()
-            .match_indices(&needle)
-            .map(|(at, _)| at + from);
-        let before = text
-            .get(..from)
-            .unwrap_or_default()
-            .match_indices(&needle)
-            .map(|(at, _)| at);
-        let next = after
-            .chain(before)
+        let starts: Vec<usize> = Self::occurrence_starts(&text, &needle, words).collect();
+        let split = starts.partition_point(|&at| at < from);
+        let next = starts[split..]
+            .iter()
+            .chain(&starts[..split])
+            .copied()
             .find(|&at| !self.overlaps_selection(at, at + needle.len()));
         if let Some(start) = next {
             self.add_occurrence(start, start + needle.len());
@@ -119,8 +151,9 @@ impl<M: InputModeKind> InputBaseState<M> {
         let Some((needle, _)) = self.occurrence_needle() else {
             return;
         };
+        let words = self.occurrences_are_words();
         let text = self.text.to_string();
-        let starts: Vec<usize> = text.match_indices(&needle).map(|(at, _)| at).collect();
+        let starts: Vec<usize> = Self::occurrence_starts(&text, &needle, words).collect();
         for start in starts {
             if !self.overlaps_selection(start, start + needle.len()) {
                 self.add_occurrence(start, start + needle.len());
@@ -227,6 +260,34 @@ mod tests {
             });
         });
         assert_eq!(selected(&state, cx), [(0, 2), (5, 7), (10, 12)]);
+    }
+
+    #[gpui::test]
+    fn test_a_word_from_the_caret_matches_whole_words_and_a_selection_anywhere(
+        cx: &mut TestAppContext,
+    ) {
+        let (state, cx) = editor(cx, "n len n", 0);
+        cx.update(|window, cx| {
+            state.update(cx, |s, cx| {
+                s.select_all_occurrences(&SelectAllOccurrences, window, cx)
+            });
+        });
+        assert_eq!(
+            selected(&state, cx),
+            [(0, 1), (6, 7)],
+            "not the n inside `len`"
+        );
+        cx.update(|window, cx| {
+            state.update(cx, |s, cx| {
+                s.set_selected_range(6..7, cx);
+                s.select_all_occurrences(&SelectAllOccurrences, window, cx)
+            });
+        });
+        assert_eq!(
+            selected(&state, cx),
+            [(0, 1), (4, 5), (6, 7)],
+            "a selection made by hand matches inside words too"
+        );
     }
 
     #[gpui::test]

@@ -313,6 +313,22 @@ fn typing_opens_completion_and_enter_accepts_without_a_newline(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
+fn a_return_that_types_a_newline_accepts_without_one(cx: &mut TestAppContext) {
+    let fixture = Fixture::new(cx);
+    fixture.start_completion(cx);
+    // A real Return carries the text it types. Once the menu has taken it, the key must not
+    // go on to be typed as well.
+    cx.update_window(fixture.handle.into(), |_, window, cx| {
+        let mut key = gpui_kit::Keystroke::parse("enter").unwrap();
+        key.key_char = Some("\n".into());
+        window.dispatch_keystroke(key, cx);
+    })
+    .unwrap();
+    fixture.settle(cx);
+    fixture.assert_editor("print", cx);
+}
+
+#[gpui_kit::test]
 fn escape_cancels_completion_and_preserves_editor_text_and_focus(cx: &mut TestAppContext) {
     let fixture = Fixture::new(cx);
     fixture.start_completion(cx);

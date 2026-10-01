@@ -113,10 +113,10 @@ pub use lsp::{
     DocumentRangeSemanticTokensProvider, HoverPopoverState, HoverProvider, InputOverlayKind, Lsp,
     ShowDocumentHandler,
 };
-pub use lsp_types::Position;
 /// The LSP types the providers speak ([`CompletionProvider`] and the others), at the version
 /// this crate builds with, so a provider needs no `lsp-types` of its own to match it.
 pub use lsp_types;
+pub use lsp_types::Position;
 pub use mask_pattern::MaskPattern;
 #[cfg(target_os = "macos")]
 #[doc(hidden)]

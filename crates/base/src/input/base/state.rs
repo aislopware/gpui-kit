@@ -4505,6 +4505,14 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
                     .on_action(Self::key_action(&entity, InputBaseState::page_down))
                     .on_action(Self::key_action(&entity, InputBaseState::add_cursor_above))
                     .on_action(Self::key_action(&entity, InputBaseState::add_cursor_below))
+                    .on_action(Self::key_action(
+                        &entity,
+                        InputBaseState::select_next_occurrence,
+                    ))
+                    .on_action(Self::key_action(
+                        &entity,
+                        InputBaseState::select_all_occurrences,
+                    ))
             })
             .on_action(Self::key_action(
                 &entity,

@@ -60,6 +60,9 @@ mod mode;
 mod movement;
 #[path = "base/native.rs"]
 mod native;
+#[path = "base/occurrences.rs"]
+mod occurrences;
+pub use occurrences::{SelectAllOccurrences, SelectNextOccurrence};
 #[path = "base/rope_ext.rs"]
 mod rope_ext;
 #[path = "editor/search.rs"]
@@ -111,6 +114,9 @@ pub use lsp::{
     ShowDocumentHandler,
 };
 pub use lsp_types::Position;
+/// The LSP types the providers speak ([`CompletionProvider`] and the others), at the version
+/// this crate builds with, so a provider needs no `lsp-types` of its own to match it.
+pub use lsp_types;
 pub use mask_pattern::MaskPattern;
 #[cfg(target_os = "macos")]
 #[doc(hidden)]

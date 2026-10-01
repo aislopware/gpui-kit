@@ -11,6 +11,11 @@ tree-sitter = ["gpui-kit/tree-sitter-languages"]
 test-support = ["gpui-kit/test-support"]
 default = ["tree-sitter"]
 
+# `gpui` is named only by the code GPUI's derives and `#[gpui_kit::test]` expand to
+# (see its comment below), which cargo-machete does not read.
+[package.metadata.cargo-machete]
+ignored = ["gpui"]
+
 [dependencies]
 anyhow.workspace = true
 # GPUI's derives and `#[gpui_kit::test]` expand to `gpui::` paths. gpui-fast,

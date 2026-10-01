@@ -183,18 +183,26 @@ impl TextViewState {
         let _receive_task = cx.spawn({
             async move |weak_self, cx| {
                 while let Ok(parsed_update) = rx_result.recv().await {
+                    // A stale result or the acknowledgement of a synchronous
+                    // parse changes nothing, so it is checked by a read: an
+                    // update counts as a change of the state for whatever
+                    // read it, and every small text would otherwise change
+                    // once, a frame after it was first drawn.
+                    if parsed_update.baseline_ack {
+                        continue;
+                    }
+                    let current = weak_self
+                        .read_with(cx, |state, _| parsed_update.revision == state.revision);
+                    if !matches!(current, Ok(true)) {
+                        continue;
+                    }
                     _ = weak_self.update(cx, |state, cx| {
-                        if parsed_update.revision != state.revision {
-                            return;
-                        }
-                        if parsed_update.baseline_ack {
-                            return;
-                        }
                         state.commit_parse(
                             parsed_update.result,
                             parsed_update.revision,
                             !parsed_update.full_parse,
                             parsed_update.selection_compatible,
+                            true,
                             cx,
                         );
                     });
@@ -255,7 +263,11 @@ impl TextViewState {
             _parse_task,
             _receive_task,
         };
-        this.increment_update(text, Change::Replace, cx);
+        // Nothing has read a state that is being made, so its first parse
+        // announces nothing: a notify here, inside the render that makes it
+        // (`TextView` keeps it as element state), counts as a change of what
+        // that render read.
+        this.increment_update(text, Change::Replace, false, cx);
         this
     }
 
@@ -349,7 +361,7 @@ impl TextViewState {
         self.text.push_str(text);
         self.may_hold_definitions = may_hold_definition(text.as_bytes());
         self.parsed_error = None;
-        self.increment_update(text, Change::Replace, cx);
+        self.increment_update(text, Change::Replace, true, cx);
     }
 
     /// [`Self::set_text`] for the text a `TextView` element hands over every
@@ -391,9 +403,9 @@ impl TextViewState {
         self.may_hold_definitions |= may_hold_definition(&self.text.as_bytes()[unscanned..]);
         if self.appends_parse_whole_text() {
             let text = self.text.clone();
-            self.increment_update(&text, Change::Extend, cx);
+            self.increment_update(&text, Change::Extend, true, cx);
         } else {
-            self.increment_update(new_text, Change::Append, cx);
+            self.increment_update(new_text, Change::Append, true, cx);
         }
     }
 
@@ -433,7 +445,7 @@ impl TextViewState {
         self.markdown_extensions = markdown_extensions;
         if parser_configuration_changed && self.format == TextViewFormat::Markdown {
             let text = self.text.clone();
-            self.increment_update(&text, Change::Replace, cx);
+            self.increment_update(&text, Change::Replace, true, cx);
         }
     }
 
@@ -542,7 +554,16 @@ impl TextViewState {
         cx.notify();
     }
 
-    fn increment_update(&mut self, text: &str, change: Change, cx: &mut Context<Self>) {
+    /// Take `text` as `change` says. With `announce`, a parse that lands now
+    /// resets the selection it breaks and notifies; without, as for a state
+    /// being made, it lands quietly.
+    fn increment_update(
+        &mut self,
+        text: &str,
+        change: Change,
+        announce: bool,
+        cx: &mut Context<Self>,
+    ) {
         let append = change == Change::Append;
         let parse_len = if append {
             self.appended_parse_len(text.len())
@@ -581,7 +602,8 @@ impl TextViewState {
                 ParsedContent::default()
             };
             let result = parse_content(self.format, base, &update_options);
-            self.commit_parse(result, self.revision, append, change != Change::Replace, cx);
+            let compatible = change != Change::Replace;
+            self.commit_parse(result, self.revision, append, compatible, announce, cx);
         }
         // A synchronous update keeps the background parser's accumulated
         // document in sync, so a later append extends this baseline instead of
@@ -609,13 +631,15 @@ impl TextViewState {
     ///
     /// `append` is whether it parsed only appended text onto the document
     /// before it, and `compatible` whether the text before it is still there,
-    /// so a selection in it holds.
+    /// so a selection in it holds. Without `announce` it lands quietly: it neither
+    /// resets the selection nor notifies.
     fn commit_parse(
         &mut self,
         result: Result<ParsedContent, SharedString>,
         revision: usize,
         append: bool,
         compatible: bool,
+        announce: bool,
         cx: &mut Context<Self>,
     ) {
         match result {
@@ -640,6 +664,9 @@ impl TextViewState {
                 self.stream_fade.discard_pending();
                 self.parsed_error = Some(err);
             }
+        }
+        if !announce {
+            return;
         }
         // Don't interrupt an active drag-selection; the stored positions
         // remain valid for append-only updates and will self-correct on the

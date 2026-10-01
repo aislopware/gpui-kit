@@ -192,19 +192,12 @@ impl TextViewState {
                         continue;
                     }
                     let current = weak_self
-                        .read_with(cx, |state, _| parsed_update.revision == state.revision);
+                        .read_with(cx, |state, _| state.takes_parse_of(parsed_update.revision));
                     if !matches!(current, Ok(true)) {
                         continue;
                     }
                     _ = weak_self.update(cx, |state, cx| {
-                        state.commit_parse(
-                            parsed_update.result,
-                            parsed_update.revision,
-                            !parsed_update.full_parse,
-                            parsed_update.selection_compatible,
-                            true,
-                            cx,
-                        );
+                        state.commit_parsed_update(parsed_update, cx);
                     });
                 }
             }
@@ -675,6 +668,39 @@ impl TextViewState {
             self.reset_selection_and_adapter(cx);
         }
         cx.notify();
+    }
+
+    /// Commit a result of the background parser.
+    ///
+    /// A stream that appends faster than a parse completes has always moved
+    /// past the revision the result was parsed from, so only discarding
+    /// results of an older revision would show nothing until the stream
+    /// stops. A result parsed since the text was last replaced is a prefix of
+    /// the current text and is committed; one from before that replacement,
+    /// or older than what is already committed, is discarded.
+    fn commit_parsed_update(&mut self, parsed_update: ParsedUpdate, cx: &mut Context<Self>) {
+        if !self.takes_parse_of(parsed_update.revision) {
+            return;
+        }
+        if parsed_update.baseline_ack {
+            debug_assert!(parsed_update.full_parse);
+            return;
+        }
+        self.commit_parse(
+            parsed_update.result,
+            parsed_update.revision,
+            !parsed_update.full_parse,
+            parsed_update.selection_compatible,
+            true,
+            cx,
+        );
+    }
+
+    /// Whether a background parse of `revision` is to be committed: one
+    /// parsed since the text was last replaced and newer than what is
+    /// committed (see [`Self::commit_parsed_update`]).
+    fn takes_parse_of(&self, revision: usize) -> bool {
+        revision >= self.full_update_revision && revision > self.committed_revision
     }
 
     /// The text this view renders, which [`RangeHighlight`] ranges index.
@@ -1858,6 +1884,84 @@ mod tests {
         state.read_with(cx, |state, _| {
             assert_eq!(state.text.as_str(), expected.as_str());
             assert_eq!(state.source().as_str(), expected.as_str());
+        });
+    }
+
+    /// A paragraph too long to parse on the UI thread, so a chunk appended to
+    /// it is parsed in the background.
+    fn background_paragraph() -> String {
+        "word ".repeat(MAX_SYNC_PARSE_BYTES / 5 + 1)
+    }
+
+    /// Push `chunk` and parse it the way the background parser would, without
+    /// running the parser, returning the update it would send.
+    fn push_and_parse(
+        state: &Entity<TextViewState>,
+        chunk: &str,
+        cx: &mut TestAppContext,
+    ) -> ParsedUpdate {
+        let (revision, baseline) = state.update(cx, |state, cx| {
+            state.push_str(chunk, cx);
+            (state.revision, state.parsed_content.clone())
+        });
+        let options = UpdateOptions {
+            revision,
+            pending_text: chunk.to_string(),
+            append: true,
+            mode: ParseMode::Compatible,
+            markdown_extensions: Arc::default(),
+        };
+        ParsedUpdate {
+            revision,
+            full_parse: false,
+            selection_compatible: true,
+            baseline_ack: false,
+            result: parse_content(TextViewFormat::Markdown, baseline, &options),
+        }
+    }
+
+    #[gpui::test]
+    fn stream_commits_a_parse_that_a_newer_chunk_overtook(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let answer = format!("# Answer\n\n{}", background_paragraph());
+        let state = cx.update(|cx| cx.new(|cx| TextViewState::markdown(&answer, cx)));
+        cx.run_until_parked();
+
+        // Chunks arriving faster than they parse always push the next chunk
+        // before the previous parse lands.
+        let parsed = push_and_parse(&state, "Streaming", cx);
+        state.update(cx, |state, cx| {
+            state.push_str(" tokens", cx);
+            state.commit_parsed_update(parsed, cx);
+            assert_eq!(state.source().as_str(), format!("{answer}Streaming"));
+        });
+
+        cx.run_until_parked();
+        state.read_with(cx, |state, _| {
+            assert_eq!(state.source().as_str(), format!("{answer}Streaming tokens"));
+        });
+    }
+
+    #[gpui::test]
+    fn a_parse_from_before_a_replacement_is_discarded(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let old = background_paragraph();
+        let state = cx.update(|cx| cx.new(|cx| TextViewState::markdown(&old, cx)));
+        cx.run_until_parked();
+
+        let parsed = push_and_parse(&state, " text", cx);
+        // Large enough to parse in the background, so the replacement is not
+        // committed yet when the older parse lands.
+        let replacement = "x".repeat(MAX_SYNC_PARSE_BYTES + 1);
+        state.update(cx, |state, cx| {
+            state.set_text(&replacement, cx);
+            state.commit_parsed_update(parsed, cx);
+            assert_eq!(state.source().as_str(), old);
+        });
+
+        cx.run_until_parked();
+        state.read_with(cx, |state, _| {
+            assert_eq!(state.source().as_str(), replacement.as_str());
         });
     }
 

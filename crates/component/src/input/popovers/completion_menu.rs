@@ -250,7 +250,8 @@ impl CompletionMenu {
             return false;
         }
 
-        cx.propagate();
+        // A key the menu takes stops here: propagated, a Return would go on to type its
+        // newline after the completion it accepted.
         if input::Enter::is_primary(&*action) {
             self.on_action_enter(window, cx);
         } else if action.partial_eq(&input::Escape) {

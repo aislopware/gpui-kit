@@ -211,7 +211,7 @@ impl CodeActionMenu {
             return false;
         }
 
-        cx.propagate();
+        // A key the menu takes stops here, as the completion menu's does.
         if input::Enter::is_primary(&*action) {
             self.on_action_enter(window, cx);
         } else if action.partial_eq(&input::Escape) {

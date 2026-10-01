@@ -111,7 +111,9 @@ fn accessibility_text(text: &Rope, cursor: usize) -> String {
     }
     let row = text.offset_to_point(cursor.min(text.len())).row;
     let first = row.saturating_sub(ACCESSIBILITY_PAGE_LINES / 2);
-    let last = (first + ACCESSIBILITY_PAGE_LINES).min(text.lines_len()).saturating_sub(1);
+    let last = (first + ACCESSIBILITY_PAGE_LINES)
+        .min(text.lines_len())
+        .saturating_sub(1);
     let start = text.line_start_offset(first);
     let end = text.line_end_offset(last).max(start);
     text.slice(start..end).to_string()

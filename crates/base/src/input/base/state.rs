@@ -6601,9 +6601,9 @@ mod tests {
             editor.update(cx, |state, cx| state.focus(window, cx));
         });
         cx.run_until_parked();
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         cx.simulate_keystrokes("cmd-f");
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         cx.simulate_keystrokes("ctrl-f");
         cx.run_until_parked();
         (editor, search_requests)

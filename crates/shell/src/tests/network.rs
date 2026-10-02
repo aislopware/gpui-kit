@@ -637,16 +637,19 @@ fn websocket_sends_ordinary_and_custom_protocol_headers(cx: &mut TestAppContext)
         .expect("nonblocking listener");
     let address = listener.local_addr().expect("listener address");
     let server = thread::spawn(move || {
-        let mut stream = (0..50)
-            .find_map(|_| match listener.accept() {
-                Ok((stream, _)) => Some(stream),
+        // A deadline, not a count of tries: on a loaded machine the client
+        // can take far longer than a few hundred milliseconds to connect.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(std::time::Instant::now() < deadline, "WebSocket connection");
                     thread::sleep(Duration::from_millis(10));
-                    None
                 }
                 Err(error) => panic!("WebSocket accept failed: {error}"),
-            })
-            .expect("WebSocket connection");
+            }
+        };
         // Accepted sockets can inherit the listener's nonblocking mode on macOS.
         stream.set_nonblocking(false).expect("blocking connection");
         stream

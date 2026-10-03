@@ -309,8 +309,12 @@ fn a_templated_panel_against_the_chain_it_replaces(cx: &mut TestAppContext) {
     const ITERATIONS: usize = 50;
     const ROUNDS: usize = 7;
 
-    let inline = time_board(cx, INLINE_WATCHLIST, ITERATIONS, ROUNDS);
-    let templated = time_board(cx, TEMPLATED_WATCHLIST, ITERATIONS, ROUNDS);
+    let [inline, templated] = time_boards(
+        cx,
+        [INLINE_WATCHLIST, TEMPLATED_WATCHLIST],
+        ITERATIONS,
+        ROUNDS,
+    );
 
     println!(
         "\n[H] template against builder chain — 40-row watchlist\
@@ -331,30 +335,56 @@ fn a_templated_panel_against_the_chain_it_replaces(cx: &mut TestAppContext) {
     );
 }
 
-fn time_board(
+/// The best CPU time per build of each of two boards, over `rounds` rounds
+/// of `iterations` builds.
+///
+/// The rounds alternate between the boards, so load from elsewhere on the
+/// machine falls on both alike: timed one after the other, a burst of load
+/// during either board's rounds alone decides the comparison.
+fn time_boards(
     cx: &mut TestAppContext,
-    source: &str,
+    sources: [&str; 2],
     iterations: usize,
     rounds: usize,
-) -> std::time::Duration {
-    let (runtime, mut context, object) = script_object(cx, source);
-    context.update(|window, cx| {
-        let mut build = || {
-            runtime
-                .build_snapshot(&object, None, crate::policy::default(), window, cx)
-                .expect("render")
-        };
-        build();
-
-        let mut best = std::time::Duration::MAX;
-        for _ in 0..rounds {
-            let started = std::time::Instant::now();
-            for _ in 0..iterations {
-                build();
-            }
-            best = best.min(started.elapsed() / iterations as u32);
+) -> [std::time::Duration; 2] {
+    let mut boards = sources.map(|source| script_object(cx, source));
+    for board in &mut boards {
+        time_builds(board, 1);
+    }
+    let mut best = [std::time::Duration::MAX; 2];
+    for _ in 0..rounds {
+        for (best, board) in best.iter_mut().zip(&mut boards) {
+            *best = (*best).min(time_builds(board, iterations));
         }
-        best
+    }
+    // A view's script object goes before the runtime it lives in, as locals
+    // dropped in reverse would; a tuple drops the runtime first.
+    for (runtime, context, object) in boards {
+        drop(object);
+        drop(context);
+        drop(runtime);
+    }
+    best
+}
+
+type Board = (
+    std::rc::Rc<crate::ShellRuntime>,
+    gpui::VisualTestContext,
+    crate::engine::ViewObject,
+);
+
+/// The CPU time per build of `iterations` builds of `board`.
+fn time_builds((runtime, context, object): &mut Board, iterations: usize) -> std::time::Duration {
+    context.update(|window, cx| {
+        // Each board's runtime is the app's while it builds.
+        runtime.set_global(cx);
+        let started = crate::metrics::thread_cpu_time();
+        for _ in 0..iterations {
+            runtime
+                .build_snapshot(object, None, crate::policy::default(), window, cx)
+                .expect("render");
+        }
+        (crate::metrics::thread_cpu_time() - started) / iterations as u32
     })
 }
 
@@ -474,8 +504,12 @@ fn what_automatic_templating_of_the_safe_helpers_would_buy(cx: &mut TestAppConte
     const ITERATIONS: usize = 50;
     const ROUNDS: usize = 7;
 
-    let plain = time_board(cx, BOARD_PLAIN, ITERATIONS, ROUNDS);
-    let templated = time_board(cx, BOARD_TEMPLATED_HELPERS, ITERATIONS, ROUNDS);
+    let [plain, templated] = time_boards(
+        cx,
+        [BOARD_PLAIN, BOARD_TEMPLATED_HELPERS],
+        ITERATIONS,
+        ROUNDS,
+    );
 
     println!(
         "\n[I] automatic templating of leaf helpers — 20-row board, 6 cells\

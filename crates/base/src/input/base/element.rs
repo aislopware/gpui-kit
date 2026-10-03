@@ -630,12 +630,13 @@ impl<M: InputModeKind> TextElement<M> {
         state: &InputBaseState<M>,
         line_height: Pixels,
         viewport: Size<Pixels>,
-        focused: bool,
+        window: &Window,
     ) -> (Pixels, bool) {
         if state.is_single_line() {
             return (px(0.), false);
         }
         let viewport_height = viewport.height;
+        let focused = state.focus_handle.is_focused(window);
         let was = state.scroll_handle.offset().y;
         // A caret's visual row through wrapping and folded regions.
         let display_y = |offset: usize, line_end_affinity: bool| {
@@ -713,16 +714,18 @@ impl<M: InputModeKind> TextElement<M> {
             },
         };
 
-        // Clamp to the text's height as this layout wraps it, so the frame shows the
-        // offset that persists. Inline-completion ghost lines are left out: they only
-        // ever add height, so this range lies inside the one the paint persists.
+        // Clamp to the height this layout scrolls over, so the frame shows the offset
+        // that persists: the text as it wraps, and past its last row the larger of the
+        // empty bottom and an inline completion's ghost lines, as the paint sizes it.
+        let ghost_lines_height = line_height * Self::ghost_line_count(state, window) as f32;
         let content_height = line_height * state.display_map.wrap_row_count()
             + empty_bottom_height(
                 state.is_code_editor(),
                 state.scroll_beyond_last_line,
                 viewport_height,
                 line_height,
-            );
+            )
+            .max(ghost_lines_height);
         let min_top = (viewport_height - content_height).min(px(0.));
         (scroll_top.clamp(min_top, px(0.)), resize_reveal_owned)
     }
@@ -1359,6 +1362,19 @@ impl<M: InputModeKind> TextElement<M> {
         Some(Rc::new(WhitespaceIndicators { space, tab }))
     }
 
+    /// How many lines an inline completion adds under the caret's line: those of its
+    /// text past the first, shown while the input has the focus. Counted without
+    /// shaping them, for the scroll resolved before any line is laid out.
+    fn ghost_line_count(state: &InputBaseState<M>, window: &Window) -> usize {
+        if !state.focus_handle.is_focused(window) {
+            return 0;
+        }
+        state
+            .extras
+            .inline_completion_item()
+            .map_or(0, |item| item.insert_text.split('\n').count() - 1)
+    }
+
     /// Compute inline completion ghost lines for rendering.
     ///
     /// Returns (first_line, ghost_lines) where:
@@ -1856,8 +1872,7 @@ impl<M: InputModeKind> TextElement<M> {
                     .iter()
                     .any(|span| !cache.widths.contains_key(span.token()))
         });
-        let focused = state.focus_handle.is_focused(window);
-        let (scroll_top, _) = Self::resolve_scroll_top(state, line_height, viewport, focused);
+        let (scroll_top, _) = Self::resolve_scroll_top(state, line_height, viewport, window);
         let (visible, _, _) =
             self.calculate_visible_range(state, line_height, viewport.height, scroll_top);
         let start = state.text.line_start_offset(visible.start);
@@ -2794,9 +2809,8 @@ impl<M: InputModeKind> Element for TextElement<M> {
         );
         let state = self.state.read(cx);
 
-        let focused = state.focus_handle.is_focused(window);
         let (scroll_top, resize_reveal_owned) =
-            Self::resolve_scroll_top(state, line_height, bounds.size, focused);
+            Self::resolve_scroll_top(state, line_height, bounds.size, window);
         let (visible_range, visible_buffer_lines, visible_top) =
             self.calculate_visible_range(state, line_height, bounds.size.height, scroll_top);
         let visible_start_offset = state.text.line_start_offset(visible_range.start);
@@ -4045,6 +4059,53 @@ mod tests {
             let furthest = state.input_bounds.size.height - state.scroll_size.height;
             assert!(-furthest > state.input_bounds.size.height);
             assert_eq!(painted.y, furthest);
+        });
+    }
+
+    /// Inline-completion ghost lines under the caret's last line add to the
+    /// scrollable height, and a scroll down to them holds from frame to frame.
+    #[gpui::test]
+    fn ghost_lines_below_the_last_line_can_be_scrolled_to(cx: &mut TestAppContext) {
+        let text = (0..10)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (editor, window) = decoration_editor(cx, &text, false);
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_cursor_position(lsp_types::Position::new(9, 6), window, cx);
+                state.extras.inline_completion.item = Some(lsp_types::InlineCompletionItem {
+                    insert_text: format!("()\n{}", ["ghost"; 30].join("\n")),
+                    filter_text: None,
+                    range: None,
+                    command: None,
+                    insert_text_format: None,
+                });
+            });
+            window.draw(cx).clear(cx);
+            let (line_height, scroll_height, viewport) = editor.read_with(cx, |state, _| {
+                let line_height = state.last_layout.as_ref().unwrap().line_height;
+                (
+                    line_height,
+                    state.scroll_size.height,
+                    state.input_bounds.size.height,
+                )
+            });
+            assert!(
+                scroll_height >= line_height * 40.,
+                "the ghost lines count in the scrollable height: {scroll_height:?}"
+            );
+
+            // Down to the last ghost line, as the wheel scrolls.
+            let bottom = viewport - scroll_height;
+            editor.update(cx, |state, _| {
+                state.scroll_handle.set_offset(point(px(0.), bottom));
+            });
+            window.draw(cx).clear(cx);
+            assert_eq!(editor.read(cx).scroll_handle.offset().y, bottom);
+            window.draw(cx).clear(cx);
+            assert_eq!(editor.read(cx).scroll_handle.offset().y, bottom);
         });
     }
 

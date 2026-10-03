@@ -75,8 +75,11 @@ impl GitDependencyStore {
         if !mirror.is_dir() {
             let temporary = temporary_path(&mirrors, &remote_key);
             let mut command = git_command();
+            // `--no-local`: a local path is cloned through Git's transport
+            // too, not by copying its object directory, which races any Git
+            // process working in it (a commit's background maintenance).
             command
-                .args(["clone", "--mirror", "--"])
+                .args(["clone", "--mirror", "--no-local", "--"])
                 .arg(dependency.git())
                 .arg(&temporary);
             if let Err(error) = run_command(name, "clone", command) {
@@ -475,6 +478,10 @@ const LOCK_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 fn git_command() -> Command {
     let mut command = Command::new("git");
     command
+        // No maintenance in the background: a commit, clone or fetch would
+        // otherwise leave a detached `git maintenance` working in a mirror
+        // the cache then renames and clones from, racing both.
+        .args(["-c", "maintenance.auto=false", "-c", "gc.auto=0"])
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "Never")
         .stdin(Stdio::null())
@@ -1003,6 +1010,31 @@ mod tests {
         );
     }
 
+    /// A local clone copies the source's object directory file by file, so a
+    /// file a Git process working in the source has there is copied into the
+    /// mirror, or vanishes mid-copy and fails the clone: the fixture's own
+    /// background maintenance did that to its `maintenance.lock` under load.
+    /// The mirror is cloned through Git's transport, which sends objects only,
+    /// and the cache's own Git commands start no maintenance of their own.
+    #[test]
+    fn a_mirror_of_a_local_repository_takes_none_of_its_object_files() {
+        let fixture = GitFixture::new();
+        fixture.commit("export const version = 1;", "first");
+        std::fs::write(fixture.remote.join(".git/objects/maintenance.lock"), "")
+            .expect("a maintenance lock in the source");
+        GitDependencyStore::new(fixture.cache.clone())
+            .materialize("omarchy-ui", &fixture.dependency(r#""branch": "main""#))
+            .expect("checkout");
+        let mirror = std::fs::read_dir(fixture.cache.join("mirrors"))
+            .expect("mirror directory")
+            .next()
+            .expect("one mirror")
+            .expect("mirror entry")
+            .path();
+        assert!(mirror.join("objects").is_dir());
+        assert!(!mirror.join("objects/maintenance.lock").exists());
+    }
+
     #[test]
     fn a_cached_mirror_with_the_wrong_origin_is_refused() {
         let fixture = GitFixture::new();
@@ -1044,6 +1076,7 @@ mod tests {
             &[
                 "clone",
                 "--mirror",
+                "--no-local",
                 "--",
                 fixture.remote.to_str().expect("UTF-8 fixture remote"),
                 mirror.to_str().expect("UTF-8 mirror path"),

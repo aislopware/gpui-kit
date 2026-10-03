@@ -330,3 +330,39 @@ impl Metrics {
 fn elapsed_nanos(started: instant::Instant) -> u64 {
     u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
+
+/// The CPU time the calling thread has run.
+///
+/// What a budget on script work, or a test comparing the cost of two pieces of
+/// work, has to count: the wall clock also counts the time other threads and
+/// processes held the CPU, which on a loaded machine can be more than the work
+/// itself. Where no thread CPU clock is read, the wall clock stands in.
+#[cfg(unix)]
+pub(crate) fn thread_cpu_time() -> Duration {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: POSIX `clock_gettime` writes one `timespec` through the valid
+    // pointer it is given; `CLOCK_THREAD_CPUTIME_ID` is supported on Linux and
+    // macOS.
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
+    if result != 0 {
+        return wall_clock();
+    }
+    Duration::new(time.tv_sec as u64, time.tv_nsec as u32)
+}
+
+/// The CPU time the calling thread has run; see the unix version.
+#[cfg(not(unix))]
+pub(crate) fn thread_cpu_time() -> Duration {
+    wall_clock()
+}
+
+/// The wall clock since the first time it was read in this process.
+fn wall_clock() -> Duration {
+    thread_local! {
+        static START: instant::Instant = instant::Instant::now();
+    }
+    START.with(instant::Instant::elapsed)
+}

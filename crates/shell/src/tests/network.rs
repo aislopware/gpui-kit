@@ -1,6 +1,6 @@
 use std::{
     io::{Read as _, Write as _},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     ops::Deref,
     sync::mpsc,
     thread,
@@ -540,6 +540,88 @@ fn websocket_performs_a_real_handshake_off_thread(cx: &mut TestAppContext) {
     server.join().expect("WebSocket server");
 }
 
+/// The probe's render once `settled` holds for it, turning the test clock and
+/// running what is ready while the client's I/O threads catch up, for at most
+/// ten seconds.
+fn render_until(
+    context: &mut VisualTestContext,
+    view: &Entity<ScriptView>,
+    settled: impl Fn(&str) -> bool,
+) -> String {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        draw(context, view);
+        let rendered = snapshot(context, view);
+        if settled(&rendered) {
+            return rendered;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the probe never settled: {rendered}"
+        );
+        thread::sleep(Duration::from_millis(5));
+        context.executor().advance_clock(Duration::from_millis(10));
+        context.run_until_parked();
+    }
+}
+
+/// Reads an HTTP request's head, up to the blank line that ends it, from a
+/// stream accepted off a nonblocking listener.
+///
+/// On macOS such a stream is nonblocking too, so a single read made before the
+/// client's request arrives fails with `WouldBlock`, and one made while it is
+/// arriving can return part of it. The stream is put back to blocking, with a
+/// deadline, and read until the head is whole.
+fn read_request_head(stream: &mut TcpStream) -> String {
+    stream.set_nonblocking(false).expect("blocking stream");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("read deadline");
+    let mut head = Vec::new();
+    let mut chunk = [0; 1024];
+    while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+        let count = stream.read(&mut chunk).expect("handshake request");
+        assert!(count > 0, "the client closed before its request ended");
+        head.extend_from_slice(&chunk[..count]);
+    }
+    String::from_utf8_lossy(&head).into_owned()
+}
+
+/// Why [`read_request_head`] exists: on macOS a stream accepted off a
+/// nonblocking listener inherits the mode, so reading it before the client
+/// writes fails instead of waiting. The headers test read its request so,
+/// and failed whenever a loaded machine let the server read first.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_stream_accepted_off_a_nonblocking_listener_does_not_wait_for_its_client() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    let client = TcpStream::connect(listener.local_addr().expect("address")).expect("connect");
+    let mut stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => thread::yield_now(),
+            Err(error) => panic!("accept failed: {error}"),
+        }
+    };
+    let error = stream
+        .read(&mut [0; 16])
+        .expect_err("nothing was written yet");
+    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+
+    // Written only once the server is reading, the request is still read whole.
+    let reader = thread::spawn(move || read_request_head(&mut stream));
+    let mut client = client;
+    client.write_all(b"GET / HTTP/1.1\r\n").expect("first part");
+    client
+        .write_all(b"Host: example\r\n\r\n")
+        .expect("second part");
+    let head = reader.join().expect("reader");
+    assert_eq!(head, "GET / HTTP/1.1\r\nHost: example\r\n\r\n");
+}
+
 #[gpui::test]
 fn websocket_sends_ordinary_and_custom_protocol_headers(cx: &mut TestAppContext) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("WebSocket listener");
@@ -561,9 +643,7 @@ fn websocket_sends_ordinary_and_custom_protocol_headers(cx: &mut TestAppContext)
                 Err(error) => panic!("WebSocket accept failed: {error}"),
             }
         };
-        let mut request = [0; 4096];
-        let count = stream.read(&mut request).expect("handshake request");
-        let request = String::from_utf8_lossy(&request[..count]).to_ascii_lowercase();
+        let request = read_request_head(&mut stream).to_ascii_lowercase();
         assert!(request.contains("accept-language: zh-cn\r\n"), "{request}");
         assert!(
             request.contains("user-agent: protocol-client/1\r\n"),
@@ -994,11 +1074,12 @@ fn websocket_write_rejects_after_the_server_closes(cx: &mut TestAppContext) {
     let (_runtime, view, mut context) = probe(cx, &source);
     context.run_until_parked();
     server.join().expect("WebSocket server");
-    thread::sleep(Duration::from_millis(10));
-    context.executor().advance_clock(Duration::from_millis(10));
-    context.run_until_parked();
-    draw(&mut context, &view);
-    let rendered = snapshot(&mut context, &view);
+    // The client's socket is read and written on threads of its own: wait for
+    // the probe to settle rather than for a fixed time, which a loaded machine
+    // outlasted with the probe still pending.
+    let rendered = render_until(&mut context, &view, |rendered| {
+        !rendered.contains("pending")
+    });
     assert!(
         rendered.contains("rejected:WebSocket connection is closed"),
         "{rendered}"

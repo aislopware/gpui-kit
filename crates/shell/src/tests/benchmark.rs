@@ -932,25 +932,26 @@ fn one_recorded_call_is_priced_stage_by_stage(cx: &mut TestAppContext) {
         "stage", "ns per call", "added", "what the step adds"
     );
 
+    let stages = [
+        ("js", "QuickJS interpreting the builder"),
+        ("crossing", "the bare crossing into Rust"),
+        ("name", "the method name as a Rust String"),
+        (
+            "arguments",
+            "the argument list, in a JS array, as `Bridged`",
+        ),
+        ("recorded", "dispatch and the arena write"),
+        ("shipped", "— what the prelude binds instead"),
+    ];
     let mut shipped = Vec::new();
     for (family, argument, label) in [
         ("nullary", None, "items_center()"),
         ("parametric", Some("\"#f8f8f8\""), "bg(\"#f8f8f8\")"),
     ] {
         println!("{label}:");
-        let mut previous = floor;
-        for (stage, adds) in [
-            ("js", "QuickJS interpreting the builder"),
-            ("crossing", "the bare crossing into Rust"),
-            ("name", "the method name as a Rust String"),
-            (
-                "arguments",
-                "the argument list, in a JS array, as `Bridged`",
-            ),
-            ("recorded", "dispatch and the arena write"),
-            ("shipped", "— what the prelude binds instead"),
-        ] {
-            let call = match argument {
+        let calls: Vec<String> = stages
+            .iter()
+            .map(|(stage, _)| match argument {
                 None => format!(
                     "__bench.bare(__bench.stages.{family}.{stage}, {BENCH_ELEMENTS}, \
                      {BENCH_PER_ELEMENT})"
@@ -959,14 +960,16 @@ fn one_recorded_call_is_priced_stage_by_stage(cx: &mut TestAppContext) {
                     "__bench.valued(__bench.stages.{family}.{stage}, {BENCH_ELEMENTS}, \
                      {BENCH_PER_ELEMENT}, {value})"
                 ),
-            };
-            let elapsed = time_stage(&runtime, &call);
+            })
+            .collect();
+        let mut previous = floor;
+        for ((stage, adds), elapsed) in stages.iter().zip(time_stages(&runtime, &calls)) {
             println!(
                 "{stage:>11} | {:>9.0} ns | {:>9.0} ns | {adds}",
                 per_call(elapsed),
                 per_call(elapsed) - per_call(previous),
             );
-            if stage == "shipped" {
+            if *stage == "shipped" {
                 shipped.push((label, per_call(previous), per_call(elapsed)));
             }
             previous = elapsed;
@@ -988,6 +991,29 @@ fn one_recorded_call_is_priced_stage_by_stage(cx: &mut TestAppContext) {
     }
 }
 
+/// The best CPU time of each of `calls`, their rounds interleaved so load from
+/// elsewhere on the machine falls on every stage alike: timed one stage after
+/// another, a burst of load during one stage's rounds alone could reverse the
+/// comparison the test makes between two of them.
+fn time_stages(runtime: &std::rc::Rc<ShellRuntime>, calls: &[String]) -> Vec<std::time::Duration> {
+    // The first round pays for the arena's first growth and for QuickJS's
+    // inline caches, neither of which a steady-state description pays.
+    for call in calls {
+        runtime.eval_for_benchmark(call).expect("stage");
+        runtime.reset_arena_for_benchmark();
+    }
+    let mut best = vec![std::time::Duration::MAX; calls.len()];
+    for _ in 0..ROUNDS {
+        for (best, call) in best.iter_mut().zip(calls) {
+            let started = crate::metrics::thread_cpu_time();
+            runtime.eval_for_benchmark(call).expect("stage");
+            *best = (*best).min(crate::metrics::thread_cpu_time() - started);
+            runtime.reset_arena_for_benchmark();
+        }
+    }
+    best
+}
+
 fn time_stage(runtime: &std::rc::Rc<ShellRuntime>, call: &str) -> std::time::Duration {
     // The first round pays for the arena's first growth and for QuickJS's
     // inline caches, neither of which a steady-state description pays.
@@ -996,9 +1022,9 @@ fn time_stage(runtime: &std::rc::Rc<ShellRuntime>, call: &str) -> std::time::Dur
 
     let mut best = std::time::Duration::MAX;
     for _ in 0..ROUNDS {
-        let started = Instant::now();
+        let started = crate::metrics::thread_cpu_time();
         runtime.eval_for_benchmark(call).expect("stage");
-        best = best.min(started.elapsed());
+        best = best.min(crate::metrics::thread_cpu_time() - started);
         runtime.reset_arena_for_benchmark();
     }
     best

@@ -265,6 +265,23 @@ append, and Markdown that completes as it streams (`**bo` becoming bold
 blocks the update reaches are compared, and frames are requested only while
 something is still fading. Reduced motion skips the fade.
 
+A model streams at its own pace, and a fixed fade either pulses chunk by
+chunk on a fast stream or finishes long before the next chunk on a slow one.
+`with_stream_fade_pacing(min, max)` paces the fade to the stream instead: each
+update fades over three times the running average of the gaps between
+updates, kept between `min` and `max`. `stream_fade` still turns the fade on
+and times the first update, before there is a gap to go by. A pause, such as
+a model thinking, counts as the longest gap the bounds follow, so the pace
+comes back within a few updates. An update parsed with more already waiting
+behind it fades 1.3 times faster for each, so a backlog catches up. The
+stagger compresses against the paced fade.
+
+```rust
+TextViewMotion::default()
+    .with_stream_fade(Duration::from_millis(280))
+    .with_stream_fade_pacing(Duration::from_millis(120), Duration::from_millis(400))
+```
+
 `TextViewState::set_range_highlights` paints backgrounds behind ranges of
 `rendered_text()`, the text plain copy produces, so an application can show
 its search results or citations without reparsing or restyling the document.

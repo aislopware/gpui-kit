@@ -648,6 +648,7 @@ impl TextViewState {
                     &self.parsed_content.document,
                     &content.document,
                     Instant::now(),
+                    self.revision.saturating_sub(revision),
                 );
                 // This result may cover only part of the queued appends.
                 // Keep the uncommitted tail pending from this document's end,

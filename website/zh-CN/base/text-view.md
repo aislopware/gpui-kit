@@ -231,6 +231,14 @@ TextView::new(&document).motion(
 
 不设错位时每次更新整块一起淡入。设了错位时，追加的文字按词拆分（词带上其后的空白），中日韩文字按字拆分；一次追加很长时会压缩错位，保证最后一个词在一个淡入时长内开始。追踪器比较的是渲染后的文字而不是源码字节，因此 `set_text` 传入以当前文本为前缀的更长文本会被视为追加；流式过程中被补齐的 Markdown 标记（`**bo` 变成粗体 `bold`）只让发生变化的字形重新淡入，不会整段闪烁。每次只比较更新触及的块，并且只在还有文字在淡入时才请求下一帧。系统开启减少动态效果时跳过淡入。
 
+模型按自己的节奏流式输出。固定的淡入时长在快的流里会一块一块地闪，在慢的流里又会在下一块到达之前早早结束。`with_stream_fade_pacing(min, max)` 让淡入跟随流的节奏：每次更新的淡入时长是更新间隔滑动平均值的三倍，并限制在 `min` 与 `max` 之间。`stream_fade` 仍负责开启淡入，并决定第一次更新（还没有间隔可参考时）的时长。停顿（例如模型在思考）按上下限所能跟随的最长间隔计算，流恢复后几次更新内节奏就会回来。解析时后面已有更新在排队的，每多一个就快 1.3 倍，让积压尽快追上。错位按调整后的淡入时长压缩。
+
+```rust
+TextViewMotion::default()
+    .with_stream_fade(Duration::from_millis(280))
+    .with_stream_fade_pacing(Duration::from_millis(120), Duration::from_millis(400))
+```
+
 `TextViewState::set_range_highlights` 在 `rendered_text()`（与纯文本复制得到的文字一致）的指定范围后面绘制背景，应用可以借此显示搜索结果或引用位置，无需重新解析或修改文档样式。这些范围只参与绘制、不参与排版，因此不会改变布局。Markdown 源码里的范围（例如 `selected_source_range()` 返回的范围）可以用 `rendered_text().range_for_source(range)` 转换过来。`reveal_range` 通过视图自身的列表、外层 `gpui::list`，或者其他容器上的 `TextView::on_reveal`，把范围起点所在的行滚动到可见区域内；规则详见[高亮文本范围](../component/text-view.md#高亮文本范围)和[滚动到范围](../component/text-view.md#滚动到范围)。
 
 通过 `SelectionFormat` 可以选择复制渲染文本或 Markdown 源码。链接路由、代码块操作、表格操作、图片和 Markdown 插件继续使用与兼容 API 相同的 builder，详见 [gpui-component TextView 文档](../component/text-view.md)。

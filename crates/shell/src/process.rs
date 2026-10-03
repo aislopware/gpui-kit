@@ -440,6 +440,19 @@ mod tests {
     use std::time::Duration;
 
     #[cfg(unix)]
+    /// The deadline of the tests that are not about the deadline: long past
+    /// anything they run, so the outcome they check never races how loaded
+    /// the machine is. A 2 s deadline here timed out a command that had not
+    /// yet written a byte while the suite ran beside parallel builds.
+    const NOT_THE_DEADLINE: Duration = Duration::from_secs(600);
+
+    #[cfg(unix)]
+    /// How long a command that should have been cut short may take, spawn
+    /// included, on a loaded machine: far less than the `sleep 600` it runs,
+    /// far more than spawning one.
+    const CUT_SHORT: Duration = Duration::from_secs(60);
+
+    #[cfg(unix)]
     use std::ffi::OsStr;
 
     #[cfg(unix)]
@@ -470,7 +483,7 @@ mod tests {
         let result = run_bounded(
             "/bin/sh",
             &["-c".into(), "printf out; printf err >&2".into()],
-            Limits::for_test(Duration::from_secs(2), 1024),
+            Limits::for_test(NOT_THE_DEADLINE, 1024),
             Cancellation::new(),
         )
         .expect("command");
@@ -485,7 +498,7 @@ mod tests {
         let result = run_bounded(
             "/usr/bin/env",
             &[],
-            Limits::for_test(Duration::from_secs(2), 1024),
+            Limits::for_test(NOT_THE_DEADLINE, 1024),
             Cancellation::new(),
         )
         .expect("environment probe");
@@ -513,13 +526,13 @@ mod tests {
         let started = Instant::now();
         let error = run_bounded(
             "/bin/sh",
-            &["-c".into(), "(sleep 5) & exit 0".into()],
+            &["-c".into(), "(sleep 600) & exit 0".into()],
             Limits::for_test(Duration::from_millis(50), 1024),
             Cancellation::new(),
         )
         .expect_err("the inherited pipes must remain under the deadline");
         assert!(error.contains("timed out"), "{error}");
-        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(started.elapsed() < CUT_SHORT);
     }
 
     #[cfg(unix)]
@@ -528,7 +541,7 @@ mod tests {
         let error = run_bounded(
             "/bin/sh",
             &["-c".into(), "yes x | head -c 4096".into()],
-            Limits::for_test(Duration::from_secs(2), 128),
+            Limits::for_test(NOT_THE_DEADLINE, 128),
             Cancellation::new(),
         )
         .expect_err("limit");
@@ -541,7 +554,7 @@ mod tests {
         let error = run_bounded(
             "/bin/sh",
             &["-c".into(), "yes x | head -c 4096 >&2".into()],
-            Limits::for_test(Duration::from_secs(2), 128),
+            Limits::for_test(NOT_THE_DEADLINE, 128),
             Cancellation::new(),
         )
         .expect_err("limit");
@@ -556,13 +569,13 @@ mod tests {
         let started = std::time::Instant::now();
         let error = run_bounded(
             "/bin/sh",
-            &["-c".into(), "sleep 5".into()],
-            Limits::for_test(Duration::from_secs(2), 1024),
+            &["-c".into(), "sleep 600".into()],
+            Limits::for_test(NOT_THE_DEADLINE, 1024),
             cancellation,
         )
         .expect_err("cancelled");
         assert!(error.contains("cancelled"), "{error}");
-        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(started.elapsed() < CUT_SHORT);
     }
 
     #[cfg(windows)]

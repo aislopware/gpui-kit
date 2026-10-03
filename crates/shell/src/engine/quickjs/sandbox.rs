@@ -55,7 +55,7 @@
 use std::{
     cell::Cell,
     sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use rquickjs::{
@@ -418,7 +418,8 @@ pub fn max_stack_size_bytes() -> usize {
     1024 * 1024
 }
 
-/// How long one host call may keep the interpreter before it is cut off.
+/// How much CPU time one host call may keep the interpreter for before it is
+/// cut off.
 ///
 /// Kept private: the numbers are policy, not API, and tests need a version with
 /// a millisecond deadline so they finish quickly.
@@ -492,7 +493,10 @@ enum ExecutionWindow {
 
 fn deadline(budgets: Budgets) -> impl FnMut() -> bool + 'static {
     let mut window = None;
-    let mut started = Instant::now();
+    // The interpreter's own time, not the wall clock's: a render the machine
+    // left waiting for the CPU has not kept the interpreter, and cutting it off
+    // would fail the view because the machine was busy.
+    let mut started = crate::metrics::thread_cpu_time();
 
     move || {
         let current = match scope::current_generation() {
@@ -501,7 +505,7 @@ fn deadline(budgets: Budgets) -> impl FnMut() -> bool + 'static {
         };
         if window != Some(current) {
             window = Some(current);
-            started = Instant::now();
+            started = crate::metrics::thread_cpu_time();
         }
 
         let budget = match scope::current_phase() {
@@ -510,13 +514,16 @@ fn deadline(budgets: Budgets) -> impl FnMut() -> bool + 'static {
             None => budgets.detached,
         };
 
-        started.elapsed() > budget
+        crate::metrics::thread_cpu_time().saturating_sub(started) > budget
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, MutexGuard};
+    use std::{
+        sync::{Mutex, MutexGuard},
+        time::Instant,
+    };
 
     use rquickjs::{Context as JsContext, Runtime as JsRuntime, Value};
 

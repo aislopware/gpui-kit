@@ -55,7 +55,7 @@ use crate::engine::quickjs::js_error;
 use std::{
     cell::Cell,
     sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use rquickjs::{
@@ -748,7 +748,8 @@ pub fn max_stack_size_bytes() -> usize {
     1024 * 1024
 }
 
-/// How long one host call may keep the interpreter before it is cut off.
+/// How much CPU time one host call may keep the interpreter for before it is
+/// cut off.
 ///
 /// These are a watchdog for a script that will never return — an endless loop,
 /// a recursion that never bottoms out — not a performance target. Cutting off a
@@ -912,7 +913,10 @@ pub(super) fn explain_interruption(message: &str) -> Option<String> {
 
 fn deadline(budgets: Budgets) -> impl FnMut() -> bool + 'static {
     let mut window = None;
-    let mut started = Instant::now();
+    // The interpreter's own time, not the wall clock's: a render the machine
+    // left waiting for the CPU has not kept the interpreter, and cutting it off
+    // would fail the view because the machine was busy.
+    let mut started = crate::metrics::thread_cpu_time();
     let mut warned = false;
 
     move || {
@@ -922,7 +926,7 @@ fn deadline(budgets: Budgets) -> impl FnMut() -> bool + 'static {
         };
         if window != Some(current) {
             window = Some(current);
-            started = Instant::now();
+            started = crate::metrics::thread_cpu_time();
             warned = false;
             // An interrupt nobody reported belongs to a call that is over.
             INTERRUPTION.with(|interruption| interruption.set(None));
@@ -930,7 +934,7 @@ fn deadline(budgets: Budgets) -> impl FnMut() -> bool + 'static {
 
         let phase = scope::current_phase();
         let budget = budgets.limit(phase);
-        let elapsed = started.elapsed();
+        let elapsed = crate::metrics::thread_cpu_time().saturating_sub(started);
 
         // Said while the call is still running, because a call that finishes
         // leaves no other trace of having been slow.
@@ -955,7 +959,10 @@ fn deadline(budgets: Budgets) -> impl FnMut() -> bool + 'static {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, MutexGuard};
+    use std::{
+        sync::{Mutex, MutexGuard},
+        time::Instant,
+    };
 
     use rquickjs::{Context as JsContext, Runtime as JsRuntime, Value};
 

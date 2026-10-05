@@ -3,15 +3,14 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, ElementId, Entity, InteractiveElement, IntoElement, ParentElement, RenderOnce,
     Role, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
-    prelude::FluentBuilder as _, svg,
+    prelude::FluentBuilder as _,
 };
 use gpui_base::RadioGroup;
 use rust_i18n::t;
 
 use crate::{
-    ActiveTheme as _, IconName, Sizable, Size, StyledExt as _, ThemeStyled as _,
+    ActiveTheme as _, Icon, IconName, Sizable, Size, StyledExt as _, ThemeStyled as _,
     button::{Button, ButtonVariants as _},
-    icon::IconNamed as _,
     input::Input,
     kbd::Kbd,
 };
@@ -888,9 +887,8 @@ impl RenderOnce for QuestionnaireChoice {
                 .refine_style(&self.indicator_style)
                 .when(selected && multiple, |this| {
                     this.child(
-                        svg()
-                            .size(metrics.indicator_check_size)
-                            .path(IconName::Check.path())
+                        Icon::new(IconName::Check)
+                            .with_size(Size::Size(metrics.indicator_check_size))
                             .text_color(colors.primary_foreground),
                     )
                 })

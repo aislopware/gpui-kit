@@ -2,9 +2,9 @@ use std::{rc::Rc, sync::Arc};
 
 use crate::{ActiveTheme, Sizable, Size};
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, Global, Hsla, IntoElement, Pixels, Radians,
-    Render, RenderOnce, SharedString, StyleRefinement, Styled, Svg, Transformation, Window,
-    prelude::FluentBuilder as _, svg,
+    AnyElement, App, AppContext, Context, Entity, Global, Hsla, IntoElement, ParentElement as _,
+    Pixels, Radians, Render, RenderOnce, SharedString, StyleRefinement, Styled, Svg,
+    Transformation, Window, div, prelude::FluentBuilder as _, px, svg,
 };
 pub use gpui_kit_assets::IconNamed;
 
@@ -104,6 +104,19 @@ pub fn resolve_icon_path(path: SharedString, cx: &App) -> SharedString {
         _ => path,
     }
 }
+
+/// How an application paints the icons components name by path, in place of their SVGs:
+/// given the asset path (`icons/check.svg`), the icon's side and its color, the element to
+/// draw, or `None` to draw the SVG as before.
+///
+/// An application whose own icons come from elsewhere (the operating system's symbols, a font)
+/// sets one, so the components' checkmarks, chevrons and close buttons match the rest of it.
+/// A turned icon keeps its SVG. The painter is asked with the icon's own path; one it declines
+/// is drawn from the path [`set_icon_resolver`]'s resolver gives.
+#[derive(Clone)]
+pub struct IconPainter(pub Rc<dyn Fn(&SharedString, Pixels, Hsla) -> Option<AnyElement>>);
+
+impl Global for IconPainter {}
 
 #[derive(Clone)]
 pub(crate) enum IconSource {
@@ -210,6 +223,39 @@ impl Icon {
         self
     }
 
+    /// The icon as the application's [`IconPainter`] draws it, if one is set and takes it.
+    fn painted(&self, text_size: Pixels, fallback_color: Hsla, cx: &App) -> Option<AnyElement> {
+        let IconSource::Path(path) = &self.source else {
+            return None;
+        };
+        if self.transformation.is_some() {
+            return None;
+        }
+        let painter = cx.try_global::<IconPainter>()?.0.clone();
+        let side = match self.size {
+            Some(Size::Size(side)) => side,
+            Some(Size::XSmall) => px(12.),
+            Some(Size::Small) => px(14.),
+            Some(Size::Medium) => px(16.),
+            Some(Size::Large) => px(24.),
+            None => text_size,
+        };
+        let painted = painter(path, side, self.text_color.unwrap_or(fallback_color))?;
+        let has_base_size = self.style.size.width.is_some() || self.style.size.height.is_some();
+        let style = self.style.clone();
+        Some(
+            div()
+                .map(|mut this| {
+                    *this.style() = style;
+                    this
+                })
+                .flex_shrink_0()
+                .when(!has_base_size, |this| this.size(side))
+                .child(painted)
+                .into_any_element(),
+        )
+    }
+
     fn into_svg(self, text_size: Pixels, fallback_color: Hsla) -> Svg {
         let text_color = self.text_color.unwrap_or(fallback_color);
         let has_base_size = self.style.size.width.is_some() || self.style.size.height.is_some();
@@ -260,8 +306,11 @@ impl Sizable for Icon {
 impl RenderOnce for Icon {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let text_size = window.text_style().font_size.to_pixels(window.rem_size());
-        self.resolved(cx)
-            .into_svg(text_size, window.text_style().color)
+        let color = window.text_style().color;
+        match self.painted(text_size, color, cx) {
+            Some(painted) => painted,
+            None => self.resolved(cx).into_svg(text_size, color).into_any_element(),
+        }
     }
 }
 
@@ -274,9 +323,15 @@ impl From<Icon> for AnyElement {
 impl Render for Icon {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let text_size = window.text_style().font_size.to_pixels(window.rem_size());
-        self.clone()
-            .resolved(cx)
-            .into_svg(text_size, cx.theme().foreground)
+        let color = cx.theme().foreground;
+        match self.painted(text_size, color, cx) {
+            Some(painted) => painted,
+            None => self
+                .clone()
+                .resolved(cx)
+                .into_svg(text_size, color)
+                .into_any_element(),
+        }
     }
 }
 
@@ -381,5 +436,49 @@ mod tests {
                 [search.to_string(), IconName::Check.path().to_string()]
             );
         });
+    }
+
+    /// An application's painter draws the icons components name by path, at their side and
+    /// color; a turned icon, and one the painter declines, keep their SVG.
+    #[gpui::test]
+    fn an_icon_painter_draws_named_icons(cx: &mut gpui::TestAppContext) {
+        use std::cell::RefCell;
+
+        struct Icons;
+        impl Render for Icons {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .child(Icon::new(IconName::Check).with_size(Size::Size(px(13.))))
+                    .child(Icon::new(IconName::ChevronDown).rotate(gpui::radians(1.0)))
+                    .child(Icon::new(IconName::Close))
+            }
+        }
+        let asked: Rc<RefCell<Vec<(String, Pixels)>>> = Rc::default();
+        cx.update({
+            let asked = asked.clone();
+            move |cx| {
+                crate::init(cx);
+                cx.set_global(IconPainter(Rc::new(move |path, side, _color| {
+                    asked.borrow_mut().push((path.to_string(), side));
+                    path.ends_with("check.svg")
+                        .then(|| div().size(side).into_any_element())
+                })));
+            }
+        });
+        let (_, cx) = cx.add_window_view(|_, _| Icons);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let asked = asked.borrow();
+        assert!(
+            asked.contains(&("icons/check.svg".to_owned(), px(13.))),
+            "{asked:?}"
+        );
+        assert!(
+            !asked.iter().any(|(path, _)| path.contains("chevron")),
+            "a turned icon"
+        );
+        assert!(
+            asked.iter().any(|(path, _)| path.ends_with("close.svg")),
+            "asked, declined"
+        );
     }
 }

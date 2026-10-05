@@ -1936,6 +1936,90 @@ mod tests {
             "the trailing word wraps to a second line: {text_lines:?}"
         );
     }
+    /// UAX #14 forbids a break after an opening bracket, so a bold lead, an
+    /// opening bracket and inline code never wrap between the bracket and the
+    /// code: the bracket goes down with the code. Only where the bracketed code
+    /// is wider than a whole line does the wrapper break before the code, so
+    /// the line it starts does not overflow; those widths are left out.
+    #[test]
+    fn an_opening_bracket_stays_with_the_inline_code_after_it() {
+        use super::super::inline::test_fonts::{BODY, MONO, WideMonoTextSystem};
+        use gpui::{Empty, HighlightStyle, TestApp};
+
+        let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+        let mut window = app.open_window(|_, _| Empty);
+        let style = TextStyle {
+            font_family: BODY.into(),
+            font_size: AbsoluteLength::Pixels(px(10.)),
+            ..Default::default()
+        };
+        let text = "The store is not in scope (src/refresh.rs:4) store is never passed in";
+        let bold = 0..text.find(" (").unwrap();
+        let code_start = text.find("src/").unwrap();
+        let code = code_start..text.find(") store").unwrap();
+        let items = vec![MeasureItem::Text {
+            text: text.into(),
+            links: vec![],
+            highlights: vec![
+                (
+                    bold,
+                    InlineHighlight {
+                        style: HighlightStyle {
+                            font_weight: Some(gpui::FontWeight::BOLD),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                ),
+                (
+                    code,
+                    InlineHighlight {
+                        font_family: Some(MONO.into()),
+                        font_size_scale: Some(0.875),
+                        ..Default::default()
+                    },
+                ),
+            ],
+        }];
+        let bracketed = window.update(|_, window, cx| {
+            let one = vec![MeasureItem::Text {
+                text: "(src/refresh.rs:4)".into(),
+                links: vec![],
+                highlights: vec![(
+                    1..17,
+                    InlineHighlight {
+                        font_family: Some(MONO.into()),
+                        font_size_scale: Some(0.875),
+                        ..Default::default()
+                    },
+                )],
+            }];
+            layout_flow(&one, &[None], &style, None, window, cx)
+                .size
+                .width
+        });
+        let mut broken = Vec::new();
+        for width in (60..=400).map(|w| px(w as f32)).filter(|w| *w >= bracketed) {
+            let layout = window.update(|_, window, cx| {
+                layout_flow(&items, &[None], &style, Some(width), window, cx)
+            });
+            let mut lines: Vec<(Pixels, String)> = Vec::new();
+            for fragment in &layout.fragments {
+                if let PositionedFragment::Text { text, origin, .. } = fragment {
+                    // Inline code sits a hair lower on its line, at its own baseline.
+                    match lines.last_mut() {
+                        Some((y, line)) if (origin.y - *y).abs() < px(4.) => line.push_str(text),
+                        _ => lines.push((origin.y, text.to_string())),
+                    }
+                }
+            }
+            if lines.iter().any(|(_, line)| line.trim_end().ends_with('(')) {
+                broken.push((width, lines));
+            }
+        }
+        assert!(broken.is_empty(), "a line ends at the bracket: {broken:#?}");
+    }
+
     #[test]
     fn long_inline_code_wraps_in_mixed_flow() {
         use super::super::inline::test_fonts::{BODY, MONO, WideMonoTextSystem};

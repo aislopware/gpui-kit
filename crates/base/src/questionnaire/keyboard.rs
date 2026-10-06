@@ -23,7 +23,6 @@ pub fn handle_key_down(
     let modifiers = event.keystroke.modifiers;
     let key = event.keystroke.key.as_str();
     let input_focused = state.read(cx).is_current_input_focused(window);
-    let input_has_text = input_focused && state.read(cx).current_input_has_text(cx);
     let single_radio_focused = {
         let state = state.read(cx);
         state
@@ -40,14 +39,10 @@ pub fn handle_key_down(
         false
     } else if input_focused {
         match key {
+            // The arrows are the text's, and an empty answer's reach the
+            // answers through `leave_empty_input`.
             "enter" if focused_answer_is_filled(state, window, cx) => {
                 state.update(cx, |state, cx| state.confirm_current(window, cx))
-            }
-            "up" if !input_has_text => {
-                state.update(cx, |state, cx| state.focus_previous_answer(window, cx))
-            }
-            "down" if !input_has_text => {
-                state.update(cx, |state, cx| state.focus_next_answer(window, cx))
             }
             _ => false,
         }
@@ -85,6 +80,32 @@ pub fn handle_key_down(
     if handled {
         window.prevent_default();
     }
+}
+
+/// Moves from the active item's freeform answer, while it is focused and
+/// empty, to the answer above it (`up`) or below it, as the arrows move between
+/// answers. With text in it the arrows are the text's: the answer is
+/// multi-line, so they move between its lines. The root runs this before the
+/// answer's own `MoveUp` and `MoveDown`, which would take the arrow even on an
+/// empty answer. Returns whether focus moved.
+pub fn leave_empty_input(
+    state: &Entity<QuestionnaireState>,
+    up: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let empty = {
+        let state = state.read(cx);
+        state.is_current_input_focused(window) && !state.current_input_has_text(cx)
+    };
+    empty
+        && state.update(cx, |state, cx| {
+            if up {
+                state.focus_previous_answer(window, cx)
+            } else {
+                state.focus_next_answer(window, cx)
+            }
+        })
 }
 
 fn focused_answer_is_filled(state: &Entity<QuestionnaireState>, window: &Window, cx: &App) -> bool {

@@ -1,6 +1,6 @@
 use std::{collections::HashSet, time::Duration};
 
-use crate::input::{InputEvent, InputState};
+use crate::input::{InputEvent, TextareaState};
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable as _, SharedString, Subscription,
     Task, Window,
@@ -68,6 +68,9 @@ impl QuestionnaireState {
                 let state = input.state();
                 state.update(cx, |state, cx| {
                     state.set_disabled(item.is_disabled() || input.is_disabled(), cx);
+                    // Enter is the questionnaire's: it confirms a filled answer and
+                    // stays put on an empty one, and Shift-Enter breaks the line.
+                    state.set_submit_on_enter(true, cx);
                 });
 
                 let value = state.read(cx).value();
@@ -291,7 +294,7 @@ impl QuestionnaireState {
         self.complete
     }
 
-    pub fn input_state(&self, name: &str) -> Option<Entity<InputState>> {
+    pub fn input_state(&self, name: &str) -> Option<Entity<TextareaState>> {
         self.item_definition(name)?
             .input()
             .map(|input| input.state().clone())
@@ -1004,7 +1007,7 @@ impl QuestionnaireState {
         true
     }
 
-    fn on_input_change(&mut self, input: &Entity<InputState>, cx: &mut Context<Self>) {
+    fn on_input_change(&mut self, input: &Entity<TextareaState>, cx: &mut Context<Self>) {
         if let Some(ix) = self.input_item_ix(input) {
             self.sync_input_answer(ix, true, cx);
         }
@@ -1225,7 +1228,7 @@ impl QuestionnaireState {
             .position(|choice| choice.value().as_ref() == value)
     }
 
-    fn input_item_ix(&self, input: &Entity<InputState>) -> Option<usize> {
+    fn input_item_ix(&self, input: &Entity<TextareaState>) -> Option<usize> {
         self.items.iter().position(|item| {
             item.input()
                 .is_some_and(|definition| definition.state().entity_id() == input.entity_id())
@@ -1246,17 +1249,17 @@ mod tests {
 
     struct Harness {
         state: Entity<QuestionnaireState>,
-        first_input: Entity<InputState>,
-        second_input: Entity<InputState>,
+        first_input: Entity<TextareaState>,
+        second_input: Entity<TextareaState>,
         events: Vec<&'static str>,
         _subscription: Subscription,
     }
 
     impl Harness {
         fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-            let first_input = cx.new(|cx| InputState::new(window, cx));
+            let first_input = cx.new(|cx| TextareaState::new(window, cx));
             let second_input =
-                cx.new(|cx| InputState::new(window, cx).default_value("initial draft"));
+                cx.new(|cx| TextareaState::new(window, cx).default_value("initial draft"));
             let items = vec![
                 QuestionnaireItemDefinition::new("first", "First question")
                     .with_required(true)
@@ -1323,8 +1326,8 @@ mod tests {
     ) -> (
         Entity<Harness>,
         Entity<QuestionnaireState>,
-        Entity<InputState>,
-        Entity<InputState>,
+        Entity<TextareaState>,
+        Entity<TextareaState>,
         &mut VisualTestContext,
     ) {
         cx.update(crate::init);
@@ -1785,7 +1788,7 @@ mod tests {
     /// validation on the first item.
     struct ChooseHarness {
         state: Entity<QuestionnaireState>,
-        input: Entity<InputState>,
+        input: Entity<TextareaState>,
         events: Vec<&'static str>,
         _subscription: Subscription,
     }
@@ -1805,7 +1808,7 @@ mod tests {
     ) {
         cx.update(crate::init);
         let (harness, cx) = cx.add_window_view(|window, cx| {
-            let input = cx.new(|cx| InputState::new(window, cx));
+            let input = cx.new(|cx| TextareaState::new(window, cx));
             let items = vec![
                 QuestionnaireItemDefinition::new("first", "First")
                     .with_choices([

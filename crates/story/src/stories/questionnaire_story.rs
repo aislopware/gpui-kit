@@ -4,7 +4,7 @@ use gpui_kit::component::{
     dialog::{Dialog, DialogClose, DialogDescription, DialogFooter, DialogHeader, DialogTitle},
     group_box::GroupBox,
     h_flex,
-    input::InputState,
+    input::TextareaState,
     kbd::Kbd,
     questionnaire::{
         Questionnaire, QuestionnaireActions, QuestionnaireAnswer, QuestionnaireChoice,
@@ -63,9 +63,11 @@ impl QuestionnaireStory {
         cx: &mut Context<Self>,
         placeholder: &'static str,
         default_value: Option<&'static str>,
-    ) -> Entity<InputState> {
+    ) -> Entity<TextareaState> {
         cx.new(|cx| {
-            let input = InputState::new(window, cx).placeholder(placeholder);
+            let input = TextareaState::new(window, cx)
+                .auto_grow(1, 6)
+                .placeholder(placeholder);
             if let Some(value) = default_value {
                 input.default_value(value)
             } else {

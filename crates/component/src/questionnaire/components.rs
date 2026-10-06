@@ -11,7 +11,7 @@ use rust_i18n::t;
 use crate::{
     ActiveTheme as _, Icon, IconName, Sizable, Size, StyledExt as _, ThemeStyled as _,
     button::{Button, ButtonVariants as _},
-    input::Input,
+    input::Textarea,
     kbd::Kbd,
 };
 
@@ -350,6 +350,22 @@ impl RenderOnce for Questionnaire {
             .role(Role::Form)
             .key_context("Questionnaire")
             .track_focus(&focus_handle)
+            .capture_action({
+                let state = state.clone();
+                move |_: &gpui_base::input::MoveUp, window, cx| {
+                    if gpui_base::questionnaire::leave_empty_input(&state, true, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }
+            })
+            .capture_action({
+                let state = state.clone();
+                move |_: &gpui_base::input::MoveDown, window, cx| {
+                    if gpui_base::questionnaire::leave_empty_input(&state, false, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }
+            })
             .capture_key_down(move |event, window, cx| {
                 gpui_base::questionnaire::handle_key_down(&state, event, window, cx)
             })
@@ -1128,7 +1144,7 @@ impl RenderOnce for QuestionnaireInput {
         let size = resolve_size(self.size, &self.state, cx);
         let metrics = QuestionnaireMetrics::new(size, cx);
 
-        Input::new(input_definition.state())
+        Textarea::new(input_definition.state())
             .aria_label(input_definition.accessibility_label().clone())
             .disabled(item_state.is_disabled() || input_definition.is_disabled())
             .with_size(size)
@@ -1501,7 +1517,7 @@ mod tests {
     ) -> (&mut VisualTestContext, Entity<QuestionnaireState>) {
         cx.update(crate::init);
         let (view, cx) = cx.add_window_view(move |window, cx| {
-            let input = cx.new(|cx| crate::input::InputState::new(window, cx));
+            let input = cx.new(|cx| crate::input::TextareaState::new(window, cx));
             let state = cx.new(|cx| {
                 QuestionnaireState::new(
                     vec![
@@ -1844,6 +1860,40 @@ mod tests {
         });
     }
 
+    /// The freeform answer is multi-line: Shift-Enter breaks its line and keeps
+    /// the item, and Enter on the filled answer confirms it, lines and all.
+    #[gpui::test]
+    fn shift_enter_breaks_the_answer_and_enter_confirms_it(cx: &mut TestAppContext) {
+        let (cx, state) = input_visual_harness(cx, false);
+        focus_input(cx, &state, "first");
+        cx.update(|window, cx| {
+            let input = state.read(cx).input_state("first").unwrap();
+            input.update(cx, |input, cx| input.insert("One line", window, cx));
+            window.draw(cx).clear(cx);
+        });
+
+        simulate_key(cx, "shift-enter", false, false);
+        cx.update(|_, cx| {
+            let input = state.read(cx).input_state("first").unwrap();
+            assert_eq!(input.read(cx).value().as_ref(), "One line\n");
+            assert_eq!(state.read(cx).current_item().unwrap().as_ref(), "first");
+        });
+
+        cx.update(|window, cx| {
+            let input = state.read(cx).input_state("first").unwrap();
+            input.update(cx, |input, cx| input.insert("and the next", window, cx));
+        });
+        simulate_key(cx, "enter", false, true);
+        cx.update(|_, cx| {
+            let answer = state.read(cx).answer("first").unwrap();
+            assert_eq!(
+                answer.freeform().map(SharedString::as_ref),
+                Some("One line\nand the next")
+            );
+            assert_eq!(state.read(cx).current_item().unwrap().as_ref(), "second");
+        });
+    }
+
     #[gpui::test]
     fn empty_input_enter_stays_put_and_arrows_move_to_answers(cx: &mut TestAppContext) {
         let (cx, state) = input_visual_harness(cx, false);
@@ -2028,7 +2078,7 @@ mod tests {
     ) {
         cx.update(crate::init);
         let (view, cx) = cx.add_window_view(|window, cx| {
-            let input = cx.new(|cx| crate::input::InputState::new(window, cx));
+            let input = cx.new(|cx| crate::input::TextareaState::new(window, cx));
             let state = cx.new(|cx| {
                 QuestionnaireState::new(
                     vec![

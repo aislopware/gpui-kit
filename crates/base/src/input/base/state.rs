@@ -2711,25 +2711,29 @@ impl<M: InputModeKind> InputBaseState<M> {
         }
     }
 
-    /// Inserts the clipboard text the way `Paste` does: one atomic edit,
-    /// newlines dropped on a single-line input, one line per selection when
-    /// the counts match on a multi-line one. A clipboard without text (an
-    /// image, say) is left alone rather than replacing the selection with
-    /// nothing.
+    /// Inserts the clipboard text the way `Paste` does: one atomic edit, its
+    /// lines joined with a space on a single-line input ([`join_lines`]), one
+    /// line per selection when the counts match on a multi-line one. A
+    /// clipboard without text (an image, or only a line break on a single
+    /// line) is left alone rather than replacing the selection with nothing.
     fn insert_clipboard(
         &mut self,
         clipboard: ClipboardItem,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(mut new_text) = clipboard.text().filter(|text| !text.is_empty()) else {
+        let Some(new_text) = clipboard.text().filter(|text| !text.is_empty()) else {
             return;
         };
+        if !self.is_multi_line() && self.normalize_input(&new_text).is_empty() {
+            return;
+        }
         // A paste is one atomic edit, never part of a typing run.
         self.undo_manager.set_pending_intent(EditIntent::Atomic);
 
         if !self.is_multi_line() {
-            new_text = new_text.replace('\n', "");
+            // `replace_text_in_range` joins the lines, as it does for any text
+            // that reaches a single line.
             self.replace_text_in_range_silent(None, &new_text, window, cx);
             self.scroll_to(self.cursor(), None, cx);
             return;
@@ -3550,7 +3554,8 @@ impl<M: InputModeKind> InputBaseState<M> {
     ///
     /// For number inputs (with [`MaskPattern::Number`]), this converts
     /// full-width number characters into their ASCII equivalents,
-    /// e.g. `12。5` -> `12.5`.
+    /// e.g. `12。5` -> `12.5`. On a single line, the text's lines are joined
+    /// with a space ([`join_lines`]).
     pub(super) fn normalize_input<'a>(&self, new_text: &'a str) -> Cow<'a, str> {
         let normalized = if matches!(self.mask_pattern, MaskPattern::Number { .. }) {
             normalize_number_input(new_text)
@@ -3559,7 +3564,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         };
 
         if self.is_single_line() && normalized.contains(['\n', '\r']) {
-            Cow::Owned(normalized.replace(['\n', '\r'], ""))
+            Cow::Owned(join_lines(&normalized))
         } else {
             normalized
         }
@@ -4726,6 +4731,16 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
         // `Self` is concrete enough to name its own entity type.
         M::register_actions(element, &entity, window)
     }
+}
+
+/// `text` on one line: each line break (`\n`, `\r\n` or `\r`) between its
+/// lines becomes a space, so pasted words stay apart, as a browser's
+/// single-line field pastes them. The breaks at either end are dropped, so a
+/// copied line's own ending leaves no trailing space.
+fn join_lines(text: &str) -> String {
+    text.trim_matches(['\n', '\r'])
+        .replace("\r\n", " ")
+        .replace(['\n', '\r'], " ")
 }
 
 #[cfg(test)]
@@ -7683,33 +7698,59 @@ mod tests {
         });
     }
 
+    /// A single line has no line to break: its text's lines are parted by a
+    /// space, whatever their line ending, with nothing added at either end.
+    /// A clipboard of line breaks alone leaves the text as it was, and a
+    /// multi-line input keeps the breaks.
     #[gpui::test]
-    fn test_single_line_removes_newlines(cx: &mut TestAppContext) {
+    fn test_single_line_joins_lines_with_a_space(cx: &mut TestAppContext) {
         let input_view = InputView::build(cx, |state| state.default_value("default\nvalue"));
         let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
         let input = input_view.input;
 
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
-                assert_eq!(state.value(), "defaultvalue");
+                assert_eq!(state.value(), "default value");
 
                 state.set_value("first\nsecond\r\nthird\rfourth", window, cx);
-                assert_eq!(state.value(), "firstsecondthirdfourth");
+                assert_eq!(state.value(), "first second third fourth");
 
                 state.set_value("", window, cx);
                 state.insert("a\nb", window, cx);
-                assert_eq!(state.value(), "ab");
+                assert_eq!(state.value(), "a b");
             });
 
-            cx.write_to_clipboard(ClipboardItem::new_string("a\r\nb\nc\rd".to_string()));
+            cx.write_to_clipboard(ClipboardItem::new_string("a\r\nb\nc\rd\n".to_string()));
             input.update(cx, |state, cx| {
                 state.set_value("", window, cx);
                 state.paste(&Paste, window, cx);
-                assert_eq!(state.value(), "abcd");
+                assert_eq!(state.value(), "a b c d");
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.select_all(window, cx);
+                state.insert_clipboard(ClipboardItem::new_string("\r\n".into()), window, cx);
+                assert_eq!(
+                    state.value(),
+                    "a b c d",
+                    "a bare line break replaces nothing"
+                );
             });
         });
 
-        cx.run_until_parked();
+        let textarea = InputView::build_textarea(&mut cx, |state| state);
+        textarea
+            .window_handle
+            .update(&mut cx, |_, window, cx| {
+                textarea.input.update(cx, |state, cx| {
+                    state.insert_clipboard(ClipboardItem::new_string("a\nb".into()), window, cx);
+                    assert_eq!(state.value(), "a\nb");
+                });
+            })
+            .unwrap();
     }
 
     /// `replace_all` on a multi-line (non-code-editor) input clears the

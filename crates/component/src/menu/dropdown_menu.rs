@@ -431,4 +431,44 @@ mod tests {
             "the shortcut hint must be painted on the same frame as its item"
         );
     }
+
+    /// A press on the trigger of an open menu closes it, as a native popup
+    /// button's does: the press that dismisses the menu from outside its surface
+    /// must not reach the trigger and open it again on the same click.
+    #[gpui::test]
+    fn a_press_on_the_trigger_of_an_open_menu_closes_it(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            crate::init(cx);
+            cx.bind_keys([KeyBinding::new("ctrl-c", CopyText, Some(CONTEXT))]);
+        });
+        let frames = Rc::new(Cell::new(0));
+        let (_, cx) = cx.add_window_view({
+            let frames = frames.clone();
+            move |_, _| TestRoot { frames }
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let press = |cx: &mut gpui::VisualTestContext| {
+            let at = point(px(10.), px(10.));
+            cx.simulate_mouse_down(at, MouseButton::Left, Default::default());
+            cx.simulate_mouse_up(at, MouseButton::Left, Default::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        };
+
+        press(cx);
+        assert!(
+            cx.debug_bounds("kbd:ctrl-c").is_some(),
+            "the first press opens the menu"
+        );
+        press(cx);
+        assert!(
+            cx.debug_bounds("kbd:ctrl-c").is_none(),
+            "a press on the trigger closes the open menu"
+        );
+        press(cx);
+        assert!(
+            cx.debug_bounds("kbd:ctrl-c").is_some(),
+            "and the next opens it again"
+        );
+    }
 }

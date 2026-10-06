@@ -65,6 +65,7 @@ pub struct Positioner {
     corner_position: Option<Rc<Cell<Point<Pixels>>>>,
     on_position: Option<Box<dyn Fn(ResolvedPosition)>>,
     margin: Pixels,
+    approach: Pixels,
     occlude: bool,
     children: Vec<AnyElement>,
 }
@@ -87,6 +88,7 @@ impl Positioner {
             corner_position: None,
             on_position: None,
             margin: px(4.),
+            approach: px(0.),
             occlude: false,
             children: Vec::new(),
         }
@@ -103,6 +105,7 @@ impl Positioner {
             corner_position: None,
             on_position: None,
             margin: px(4.),
+            approach: px(0.),
             occlude: false,
             children: Vec::new(),
         }
@@ -178,6 +181,32 @@ impl Positioner {
     pub fn margin(mut self, margin: Pixels) -> Self {
         self.margin = margin;
         self
+    }
+
+    /// Draws the popup `distance` short of its place, back toward the trigger
+    /// along the side it resolved to: up for a popup below its trigger, down
+    /// for one that flipped above it, and likewise across. An enter motion
+    /// animates this to zero, so the surface always comes out of the trigger's
+    /// edge, whichever side it lands on.
+    ///
+    /// Only the drawing moves: [`Positioner::on_position`] still reports the
+    /// place the popup settles at. A corner-positioned popup has no side and
+    /// does not move.
+    pub fn approach(mut self, distance: Pixels) -> Self {
+        self.approach = distance;
+        self
+    }
+}
+
+/// How far back toward its trigger a popup on `placement` is drawn for an
+/// [`Positioner::approach`] of `distance`.
+fn approach_shift(placement: Option<Placement>, distance: Pixels) -> Point<Pixels> {
+    match placement {
+        Some(Placement::Bottom) => point(px(0.), -distance),
+        Some(Placement::Top) => point(px(0.), distance),
+        Some(Placement::Right) => point(-distance, px(0.)),
+        Some(Placement::Left) => point(distance, px(0.)),
+        None => Point::default(),
     }
 }
 
@@ -414,7 +443,8 @@ impl Element for Positioner {
             window.insert_hitbox(position.bounds, HitboxBehavior::BlockMouse);
         }
 
-        let offset = position.bounds.origin - bounds.origin;
+        let shift = approach_shift(position.placement, self.approach);
+        let offset = position.bounds.origin + shift - bounds.origin;
         let offset = point(offset.x.round(), offset.y.round());
 
         window.with_element_offset(offset, |window| {
@@ -493,6 +523,32 @@ mod tests {
 
         assert_eq!(position.placement, Some(Placement::Top));
         assert_eq!(position.bounds.bottom(), px(200.));
+    }
+
+    #[test]
+    fn an_approach_comes_from_the_trigger_on_every_side() {
+        let d = px(8.);
+        assert_eq!(
+            approach_shift(Some(Placement::Bottom), d),
+            point(px(0.), px(-8.))
+        );
+        assert_eq!(
+            approach_shift(Some(Placement::Top), d),
+            point(px(0.), px(8.))
+        );
+        assert_eq!(
+            approach_shift(Some(Placement::Right), d),
+            point(px(-8.), px(0.))
+        );
+        assert_eq!(
+            approach_shift(Some(Placement::Left), d),
+            point(px(8.), px(0.))
+        );
+        assert_eq!(
+            approach_shift(None, d),
+            Point::default(),
+            "a corner has no side"
+        );
     }
 
     #[test]

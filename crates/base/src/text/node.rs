@@ -16,7 +16,7 @@ use gpui::{
 use markdown::mdast;
 
 use crate::{
-    GlobalState, ScrollableMask, Scrollbar, StyledExt, h_flex,
+    ScrollableMask, Scrollbar, StyledExt, h_flex,
     scrollable_mask::horizontal_scroll_area,
     text::{
         CodeBlockActionsFn, CodeBlockHighlighterFn, LinkClickHandlerFn, MarkdownExtensions,
@@ -201,7 +201,7 @@ impl Element for CustomBlockElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let view = GlobalState::global(cx).text_view_state().cloned();
+        let view = crate::global_state::TextViewStateStack::current(cx);
         let selection = view.as_ref().and_then(|view| {
             let state = view.read(cx);
             if !state.is_selectable() {

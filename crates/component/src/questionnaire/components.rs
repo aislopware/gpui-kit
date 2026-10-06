@@ -1144,13 +1144,19 @@ impl RenderOnce for QuestionnaireInput {
         let size = resolve_size(self.size, &self.state, cx);
         let metrics = QuestionnaireMetrics::new(size, cx);
 
+        // The freeform answer is one of the answers, so its first line sits
+        // where a choice's label does: in from the card's edge by the card's
+        // padding, at least a choice's height. The textarea pads its own text
+        // by the input's padding, so the frame adds only the rest.
+        let inset_x = (metrics.choice_padding_x - size.input_px()).max(gpui::px(0.));
+        let inset_y = (metrics.choice_padding_y - size.input_py()).max(gpui::px(0.));
         Textarea::new(input_definition.state())
             .aria_label(input_definition.accessibility_label().clone())
             .disabled(item_state.is_disabled() || input_definition.is_disabled())
             .with_size(size)
-            // The freeform answer is one of the answers, so its text starts on
-            // the same edge a choice's indicator does — the card padding.
-            .pl(metrics.choice_padding_x)
+            .px(inset_x)
+            .py(inset_y)
+            .min_h(metrics.choice_min_height)
             .rounded(metrics.choice_radius)
             .when(item_state.is_invalid(), |this| {
                 this.border_color(cx.theme().semantic_tokens().colors.destructive)

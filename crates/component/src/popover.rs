@@ -25,12 +25,13 @@ pub(crate) fn init(_: &mut App) {}
 /// duration is 150ms.
 const DROPDOWN_ENTER_DURATION: Duration = Duration::from_millis(150);
 
-/// Where a dropdown starts out, relative to where it comes to rest.
+/// How far short of its place, back toward the trigger, a dropdown starts out.
 ///
-/// Negative is above, so the surface slides *down* out of the trigger's edge —
-/// what shadcn/ui expresses as `data-[side=bottom]:slide-in-from-top-2`. Its
-/// `2` is `0.5rem`, which is 8px at the default root size.
-const DROPDOWN_ENTER_OFFSET: Pixels = px(-8.);
+/// The surface slides out of the trigger's edge on whichever side it lands —
+/// what shadcn/ui expresses as `data-[side=bottom]:slide-in-from-top-2` and its
+/// siblings for the other sides. Its `2` is `0.5rem`, which is 8px at the
+/// default root size.
+const DROPDOWN_ENTER_OFFSET: Pixels = px(8.);
 
 fn dropdown_positioner(bounds: Bounds<Pixels>) -> gpui_base::Positioner {
     gpui_base::Positioner::side(bounds)
@@ -73,11 +74,10 @@ fn dropdown_positioner(bounds: Bounds<Pixels>) -> gpui_base::Positioner {
 ///   same frame its state flips, so playing one would mean keeping the surface
 ///   mounted past the close, which is a change to how each of these components
 ///   tracks `open`.
-/// - The slide always comes from above. [`gpui_base::Positioner`] resolves the
-///   side the surface actually lands on during layout and does not report it
-///   back, so a dropdown that flips above its trigger for want of room below
-///   slides the opposite way — 8px over 150ms, in the rare case where it
-///   happens.
+/// The slide is the positioner's own [`gpui_base::Positioner::approach`]: it
+/// resolves the side the surface lands on during layout, so a dropdown that
+/// flips above its trigger for want of room below slides *up* out of the
+/// trigger's top edge, as shadcn's `slide-in-from-bottom-2` does there.
 ///
 /// Reduced motion needs no handling here: GPUI's animation element adopts the
 /// final value on the first frame when the system asks for it.
@@ -86,21 +86,25 @@ pub(crate) fn dropdown_popup(
     bounds: Bounds<Pixels>,
     surface: impl IntoElement + Styled + 'static,
     cx: &App,
-) -> gpui_base::Positioner {
-    let travel: f32 = DROPDOWN_ENTER_OFFSET.into();
+) -> impl IntoElement {
+    let id = id.into();
+    let enter = || Animation::new(DROPDOWN_ENTER_DURATION).with_easing(ease_out_cubic);
     // Read out here: the animation runs long after `cx` is gone.
     let ring = popover_ring(cx);
 
-    dropdown_positioner(bounds).child(surface.with_animation(
-        id,
-        Animation::new(DROPDOWN_ENTER_DURATION).with_easing(ease_out_cubic),
-        move |surface, delta| {
-            surface
-                .top(px(travel * (1. - delta)))
-                .opacity(delta)
-                .shadow(popover_shadow(ring, delta * delta * delta))
-        },
-    ))
+    // The surface and its positioner lie at different element paths, so the
+    // one id keys two animations that start on the same frame.
+    dropdown_positioner(bounds)
+        .child(
+            surface.with_animation(id.clone(), enter(), move |surface, delta| {
+                surface
+                    .opacity(delta)
+                    .shadow(popover_shadow(ring, delta * delta * delta))
+            }),
+        )
+        .with_animation(id, enter(), |positioner, delta| {
+            positioner.approach(DROPDOWN_ENTER_OFFSET * (1. - delta))
+        })
 }
 
 /// A popover element that can be triggered by a button or any other element.
@@ -945,6 +949,7 @@ mod tests {
 
     struct Harness {
         open: bool,
+        trigger_y: f32,
     }
 
     impl Render for Harness {
@@ -952,7 +957,7 @@ mod tests {
             div().size_full().when(self.open, |this| {
                 this.child(dropdown_popup(
                     "dropdown",
-                    Bounds::new(point(px(0.), px(100.)), size(px(120.), px(30.))),
+                    Bounds::new(point(px(0.), px(self.trigger_y)), size(px(120.), px(30.))),
                     div().debug_selector(|| "surface".into()).size(px(50.)),
                     cx,
                 ))
@@ -967,7 +972,10 @@ mod tests {
     #[gpui::test]
     fn the_enter_motion_starts_over_every_time_the_dropdown_opens(cx: &mut gpui::TestAppContext) {
         cx.update(crate::init);
-        let (view, window) = cx.add_window_view(|_, _| Harness { open: true });
+        let (view, window) = cx.add_window_view(|_, _| Harness {
+            open: true,
+            trigger_y: 100.,
+        });
 
         window.update(|window, cx| window.draw(cx).clear(cx));
         let opening = window.debug_bounds("surface").unwrap().origin;
@@ -999,6 +1007,36 @@ mod tests {
             reopening.y < settled.y,
             "reopening should start the motion over at {opening:?} rather than showing a \
              settled surface, but the first frame was already at {reopening:?}",
+        );
+    }
+
+    /// A dropdown with no room under its trigger flips above it, and its enter
+    /// motion follows the side it landed on: it slides *up* out of the
+    /// trigger's top edge rather than down toward the trigger it covers.
+    #[gpui::test]
+    fn a_flipped_dropdown_slides_out_of_the_trigger_s_top_edge(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let (_view, window) = cx.add_window_view(|_, _| Harness {
+            open: true,
+            trigger_y: 260.,
+        });
+        window.simulate_resize(size(px(400.), px(300.)));
+
+        window.update(|window, cx| window.draw(cx).clear(cx));
+        let opening = window.debug_bounds("surface").unwrap();
+
+        // The animation runs off the wall clock, as above.
+        std::thread::sleep(DROPDOWN_ENTER_DURATION * 4);
+        window.update(|window, cx| window.draw(cx).clear(cx));
+        let settled = window.debug_bounds("surface").unwrap();
+
+        assert!(
+            settled.bottom() <= px(260.),
+            "it flips above the trigger: {settled:?}"
+        );
+        assert!(
+            opening.origin.y > settled.origin.y,
+            "the surface should slide up into place, from {opening:?} to {settled:?}",
         );
     }
 }

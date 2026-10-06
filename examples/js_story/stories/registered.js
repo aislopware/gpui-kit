@@ -258,7 +258,7 @@ const tokenDraft = {
 
 export function initializeRegisteredExamples() {
   retained("token-input", () => { const input = InputState(); input.set_value(tokenDraft); return input; });
-  retained("questionnaire-direction", () => InputState("Type another direction…"));
+  retained("questionnaire-direction", () => TextareaState());
   retained("token-textarea", () => { const input = TextareaState(); input.set_value(tokenDraft); return input; });
   for (const [id, placeholder, value] of inputGroupFields) {
     retained(`input-group-extra:${id}`, () => InputState(placeholder, value));
@@ -1772,7 +1772,7 @@ export function registeredExamples(surface, cx) {
                   .child(
                     new QuestionnaireInput(
                       retained("questionnaire-direction", () =>
-                        InputState("Type another direction…"),
+                        TextareaState(),
                       ),
                       "Another direction",
                     ),

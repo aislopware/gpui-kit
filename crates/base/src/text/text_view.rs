@@ -2708,9 +2708,12 @@ mod tests {
                 window.draw();
             });
 
+            // A lone character is not a marker: gpui-fast's number shaping
+            // measures each digit and sign on its own, once per font and size,
+            // before it puts numbers like "1." together from them.
             let mut markers = shaped_lines
                 .into_iter()
-                .filter(|line| line.len() <= 3 && line.ends_with('.'))
+                .filter(|line| (2..=3).contains(&line.len()) && line.ends_with('.'))
                 .collect::<Vec<_>>();
             markers.dedup();
             markers

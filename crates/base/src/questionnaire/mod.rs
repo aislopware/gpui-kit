@@ -9,6 +9,6 @@ mod state;
 mod types;
 
 pub use control::QuestionnaireChoiceControl;
-pub use keyboard::handle_key_down;
+pub use keyboard::{handle_key_down, leave_empty_input};
 pub use state::*;
 pub use types::*;

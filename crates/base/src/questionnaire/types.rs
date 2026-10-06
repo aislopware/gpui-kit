@@ -2,7 +2,7 @@ use std::{error::Error, fmt, rc::Rc};
 
 use gpui::{Entity, SharedString};
 
-use crate::input::InputState;
+use crate::input::TextareaState;
 
 /// Validates one questionnaire item against the current questionnaire answers.
 pub type QuestionnaireValidator =
@@ -69,15 +69,20 @@ impl QuestionnaireChoiceDefinition {
 }
 
 /// Describes the optional freeform answer owned by an item.
+///
+/// The answer is multi-line text, so a pasted paragraph or stack trace keeps
+/// its lines. Enter confirms a filled answer and Shift-Enter breaks the line;
+/// the questionnaire sets the state to submit on Enter. Make the state grow
+/// with its text, e.g. `TextareaState::new(window, cx).auto_grow(1, 6)`.
 #[derive(Clone, Debug)]
 pub struct QuestionnaireInputDefinition {
-    state: Entity<InputState>,
+    state: Entity<TextareaState>,
     accessibility_label: SharedString,
     disabled: bool,
 }
 
 impl QuestionnaireInputDefinition {
-    pub fn new(state: Entity<InputState>, accessibility_label: impl Into<SharedString>) -> Self {
+    pub fn new(state: Entity<TextareaState>, accessibility_label: impl Into<SharedString>) -> Self {
         Self {
             state,
             accessibility_label: accessibility_label.into(),
@@ -90,7 +95,7 @@ impl QuestionnaireInputDefinition {
         self
     }
 
-    pub fn state(&self) -> &Entity<InputState> {
+    pub fn state(&self) -> &Entity<TextareaState> {
         &self.state
     }
 

@@ -120,7 +120,7 @@ impl ComponentMaterializer for InputMaterializer {
             .downcast_ref::<InputPayload>()
             .ok_or_else(|| anyhow::anyhow!("QuestionnaireInput received an incompatible payload"))?
             .clone();
-        let state = request.with_state::<gpui::Entity<gpui_component::input::InputState>, _>(
+        let state = request.with_state::<gpui::Entity<gpui_component::input::TextareaState>, _>(
             &payload.state,
             Clone::clone,
         )?;
@@ -438,7 +438,7 @@ pub(super) fn register(registry: &mut ComponentRegistry) -> Result<(), RegistryE
             .with_constructors(vec![ConstructorDescriptor::new(
                 "QuestionnaireInput",
                 vec![
-                    ArgumentDescriptor::new("state", ArgumentSchema::Entity("InputState")),
+                    ArgumentDescriptor::new("state", ArgumentSchema::Entity("TextareaState")),
                     ArgumentDescriptor::new("label", ArgumentSchema::String),
                 ],
                 |arguments| match arguments {
@@ -450,7 +450,7 @@ pub(super) fn register(registry: &mut ComponentRegistry) -> Result<(), RegistryE
                         label: label.clone(),
                     })),
                     _ => Err(
-                        "QuestionnaireInput expects an InputState entity and a non-empty label"
+                        "QuestionnaireInput expects a TextareaState entity and a non-empty label"
                             .into(),
                     ),
                 },
@@ -462,7 +462,7 @@ pub(super) fn register(registry: &mut ComponentRegistry) -> Result<(), RegistryE
                 |value| value,
             )])
             .with_documentation(
-                "Typed freeform-answer data for a question, backed by a retained InputState; style is rejected.",
+                "Typed freeform-answer data for a question, backed by a retained TextareaState; style is rejected.",
             ),
     )?;
     registry.register(

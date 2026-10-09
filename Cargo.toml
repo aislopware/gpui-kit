@@ -11,7 +11,6 @@ members = [
     "crates/component",
     "crates/assets",
     "crates/fps",
-    "crates/webview",
     "examples/app_assets",
     "examples/fps_monitor",
     "examples/hello_world",
@@ -26,7 +25,6 @@ members = [
     "examples/stream-markdown",
     "examples/window_title",
     "examples/dialog_overlay",
-    "examples/webview",
     "examples/system_monitor",
     "examples/focus_trap",
     "examples/tooltip_top_edge",
@@ -42,6 +40,10 @@ members = [
     "crates/shell/rquickjs-compat",
     "crates/component-shell",
 ]
+# gpui-webview needs GPUI Fast's window composition (longbridge#3398), which this fork's
+# gpui-fast does its own way, and it turns on `gpui-fast` for gpui-base, which then builds
+# against crates.io's GPUI Fast rather than the fork's. Slopty composes natives itself.
+exclude = ["crates/webview", "examples/webview"]
 resolver = "2"
 
 [workspace.package]

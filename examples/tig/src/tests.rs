@@ -191,6 +191,7 @@ fn long_commit_message_scrolls_and_resets_when_the_commit_changes(cx: &mut TestA
                 delta: ScrollDelta::Pixels(point(px(0.), px(-120.))),
                 touch_phase: TouchPhase::Moved,
                 modifiers: Default::default(),
+                momentum_phase: None,
             }
             .to_platform_input(),
             cx,

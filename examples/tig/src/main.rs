@@ -1,3 +1,7 @@
+// gpui-fast's macros spell `gpui::` paths, which the gpui-pre snapshot rewrites to the Kit
+// (gpui-fast compat/README.md); this example names GPUI only through the Kit.
+extern crate gpui_kit as gpui;
+
 mod app;
 mod repository;
 

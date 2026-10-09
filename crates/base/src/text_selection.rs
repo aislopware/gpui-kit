@@ -3036,6 +3036,8 @@ fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Windo
     window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
         if phase.bubble()
             && let Some(state) = mouse_move_state.upgrade()
+            // Moving the pointer only moves a selection being made.
+            && state.read(cx).is_selecting
         {
             state.update(cx, |state, cx| {
                 // A handle drag maps the pointer through the handle's offset;
@@ -3070,12 +3072,15 @@ fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Windo
         // stretched past its end swallows the whole stream, the lift
         // included, and the menu would never come back.
         if phase.capture() {
-            state.update(cx, |state, cx| {
-                state.edit_menu_on_scroll(event.touch_phase, cx)
-            });
+            if state.read(cx).touch.active {
+                state.update(cx, |state, cx| {
+                    state.edit_menu_on_scroll(event.touch_phase, cx)
+                });
+            }
             return;
         }
-        if phase.bubble() {
+        // A scroll only moves a selection being made under the pointer.
+        if phase.bubble() && state.read(cx).is_selecting {
             let position = window.mouse_position();
             state.update(cx, |state, cx| {
                 // A handle drag holds the finger off the text; keep its offset.

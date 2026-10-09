@@ -1846,10 +1846,7 @@ mod tests {
             draw(cx);
             let before = layouts();
 
-            answer.update(cx, |answer, cx| {
-                answer.width = px(120.);
-                cx.notify();
-            });
+            answer.update(cx, |answer, _| answer.width = px(120.));
             draw(cx);
 
             assert!(layouts() > before, "a narrower flow wraps differently");

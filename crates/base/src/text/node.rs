@@ -241,7 +241,7 @@ impl Element for CustomBlockElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let view = GlobalState::global(cx).text_view_state();
+        let view = GlobalState::global(cx).text_view_state().cloned();
         let selection = view.as_ref().and_then(|view| {
             let state = view.read(cx);
             if !state.is_selectable() {
@@ -259,23 +259,24 @@ impl Element for CustomBlockElement {
         self.state.set_selection(selection);
         if let Some(view) = &view {
             if view.read(cx).is_selectable() {
-                view.read(cx).selection_adapter.register_copy_projection(
-                    super::selection_adapter::CopyProjection::CustomBlock(
-                        CustomBlockSelectionProjection {
-                            state: self.state.clone(),
-                            bounds,
-                        },
-                    ),
+                let projection = super::selection_adapter::CopyProjection::CustomBlock(
+                    CustomBlockSelectionProjection {
+                        state: self.state.clone(),
+                        bounds,
+                    },
                 );
+                view.update(cx, |state, _| {
+                    state.selection_adapter.register_copy_projection(projection);
+                });
             }
             let visible = bounds.intersect(&window.content_mask().bounds);
             if view.read(cx).is_selectable()
                 && visible.size.width > Pixels::ZERO
                 && visible.size.height > Pixels::ZERO
             {
-                view.read(cx)
-                    .selection_adapter
-                    .register_inline(vec![visible]);
+                view.update(cx, |state, _| {
+                    state.selection_adapter.register_inline(vec![visible]);
+                });
             }
         }
         self.content.paint(window, cx);

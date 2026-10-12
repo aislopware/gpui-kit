@@ -143,7 +143,10 @@ export default class App extends View {
     assert_builds("first draw", &first_draw_builds, 1, 1, 5);
     draw(&mut context);
     let second_draw_builds = command::command_probe::take();
-    assert_builds("second draw", &second_draw_builds, 1, 1, 5);
+    // Built on our gpui-fast fork, the command's state is not rendered again
+    // for a draw that changed nothing: what it wrote as it was drawn is its
+    // own. It measures no row again, and only the rows shown are built.
+    assert_builds("second draw", &second_draw_builds, 1, 1, 3);
     context.update(|_, cx| assert_eq!(view.read(cx).build_error(), None));
     context.simulate_click(point(px(40.), px(50.)), Modifiers::default());
     context.simulate_keystrokes("b");
@@ -158,7 +161,9 @@ export default class App extends View {
     context.update(|_, cx| view.update(cx, |view, cx| view.refresh(cx)));
     draw(&mut context);
     let refresh_builds = command::command_probe::take();
-    assert_builds("refresh", &refresh_builds, 2, 2, 4);
+    // The one row left after the query is measured once, as the refresh
+    // renders the command's state once (see the second draw).
+    assert_builds("refresh", &refresh_builds, 2, 2, 3);
     let refreshed = context.update(|_, cx| view.read(cx).snapshot().unwrap().debug_tree());
     assert!(refreshed.contains("State: b|1:0|1"), "{refreshed}");
     context.simulate_keystrokes("enter");

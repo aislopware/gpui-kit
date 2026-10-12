@@ -1,6 +1,8 @@
 name: CI
 on:
   pull_request:
+  # The fork starts a run by hand too, for a head its push did not run.
+  workflow_dispatch:
   push:
     branches:
       - main

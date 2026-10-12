@@ -263,8 +263,10 @@ fn multiline_clipboard_normalization_preserves_surrounding_text(cx: &mut TestApp
             assert_edit(&input, "[old]", 1..4, 1, cx);
             cx.write_to_clipboard(ClipboardItem::new_string(payload.into()));
             window.press("secondary-v", cx);
-            assert_edit(&input, "[onetwo]", 7..7, 7, cx);
-            assert_eq!(window.find("editing-first").value(), Some("[onetwo]"));
+            // A single line joins the pasted lines with a space, whatever
+            // their ending, and drops the breaks at either end.
+            assert_edit(&input, "[one two]", 8..8, 8, cx);
+            assert_eq!(window.find("editing-first").value(), Some("[one two]"));
             assert_eq!(
                 cx.read_from_clipboard().unwrap().text().as_deref(),
                 Some(payload)
@@ -503,9 +505,12 @@ fn clipboard_normalization_preserves_tabs_and_unicode_graphemes(cx: &mut TestApp
         let payload = "e\u{301}\r\n\t👩‍💻\r中\n";
         cx.write_to_clipboard(ClipboardItem::new_string(payload.into()));
         window.press("secondary-v", cx);
-        let value = "[e\u{301}\t👩‍💻中]";
+        // Each line break becomes a space; the trailing one is dropped.
+        let value = "[e\u{301} \t👩‍💻 中]";
         let end = value.len() - 1;
         assert_edit(&input, value, end..end, end, cx);
+        // Past the CJK character and the space before it.
+        window.press("left", cx);
         window.press("left", cx);
         // Arrow selection advances by Unicode scalar, so select the woman,
         // joiner and laptop before replacing the complete pasted sequence.
@@ -516,7 +521,7 @@ fn clipboard_normalization_preserves_tabs_and_unicode_graphemes(cx: &mut TestApp
         window.input("X", cx);
         assert_eq!(
             window.find("editing-first").value(),
-            Some("[e\u{301}\tX中]")
+            Some("[e\u{301} \tX 中]")
         );
         window.press("home", cx);
         window.press("right", cx);
@@ -525,7 +530,7 @@ fn clipboard_normalization_preserves_tabs_and_unicode_graphemes(cx: &mut TestApp
         window.press("shift-right", cx);
         assert_eq!(input.read(cx).selected_value(), "e\u{301}");
         window.press("delete", cx);
-        assert_eq!(window.find("editing-first").value(), Some("[\tX中]"));
+        assert_eq!(window.find("editing-first").value(), Some("[ \tX 中]"));
     })
     .unwrap();
 }

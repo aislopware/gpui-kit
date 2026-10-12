@@ -40,8 +40,7 @@ members = [
     "crates/shell/rquickjs-compat",
 ]
 # gpui-webview needs GPUI Fast's window composition (longbridge#3398), which this fork's
-# gpui-fast does its own way, and it turns on `gpui-fast` for gpui-base, which then builds
-# against crates.io's GPUI Fast rather than the fork's. Slopty composes natives itself.
+# gpui-fast does its own way. Slopty composes natives itself.
 exclude = ["crates/webview", "examples/webview"]
 resolver = "2"
 
@@ -195,6 +194,11 @@ gpui-pre-web = { git = "https://github.com/aislopware/gpui-fast.git" }
 gpui-pre-macros = { git = "https://github.com/aislopware/gpui-fast.git" }
 gpui-pre-reqwest-client = { git = "https://github.com/aislopware/gpui-fast.git" }
 gpui-pre-sum-tree = { git = "https://github.com/aislopware/gpui-fast.git" }
+# The `gpui-fast` feature names GPUI Fast's crates.io release; the fork's compat crates stand
+# in for it too, so the feature builds on the same gpui-fast as the rest.
+gpui-fast = { git = "https://github.com/aislopware/gpui-fast.git" }
+gpui-fast-platform = { git = "https://github.com/aislopware/gpui-fast.git" }
+gpui-fast-web = { git = "https://github.com/aislopware/gpui-fast.git" }
 
 [workspace.metadata.typos]
 files.extend-exclude = ["**/fixtures/*"]

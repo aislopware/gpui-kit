@@ -57,13 +57,10 @@ jobs:
           components: clippy
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
       # Lints every member and, as a side effect, type-checks the example
-      # crates that the `test` job leaves out. `gpui-webview` enables
-      # `gpui-kit/gpui-fast`, which feature unification would spread to every
-      # member, so it and its example are linted on their own.
+      # crates that the `test` job leaves out. This fork leaves `gpui-webview`
+      # and its example out of the workspace (see the root manifest).
       - name: Lint
-        run: cargo clippy --workspace --exclude gpui-shell --exclude gpui-webview --exclude webview --locked -- --deny warnings
-      - name: Lint WebView (GPUI Fast)
-        run: cargo clippy -p gpui-webview -p webview --locked -- --deny warnings
+        run: cargo clippy --workspace --exclude gpui-shell --locked -- --deny warnings
 
   no-default-features:
     name: No default features
@@ -181,8 +178,6 @@ jobs:
         run: >-
           cargo test -p gpui-component --features gpui-fast,test-support
           --lib tooltip::tests:: --locked
-      - name: Test WebView
-        run: cargo test -p gpui-webview --locked
 
   gpui-fast-web:
     name: GPUI Fast (WebAssembly)

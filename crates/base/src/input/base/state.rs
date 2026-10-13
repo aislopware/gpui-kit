@@ -27,7 +27,7 @@ use super::{
     change::Change,
     cursor::{CursorSelection, Selections},
     element::{
-        EditorScrollbar, EditorScrollbarSnapshot, LongestLineKey, TextElement,
+        EditorScrollbar, EditorScrollbarSnapshot, LongestLineKey, RIGHT_MARGIN, TextElement,
         clamp_horizontal_scroll_offset,
     },
     kind::InputModeKind,

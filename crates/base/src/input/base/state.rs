@@ -10022,7 +10022,7 @@ mod tests {
         };
         let visible = |cx: &mut VisualTestContext| {
             view.input
-                .read_with(cx, |state, cx| state.blink_cursor.read(cx).visible())
+                .read_with(cx, |state, cx| state.blink_cursor.read(cx).visible(cx))
         };
 
         // The press itself shows the caret, without waiting for the focus

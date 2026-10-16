@@ -39,9 +39,9 @@ members = [
     "examples/speech",
     "crates/shell",
 ]
-# gpui-webview needs GPUI Fast's window composition (longbridge#3398), which this fork's
-# gpui-fast does its own way. Slopty composes natives itself.
-exclude = ["crates/webview", "examples/webview"]
+# `crates/webview` stays a member, for `gpui-shell`'s optional `webview` feature to
+# resolve, but it does not build on this fork's gpui-fast: see that feature in
+# `crates/shell/Cargo.toml`, and the lint's `--exclude` in CI.
 resolver = "2"
 
 [workspace.package]

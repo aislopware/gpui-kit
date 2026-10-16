@@ -27,7 +27,10 @@ gpui-fast = [
     "gpui-kit/gpui-fast",
     "gpui-webview?/gpui-fast",
 ]
-default = ["quickjs", "components", "webview"]
+# This fork leaves `webview` out of the defaults: `gpui-webview` is built on GPUI
+# Fast's window composition (longbridge#3398), which this fork's gpui-fast does its
+# own way, so the crate does not build here. Slopty composes natives itself.
+default = ["quickjs", "components"]
 # The `gpui-component` catalog (`gpui_shell::components`), which scripts import
 # as `"gpui-component"`. Without it the runtime binds `gpui-base` only and does
 # not depend on the styled component library at all.

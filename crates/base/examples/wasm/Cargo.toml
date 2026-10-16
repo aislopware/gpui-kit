@@ -19,7 +19,7 @@ console_log = "1.0"
 log.workspace = true
 syntect.workspace = true
 tracing-wasm = "0.2"
-wasm-bindgen = "=0.2.121"
+wasm-bindgen = "=0.2.129"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 reqwest_client.workspace = true

@@ -24,7 +24,7 @@ Install Rust, Bun and `make`. Run these commands from the repository root (the d
 ```sh
 cd crates/story-web
 rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli --version 0.2.121
+cargo install wasm-bindgen-cli --version 0.2.129
 make dev
 ```
 
@@ -38,7 +38,7 @@ Check the result in this order:
 
 If you edit a Rust view, keep Vite running in one terminal and run `make build-wasm-dev` from `crates/story-web` in another, then reload the page. Editing the loader or other `www/` files is handled by Vite. This distinction matters because Vite does not compile the Rust crate for you.
 
-The local [toolchain file](https://github.com/longbridge/gpui-kit/blob/main/crates/story-web/rust-toolchain.toml) selects nightly; the `wasm-bindgen-cli` version above matches this checkout's [`Cargo.lock`](https://github.com/longbridge/gpui-kit/blob/main/Cargo.lock). If the lockfile changes, match the CLI to the locked `wasm-bindgen` crate version. If another CLI version is already installed, check `wasm-bindgen --version` and reinstall the pinned version with `cargo install -f wasm-bindgen-cli --version 0.2.121`. The [build script](https://github.com/longbridge/gpui-kit/blob/main/crates/story-web/scripts/build-wasm.sh) sets an 8 MiB linker stack for the gallery's large render tree, including in debug builds.
+The local [toolchain file](https://github.com/longbridge/gpui-kit/blob/main/crates/story-web/rust-toolchain.toml) selects nightly; the `wasm-bindgen-cli` version above matches this checkout's [`Cargo.lock`](https://github.com/longbridge/gpui-kit/blob/main/Cargo.lock). If the lockfile changes, match the CLI to the locked `wasm-bindgen` crate version. If another CLI version is already installed, check `wasm-bindgen --version` and reinstall the pinned version with `cargo install -f wasm-bindgen-cli --version 0.2.129`. The [build script](https://github.com/longbridge/gpui-kit/blob/main/crates/story-web/scripts/build-wasm.sh) sets an 8 MiB linker stack for the gallery's large render tree, including in debug builds.
 
 For a production gallery build, run `make build-prod` from the same directory. The site bundle lands in `www/dist/` and uses the `/gallery/` base path. Deploy it at that path, or change both the [Vite base](https://github.com/longbridge/gpui-kit/blob/main/crates/story-web/www/vite.config.js) and the [Rust asset endpoint](https://github.com/longbridge/gpui-kit/blob/main/crates/story-web/src/lib.rs) for your own host.
 
@@ -86,7 +86,7 @@ The [GPUI Base WASM showcase](https://github.com/longbridge/gpui-kit/tree/main/c
 ```sh
 cd crates/base/examples/wasm
 rustup target add wasm32-unknown-unknown --toolchain nightly
-cargo install wasm-bindgen-cli --version 0.2.121
+cargo install wasm-bindgen-cli --version 0.2.129
 make dev
 ```
 

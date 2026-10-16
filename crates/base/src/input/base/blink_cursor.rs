@@ -223,17 +223,17 @@ mod tests {
         cursor.update(cx, |cursor, cx| cursor.start(cx));
         cursor.update(cx, |cursor, cx| cursor.start(cx));
         cx.run_until_parked();
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
 
         // The restart drops the first cycle's timer, so the cursor stays
         // visible for a full interval before it blinks off.
         cx.executor()
             .advance_clock(INTERVAL - Duration::from_millis(1));
         cx.run_until_parked();
-        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
         cx.executor().advance_clock(Duration::from_millis(1));
         cx.run_until_parked();
-        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(!cursor.read_with(cx, |cursor, cx| cursor.visible(cx)));
     }
 
     #[gpui::test]

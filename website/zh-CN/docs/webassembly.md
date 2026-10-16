@@ -24,7 +24,7 @@ GPUI Kit 可以在浏览器中渲染与桌面端共用的 Rust 视图和组件�
 ```sh
 cd crates/story-web
 rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli --version 0.2.121
+cargo install wasm-bindgen-cli --version 0.2.129
 make dev
 ```
 
@@ -38,7 +38,7 @@ make dev
 
 修改 Rust 视图时，可在一个终端保持 Vite 运行，另一个终端进入 `crates/story-web` 执行 `make build-wasm-dev`，再刷新页面。修改加载器或其他 `www/` 文件由 Vite 处理。Vite 不会自行重新编译 Rust crate，这两种修改不能混为一谈。
 
-[本地工具链文件](https://github.com/longbridge/gpui-kit/blob/main/crates/story-web/rust-toolchain.toml)选用 nightly；上述 `wasm-bindgen-cli` 版本与当前检出的 [`Cargo.lock`](https://github.com/longbridge/gpui-kit/blob/main/Cargo.lock) 一致。如果锁文件更新，请让 CLI 版本与锁定的 `wasm-bindgen` crate 版本保持一致。如果已安装其他版本，可运行 `wasm-bindgen --version` 检查，再用 `cargo install -f wasm-bindgen-cli --version 0.2.121` 安装锁定的版本。[构建脚本](https://github.com/longbridge/gpui-kit/blob/main/crates/story-web/scripts/build-wasm.sh)为画廊较大的渲染树设置 8 MiB 链接栈，debug 构建也会使用该设置。
+[本地工具链文件](https://github.com/longbridge/gpui-kit/blob/main/crates/story-web/rust-toolchain.toml)选用 nightly；上述 `wasm-bindgen-cli` 版本与当前检出的 [`Cargo.lock`](https://github.com/longbridge/gpui-kit/blob/main/Cargo.lock) 一致。如果锁文件更新，请让 CLI 版本与锁定的 `wasm-bindgen` crate 版本保持一致。如果已安装其他版本，可运行 `wasm-bindgen --version` 检查，再用 `cargo install -f wasm-bindgen-cli --version 0.2.129` 安装锁定的版本。[构建脚本](https://github.com/longbridge/gpui-kit/blob/main/crates/story-web/scripts/build-wasm.sh)为画廊较大的渲染树设置 8 MiB 链接栈，debug 构建也会使用该设置。
 
 要构建生产版画廊，在同一目录运行 `make build-prod`。网页产物位于 `www/dist/`，基础路径为 `/gallery/`。请部署到这个路径；如果部署在其他路径，需要同时调整 [Vite 基础路径](https://github.com/longbridge/gpui-kit/blob/main/crates/story-web/www/vite.config.js)和 [Rust 资源端点](https://github.com/longbridge/gpui-kit/blob/main/crates/story-web/src/lib.rs)。
 
@@ -86,7 +86,7 @@ cx.refresh_windows();
 ```sh
 cd crates/base/examples/wasm
 rustup target add wasm32-unknown-unknown --toolchain nightly
-cargo install wasm-bindgen-cli --version 0.2.121
+cargo install wasm-bindgen-cli --version 0.2.129
 make dev
 ```
 

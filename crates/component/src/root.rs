@@ -30,7 +30,8 @@ pub(crate) struct WindowState {
     pub notification: Entity<NotificationList>,
     pub(crate) tooltip_overlay: Entity<gpui_base::TooltipOverlay>,
     tooltip_hovered_trigger: Option<GlobalElementId>,
-    tooltip_trigger_lifetime: std::rc::Weak<()>,
+    /// Dismisses the hovered trigger's tooltip when its anchor is released.
+    tooltip_trigger_release: Option<gpui::Subscription>,
     /// Bounds of the tooltip trigger last pressed, whose tooltip stays
     /// dismissed until the pointer moves outside them.
     tooltip_pressed_trigger: Option<Bounds<Pixels>>,
@@ -109,7 +110,7 @@ impl WindowState {
             tooltip_overlay: cx
                 .new(|_| gpui_base::TooltipOverlay::new().render_with(render_tooltip)),
             tooltip_hovered_trigger: None,
-            tooltip_trigger_lifetime: std::rc::Weak::new(),
+            tooltip_trigger_release: None,
             tooltip_pressed_trigger: None,
             native_menu_overlay: cx.new(|_| FallbackMenuOverlay::new()),
             touch_selection_overlay: cx.new(|cx| WindowTouchSelectionOverlay::new(window, cx)),
@@ -607,18 +608,24 @@ impl WindowState {
     /// reverse paint order, so a new trigger can enter before the old one leaves.
     pub(crate) fn tooltip_overlay_for_trigger(
         trigger: &GlobalElementId,
-        lifetime: std::rc::Weak<()>,
+        anchor: Option<&Entity<crate::tooltip::TooltipAnchor>>,
         hovered: bool,
         window: &Window,
         cx: &mut App,
     ) -> Option<Entity<gpui_base::TooltipOverlay>> {
-        Self::entity(window, cx)?.update(cx, |state, _| {
+        Self::entity(window, cx)?.update(cx, |state, cx| {
             if hovered {
+                // No anchor: the trigger was not in the last frame.
+                let anchor = anchor?;
+                let removed = trigger.clone();
                 state.tooltip_hovered_trigger = Some(trigger.clone());
-                state.tooltip_trigger_lifetime = lifetime;
+                state.tooltip_trigger_release =
+                    Some(cx.observe_release(anchor, move |state, _, cx| {
+                        state.dismiss_removed_tooltip(&removed, cx);
+                    }));
             } else if state.tooltip_hovered_trigger.as_ref() == Some(trigger) {
                 state.tooltip_hovered_trigger = None;
-                state.tooltip_trigger_lifetime = std::rc::Weak::new();
+                state.tooltip_trigger_release = None;
             } else {
                 return None;
             }
@@ -626,27 +633,16 @@ impl WindowState {
         })
     }
 
-    fn dismiss_removed_tooltip(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(trigger) = self.tooltip_hovered_trigger.clone() else {
+    /// The hovered trigger's anchor was released: a frame was drawn without
+    /// it, and its tooltip, shown or pending, goes. A trigger removed from a
+    /// view drawn again sends no hover-leave.
+    fn dismiss_removed_tooltip(&mut self, trigger: &GlobalElementId, cx: &mut Context<Self>) {
+        if self.tooltip_hovered_trigger.as_ref() != Some(trigger) {
             return;
-        };
-        let state = cx.weak_entity();
-        // Defer until GPUI has retained this frame's element states and dropped
-        // absent ones. A reused cached subtree keeps its trigger alive.
-        window.defer(cx, move |_, cx| {
-            _ = state.update(cx, |state, cx| {
-                if state.tooltip_hovered_trigger.as_ref() != Some(&trigger)
-                    || state.tooltip_trigger_lifetime.upgrade().is_some()
-                {
-                    return;
-                }
-                state.tooltip_hovered_trigger = None;
-                state.tooltip_trigger_lifetime = std::rc::Weak::new();
-                state
-                    .tooltip_overlay
-                    .update(cx, |overlay, cx| overlay.hide(cx));
-            });
-        });
+        }
+        self.tooltip_hovered_trigger = None;
+        self.tooltip_overlay
+            .update(cx, |overlay, cx| overlay.hide(cx));
     }
 
     /// Keeps the tooltip of the trigger at `bounds` dismissed until the
@@ -703,7 +699,6 @@ impl WindowState {
 
 impl gpui_base::RootPlugin for WindowState {
     fn prepare(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.dismiss_removed_tooltip(window, cx);
         window.set_rem_size(cx.theme().font_size);
         TextSelection::activate_scope(self.active_text_selection_scope(), window, cx);
     }

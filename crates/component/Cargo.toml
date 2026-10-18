@@ -120,7 +120,7 @@ tree-sitter-zig = ["tree-sitter", "dep:tree-sitter-zig"]
 [dependencies]
 unicode-width = "0.2"
 unicode-segmentation = "1"
-similar = { version = "2.7", features = ["unicode"] }
+similar = { version = "3.2", features = ["unicode"] }
 regex = "1"
 anyhow.workspace = true
 gpui = { workspace = true }
@@ -246,7 +246,7 @@ objc2-speech = { version = "0.3", default-features = false, features = [
 [target.'cfg(target_os = "windows")'.dependencies]
 # Native menu (NativeMenu) — drives Win32 popup menus.
 raw-window-handle = { workspace = true }
-resvg = "0.45.1"
+resvg = "0.48.1"
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

@@ -9,7 +9,10 @@ use crate::typed_child;
 #[path = "../../src/components/shell/collections/mod.rs"]
 mod collections;
 
-use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, point, px};
+use gpui::{
+    Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, TestAppContext,
+    VisualTestContext, point, px,
+};
 use std::{
     fs,
     ops::Deref,
@@ -94,6 +97,27 @@ fn draw(context: &mut VisualTestContext, view: Entity<gpui_shell::ScriptView>) {
     });
 }
 
+/// Presses and releases at `position`, leaving only the rows drawn once the click lands: a
+/// Tree entry acts on a full click, so whatever the press alone drew is not what the click asks
+/// for.
+fn click(context: &mut VisualTestContext, position: gpui::Point<gpui::Pixels>) {
+    context.simulate_event(MouseDownEvent {
+        position,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count: 1,
+        first_mouse: false,
+    });
+    context.run_until_parked();
+    collections::test_probe::take_rows();
+    context.simulate_event(MouseUpEvent {
+        position,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count: 1,
+    });
+}
+
 fn distinct_rows(rows: Vec<(String, String, bool)>) -> Vec<(String, String, bool)> {
     let mut distinct: Vec<(String, String, bool)> = Vec::new();
     for row in rows {
@@ -160,7 +184,7 @@ export default class App extends View {
         ]
     );
 
-    context.simulate_click(point(px(20.), px(20.)), Modifiers::default());
+    click(&mut context, point(px(20.), px(20.)));
     context.run_until_parked();
     draw(&mut context, view.clone());
     let collapsed = distinct_rows(collections::test_probe::take_rows());
@@ -189,7 +213,7 @@ export default class App extends View {
         "data must sync while native selection and collapse persist"
     );
 
-    context.simulate_click(point(px(20.), px(20.)), Modifiers::default());
+    click(&mut context, point(px(20.), px(20.)));
     context.run_until_parked();
     draw(&mut context, view);
     let expanded = distinct_rows(collections::test_probe::take_rows());

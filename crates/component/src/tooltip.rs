@@ -1,13 +1,13 @@
 use crate::root::WindowState;
 use std::{
-    cell::RefCell,
+    cell::{OnceCell, RefCell},
     rc::{Rc, Weak},
     time::Duration,
 };
 
 use gpui::{
-    Action, AnyElement, AnyView, App, AppContext, Bounds, Context, ElementId, GlobalElementId,
-    IntoElement, MouseButton, ParentElement, Pixels, Render, SharedString,
+    Action, AnyElement, AnyView, App, AppContext, Bounds, Context, ElementId, Entity,
+    GlobalElementId, IntoElement, MouseButton, ParentElement, Pixels, Render, SharedString,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 pub use gpui_base::TooltipDefaults;
@@ -233,13 +233,21 @@ impl ComponentTooltip {
 
 // ── Internal managed tooltip trait ──────────────────────────────────────────
 
+/// Stands for a hovered trigger while it is drawn: the trigger's element state
+/// holds the only handle, so GPUI releases it after the first frame without the
+/// trigger, whichever views that frame drew again, and the window state
+/// dismisses the trigger's tooltip on its release.
+pub(crate) struct TooltipAnchor;
+
+/// A trigger's element state: its anchor, made when the pointer first reaches
+/// it.
 #[derive(Default)]
-struct TooltipLifetime(Rc<()>);
+struct TooltipLifetime(Rc<OnceCell<Entity<TooltipAnchor>>>);
 
 #[derive(Default)]
 struct TooltipTrigger {
     id: Option<GlobalElementId>,
-    lifetime: Weak<()>,
+    lifetime: Weak<OnceCell<Entity<TooltipAnchor>>>,
     bounds: Bounds<Pixels>,
 }
 
@@ -300,9 +308,14 @@ pub(crate) trait ManagedTooltipExt:
                 if *hovered && WindowState::is_tooltip_trigger_pressed(bounds, window, cx) {
                     return;
                 }
+                // A trigger whose state is gone was not in the last frame.
+                let anchor = (*hovered)
+                    .then(|| trigger.lifetime.upgrade())
+                    .flatten()
+                    .map(|anchor| anchor.get_or_init(|| cx.new(|_| TooltipAnchor)).clone());
                 if let Some(overlay) = WindowState::tooltip_overlay_for_trigger(
                     id,
-                    trigger.lifetime.clone(),
+                    anchor.as_ref(),
                     *hovered,
                     window,
                     cx,

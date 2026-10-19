@@ -117,11 +117,23 @@ pub struct InputEditorStyle {
     pub highlight_styles: SharedHighlightStyleResolver,
     pub editor_invisible: Option<Hsla>,
     pub editor_active_line: Option<Hsla>,
+    /// The current line's number; `None` draws it in `foreground`.
+    pub editor_active_line_number: Option<Hsla>,
     pub editor_gutter_background: Option<Hsla>,
     pub fold_icon_renderer: Option<FoldIconRenderer>,
 }
 
 impl InputEditorStyle {
+    /// The ink of a line number: the current line's in `editor_active_line_number` when set,
+    /// else `foreground`; every other line's in `muted_foreground`.
+    pub fn line_number_color(&self, current: bool) -> Hsla {
+        if current {
+            self.editor_active_line_number.unwrap_or(self.foreground)
+        } else {
+            self.muted_foreground
+        }
+    }
+
     /// Fills in every colour that was left unset, from the active palette.
     ///
     /// `Hsla::default()` is fully transparent, and every colour on `Default` is
@@ -172,6 +184,7 @@ impl Default for InputEditorStyle {
             highlight_styles: Arc::new(NoHighlightStyles),
             editor_invisible: None,
             editor_active_line: None,
+            editor_active_line_number: None,
             editor_gutter_background: None,
             fold_icon_renderer: None,
         }
@@ -215,6 +228,20 @@ mod tests {
         ] {
             assert!(colour.a > 0., "{colour:?} is still invisible");
         }
+    }
+
+    #[test]
+    fn the_current_line_number_takes_its_own_ink_when_set() {
+        let quiet = hsla(0., 0., 0.6, 1.0);
+        let style = InputEditorStyle::default().resolved(&dark());
+        assert_eq!(style.line_number_color(true), style.foreground);
+        assert_eq!(style.line_number_color(false), style.muted_foreground);
+        let style = InputEditorStyle {
+            editor_active_line_number: Some(quiet),
+            ..style
+        };
+        assert_eq!(style.line_number_color(true), quiet);
+        assert_eq!(style.line_number_color(false), style.muted_foreground);
     }
 
     #[test]

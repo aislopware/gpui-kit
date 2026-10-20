@@ -136,7 +136,7 @@ fn long_commit_message_scrolls_and_resets_when_the_commit_changes(cx: &mut TestA
         diff::{DiffLineRange, DiffSide},
     };
     use gpui_kit::{
-        Bounds, InputEvent as _, ScrollDelta, ScrollWheelEvent, TouchPhase, WindowBounds, point,
+        Bounds, InputEvent as _, ScrollDelta, ScrollEvent, TouchPhase, WindowBounds, point,
         px, size,
     };
 
@@ -186,12 +186,13 @@ fn long_commit_message_scrolls_and_resets_when_the_commit_changes(cx: &mut TestA
         assert!(Theme::global(cx).is_dark());
         let message = window.find("commit-message").bounds();
         window.dispatch_event(
-            ScrollWheelEvent {
+            ScrollEvent {
                 position: message.center(),
                 delta: ScrollDelta::Pixels(point(px(0.), px(-120.))),
                 touch_phase: TouchPhase::Moved,
                 modifiers: Default::default(),
                 momentum_phase: None,
+                source: gpui_kit::ScrollSource::Pointer,
             }
             .to_platform_input(),
             cx,

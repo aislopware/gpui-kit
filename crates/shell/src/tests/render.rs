@@ -7967,7 +7967,7 @@ export default class Surface extends View {
       .on_mouse_down("left", () => {})
       .on_mouse_up("right", () => {})
       .on_mouse_down_out(() => {})
-      .on_scroll_wheel(() => {})
+      .on_scroll(() => {})
       .on_action("smoke", () => {})
       .key_context("Smoke")
       .aria_level(2)
@@ -10371,7 +10371,7 @@ fn mount_virtual_list(
 }
 
 fn scroll_by(context: &mut VisualTestContext, dy: f32) {
-    context.simulate_event(gpui::ScrollWheelEvent {
+    context.simulate_event(gpui::ScrollEvent {
         position: point(px(150.), px(100.)),
         delta: gpui::ScrollDelta::Pixels(point(px(0.), px(dy))),
         ..Default::default()

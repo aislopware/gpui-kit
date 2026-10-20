@@ -7967,7 +7967,7 @@ export default class Surface extends View {
       .on_mouse_down("left", () => {})
       .on_mouse_up("right", () => {})
       .on_mouse_down_out(() => {})
-      .on_scroll(() => {})
+      .on_scroll_wheel(() => {})
       .on_action("smoke", () => {})
       .key_context("Smoke")
       .aria_level(2)

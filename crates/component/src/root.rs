@@ -757,6 +757,11 @@ impl RenderOnce for WindowStateLayers {
             .debug_selector(|| "root-layers".to_string())
             .children(sheet)
             .children(WindowState::dialog_layer(&root, window, cx))
-            .children(WindowState::notification_layer(&root, window, sheet_placement, cx))
+            .children(WindowState::notification_layer(
+                &root,
+                window,
+                sheet_placement,
+                cx,
+            ))
     }
 }

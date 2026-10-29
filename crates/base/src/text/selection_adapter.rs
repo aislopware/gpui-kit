@@ -1,9 +1,9 @@
 use std::{cell::RefCell, ops::RangeInclusive, rc::Rc};
 
 use crate::{
-    TextSelectionContentKey, TextSelectionCoverage, TextSelectionEndpoint,
-    TextSelectionEvent, TextSelectionHandle, TextSelectionRegistration, TextSelectionRun,
-    TextSelectionSnapshot, global_state::TextViewStateStack,
+    TextSelectionContentKey, TextSelectionCoverage, TextSelectionEndpoint, TextSelectionEvent,
+    TextSelectionHandle, TextSelectionRegistration, TextSelectionRun, TextSelectionSnapshot,
+    global_state::TextViewStateStack,
 };
 use gpui::{App, Bounds, EntityId, Hitbox, Pixels, Point, WeakEntity, Window};
 

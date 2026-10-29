@@ -78,7 +78,11 @@ impl TextViewStateStack {
 
     /// The table cell being prepainted or painted, if any.
     pub(crate) fn table_cell(cx: &App) -> Option<Bounds<Pixels>> {
-        cx.try_global::<Self>()?.table_cells.borrow().last().copied()
+        cx.try_global::<Self>()?
+            .table_cells
+            .borrow()
+            .last()
+            .copied()
     }
 }
 

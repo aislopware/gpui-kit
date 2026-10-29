@@ -822,6 +822,9 @@ impl SelectableTextState {
 
     fn set_snapshot(&mut self, snapshot: Option<TextSelectionSnapshot>, cx: &mut Context<Self>) {
         if self.set_snapshot_quietly(snapshot) {
+            // Participants paint their highlight from the snapshot, and a
+            // view drawn from the last frame hears of it only from here.
+            cx.notify();
             cx.emit(TextSelectionEvent::SelectionChanged(snapshot));
         }
     }
@@ -833,7 +836,9 @@ impl SelectableTextState {
     }
 
     fn clear_state(&mut self, cx: &mut Context<Self>) -> Option<ClearHandler> {
-        self.snapshot = None;
+        if self.snapshot.take().is_some() || self.local_selection {
+            cx.notify();
+        }
         *self.projected_copy_text.get_mut() = None;
         self.local_selection = false;
         cx.emit(TextSelectionEvent::Cleared);
@@ -3215,24 +3220,31 @@ fn schedule_selection_frame(
             let departed = state.read(cx).remove_stale_participants(stale);
             handlers.extend(clear_departed_participants(departed, cx));
             let refresh_order = state.read(cx).finish_registrations();
+            // A participant whose snapshot is stale was not drawn this
+            // frame: its view paints the highlight only once told.
             let mut changes = state
                 .read(cx)
                 .changed_snapshots(cx)
                 .into_iter()
-                .map(|(participant, snapshot)| (participant.entity_id(), (participant, snapshot)))
+                .map(|(participant, snapshot)| {
+                    (participant.entity_id(), (participant, snapshot, true))
+                })
                 .collect::<HashMap<_, _>>();
             let drawn = std::mem::take(&mut *state.read(cx).draw_changed.borrow_mut());
             for (id, participant) in drawn {
                 if let Some(participant) = participant.upgrade() {
                     changes.entry(id).or_insert_with(|| {
                         let snapshot = participant.read(cx).snapshot;
-                        (participant, snapshot)
+                        (participant, snapshot, false)
                     });
                 }
             }
-            for (_, (participant, snapshot)) in changes {
+            for (_, (participant, snapshot, stale)) in changes {
                 participant.update(cx, |participant, cx| {
                     participant.set_snapshot_quietly(snapshot);
+                    if stale {
+                        cx.notify();
+                    }
                     cx.emit(TextSelectionEvent::SelectionChanged(snapshot));
                 });
             }

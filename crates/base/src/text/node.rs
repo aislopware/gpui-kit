@@ -2082,7 +2082,10 @@ impl std::fmt::Debug for TableColumnWidthsCache {
 }
 
 struct TableColumnWidths {
-    text_system: Weak<gpui::WindowTextSystem>,
+    /// The window whose text system shaped the widths, and the app's text
+    /// system under it: a window's own text system is not `Send`.
+    window: gpui::WindowId,
+    text_system: Weak<gpui::TextSystem>,
     /// The styles the header row and the body rows render with.
     text_styles: TableTextStyles,
     rem_size: Pixels,
@@ -3439,6 +3442,9 @@ fn measure_table_columns(
     let rem_size = window.rem_size();
     let mono_family = cx.theme().tokens.typography.mono.clone();
     let inline_code = node_cx.style.inline_code_highlight();
+    let window_id = window.window_handle().window_id();
+    let text_system: &Arc<gpui::TextSystem> = window.text_system();
+    let text_system = text_system.clone();
     let cached = table.column_widths_cache.0.lock().ok().and_then(|cache| {
         cache
             .as_ref()
@@ -3448,10 +3454,11 @@ fn measure_table_columns(
                     && cached.rem_size == rem_size
                     && cached.mono_family == mono_family
                     && cached.inline_code == inline_code
+                    && cached.window == window_id
                     && cached
                         .text_system
                         .upgrade()
-                        .is_some_and(|system| Arc::ptr_eq(&system, window.text_system()))
+                        .is_some_and(|system| Arc::ptr_eq(&system, &text_system))
             })
             .cloned()
     });
@@ -3459,7 +3466,8 @@ fn measure_table_columns(
         let (widths, custom_cells) =
             measure_table_text_columns(table, col_count, &text_styles, node_cx, window, cx);
         let measured = Arc::new(TableColumnWidths {
-            text_system: Arc::downgrade(window.text_system()),
+            window: window_id,
+            text_system: Arc::downgrade(&text_system),
             text_styles: text_styles.clone(),
             rem_size,
             mono_family,

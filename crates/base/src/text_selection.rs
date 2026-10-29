@@ -5419,6 +5419,37 @@ mod tests {
         assert_eq!(renders.get(), before, "the reader rendered again");
     }
 
+    /// While a selection is held, the same redraws still register through the
+    /// state, so the selection follows the text it was made in.
+    #[gpui::test]
+    fn redrawing_selectable_text_with_a_selection_keeps_it(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| ToggleSelectionElementView {
+            enabled: true,
+            selection: TextSelectionHandle::new("text", cx),
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let state = cx.update(|window, cx| WindowSelectionState::existing(window, cx).unwrap());
+        cx.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.begin(point(px(1.), px(1.)), false, cx);
+                state.update(point(px(40.), px(10.)), cx);
+                state.end(cx);
+            });
+            assert!(TextSelection::has_selection(window, cx));
+        });
+        for _ in 0..3 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+                window.simulate_next_frame(cx);
+            });
+            cx.run_until_parked();
+        }
+        cx.update(|window, cx| assert!(TextSelection::has_selection(window, cx)));
+    }
+
     #[gpui::test]
     fn retained_selection_state_releases_and_does_not_resurrect_selection(cx: &mut TestAppContext) {
         let (view, cx) = cx.add_window_view(|_, cx| ToggleSelectionElementView {

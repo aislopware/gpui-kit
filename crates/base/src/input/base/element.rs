@@ -5022,7 +5022,6 @@ mod tests {
     fn assert_horizontal_scroll_reaches_line_end(
         editor: &Entity<EditorState>,
         end: usize,
-        window: &mut Window,
         cx: &mut App,
     ) {
         let (layout, input_bounds, scroll_size) = {
@@ -5036,13 +5035,13 @@ mod tests {
 
         editor.update(cx, |state, cx| {
             state.set_selected_range(end..end, cx);
-            state.deferred_scroll_offset = Some(point(px(-1_000_000.), px(0.)));
+            state.scroll_request = Some(ScrollRequest::Offset(point(px(-1_000_000.), px(0.))));
         });
 
         let element = TextElement::new(editor.clone());
         let mut bounds = input_bounds;
-        let (carets, offset, _, _) =
-            element.layout_cursors(&layout, &mut bounds, scroll_size, window, cx);
+        let (carets, offset, _) =
+            element.layout_cursors(&layout, &mut bounds, px(0.), scroll_size.width, cx);
         let caret = carets.first().expect("a caret").bounds;
         assert!(
             caret.left() <= input_bounds.right() + px(1.),
@@ -5083,14 +5082,14 @@ mod tests {
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         cx.update(|window, cx| {
             window.draw(cx).clear(cx);
-            assert_horizontal_scroll_reaches_line_end(&editor, text.len(), window, cx);
+            assert_horizontal_scroll_reaches_line_end(&editor, text.len(), cx);
 
             // Editing the wider line invalidates the cached measurement.
             let wider = "W".repeat(400);
             let edited = format!("{narrow}\n{wider}");
             editor.update(cx, |state, cx| state.set_value(edited.as_str(), window, cx));
             window.draw(cx).clear(cx);
-            assert_horizontal_scroll_reaches_line_end(&editor, edited.len(), window, cx);
+            assert_horizontal_scroll_reaches_line_end(&editor, edited.len(), cx);
 
             // A larger font must widen the extent instead of reusing the old
             // measurement.
@@ -5102,7 +5101,7 @@ mod tests {
                 after > before,
                 "growing the font should widen the scroll extent: {after} > {before}"
             );
-            assert_horizontal_scroll_reaches_line_end(&editor, edited.len(), window, cx);
+            assert_horizontal_scroll_reaches_line_end(&editor, edited.len(), cx);
         });
     }
 

@@ -1016,6 +1016,11 @@ impl TextSelectionHandle {
         *self.0.read(cx).runs.borrow_mut() = runs.to_vec();
     }
 
+    #[cfg(test)]
+    pub(crate) fn hit_test_run_count(&self, cx: &App) -> usize {
+        self.0.read(cx).runs.borrow().len()
+    }
+
     /// Lets a drag from a double or triple click that this participant
     /// selected for itself, from the caret `start` to the caret `end` in
     /// window coordinates, extend the selection by the same unit through the

@@ -440,6 +440,11 @@ impl TextViewSelectionAdapter {
     }
 
     #[cfg(test)]
+    pub(super) fn hit_test_run_count(&self, cx: &App) -> usize {
+        self.selection.hit_test_run_count(cx)
+    }
+
+    #[cfg(test)]
     pub(super) fn text_bounds(&self) -> Vec<Bounds<Pixels>> {
         self.frame.borrow().text_bounds.clone()
     }

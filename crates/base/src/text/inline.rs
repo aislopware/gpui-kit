@@ -1175,9 +1175,8 @@ impl Element for Inline {
         self.report_to_editor();
 
         // Report this element's laid-out extent so an ancestor TextView with
-        // `max_lines` can snap its clip to a whole-line boundary. The state
-        // stack only holds an entry during prepaint when that view set
-        // `max_lines`, so this is a no-op otherwise.
+        // `max_lines` can snap its clip to a whole-line boundary. Only a view
+        // that set `max_lines` collects them.
         if let Some(text_view_state) = GlobalState::global(cx).text_view_state() {
             let state = text_view_state.read(cx);
             if state.max_lines.is_some()

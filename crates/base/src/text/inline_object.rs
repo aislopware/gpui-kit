@@ -308,7 +308,7 @@ impl Element for InlineObject {
                 cx,
             );
         }
-        if let Some(view) = GlobalState::global(cx).text_view_state() {
+        if let Some(view) = crate::global_state::TextViewStateStack::current(cx) {
             let state = view.read(cx);
             if state.max_lines.is_some()
                 && let Ok(mut spans) = state.line_spans.lock()
@@ -333,7 +333,7 @@ impl Element for InlineObject {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let view = GlobalState::global(cx).text_view_state();
+        let view = crate::global_state::TextViewStateStack::current(cx);
         let selectable = view
             .as_ref()
             .is_some_and(|view| view.read(cx).is_selectable());

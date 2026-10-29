@@ -1,9 +1,9 @@
 use std::{cell::RefCell, ops::RangeInclusive, rc::Rc};
 
 use crate::{
-    GlobalState, TextSelectionContentKey, TextSelectionCoverage, TextSelectionEndpoint,
+    TextSelectionContentKey, TextSelectionCoverage, TextSelectionEndpoint,
     TextSelectionEvent, TextSelectionHandle, TextSelectionRegistration, TextSelectionRun,
-    TextSelectionSnapshot,
+    TextSelectionSnapshot, global_state::TextViewStateStack,
 };
 use gpui::{App, Bounds, EntityId, Hitbox, Pixels, Point, WeakEntity, Window};
 
@@ -309,7 +309,7 @@ impl TextViewSelectionAdapter {
 
     /// Registers `projection` as it paints, with the table cell it is in.
     pub(super) fn register_copy_projection(&self, projection: CopyProjection, cx: &App) {
-        let cell = GlobalState::global(cx).table_cell();
+        let cell = TextViewStateStack::table_cell(cx);
         self.frame
             .borrow_mut()
             .copy_projections
@@ -402,7 +402,7 @@ impl TextViewSelectionAdapter {
             self.selection
                 .table_cell_selection(cx)
                 .map(|bounds| (anchor, bounds)),
-            GlobalState::global(cx).table_cell(),
+            TextViewStateStack::table_cell(cx),
             anchor,
             cursor,
         )

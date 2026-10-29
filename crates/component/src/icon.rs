@@ -309,7 +309,10 @@ impl RenderOnce for Icon {
         let color = window.text_style().color;
         match self.painted(text_size, color, cx) {
             Some(painted) => painted,
-            None => self.resolved(cx).into_svg(text_size, color).into_any_element(),
+            None => self
+                .resolved(cx)
+                .into_svg(text_size, color)
+                .into_any_element(),
         }
     }
 }

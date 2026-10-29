@@ -267,7 +267,10 @@ mod tests {
 
         advance(cx, Duration::from_secs(3));
 
-        assert_eq!(cursor.read_with(cx, |cursor, cx| cursor.visible(cx)), visible);
+        assert_eq!(
+            cursor.read_with(cx, |cursor, cx| cursor.visible(cx)),
+            visible
+        );
         assert!(cursor.read_with(cx, |cursor, _| cursor._task.is_ready()));
         assert_eq!(notifications.get(), 0);
     }

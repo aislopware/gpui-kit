@@ -29,8 +29,7 @@ use super::{
     cursor::{CursorSelection, Selections},
     element::{
         EditorScrollbar, EditorScrollbarSnapshot, LongestLineKey, OverviewRulerRows, RIGHT_MARGIN,
-        TextElement,
-        clamp_horizontal_scroll_offset,
+        TextElement, clamp_horizontal_scroll_offset,
     },
     kind::InputModeKind,
     mask_pattern::normalize_number_input,

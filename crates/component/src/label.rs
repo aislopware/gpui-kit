@@ -273,8 +273,11 @@ mod tests {
         }
         cx.update(crate::init);
         let (_, cx) = cx.add_window_view(|_, _| Labels);
-        // Root starts each frame; this window has none.
+        // Root starts each frame; this window has none. This fork's GPUI is
+        // GPUI Fast, which draws an unchanged view again from its last frame
+        // without painting it, so a retained view records no text.
         cx.update(|window, cx| {
+            window.set_view_retention(false);
             gpui_base::test_support::begin_frame(window);
             window.draw(cx).clear(cx)
         });

@@ -16,7 +16,7 @@ use gpui::{
 use markdown::mdast;
 
 use crate::{
-    GlobalState, ScrollableMask, Scrollbar, StyledExt, h_flex,
+    ScrollableMask, Scrollbar, StyledExt, h_flex,
     scrollable_mask::horizontal_scroll_area,
     text::{
         CodeBlockActionsFn, CodeBlockHighlighterFn, LinkClickHandlerFn, MarkdownExtensions,
@@ -232,14 +232,14 @@ impl Element for TableCellElement {
     ) {
         // Prepaint runs for the whole window before any text paints, so the
         // cell that holds the anchor is known to all text, in every view.
-        if let Some(view) = GlobalState::global(cx).text_view_state() {
+        if let Some(view) = crate::global_state::TextViewStateStack::current(cx) {
             view.read(cx)
                 .selection_adapter
                 .record_table_cell(bounds, cx);
         }
-        GlobalState::global(cx).push_table_cell(bounds);
+        crate::global_state::TextViewStateStack::push_table_cell(bounds, cx);
         self.0.prepaint(window, cx);
-        GlobalState::global(cx).pop_table_cell();
+        crate::global_state::TextViewStateStack::pop_table_cell(cx);
     }
 
     fn paint(
@@ -252,9 +252,9 @@ impl Element for TableCellElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        GlobalState::global(cx).push_table_cell(bounds);
+        crate::global_state::TextViewStateStack::push_table_cell(bounds, cx);
         self.0.paint(window, cx);
-        GlobalState::global(cx).pop_table_cell();
+        crate::global_state::TextViewStateStack::pop_table_cell(cx);
     }
 }
 
@@ -316,7 +316,7 @@ impl Element for CustomBlockElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let view = GlobalState::global(cx).text_view_state();
+        let view = crate::global_state::TextViewStateStack::current(cx);
         let selection = view.as_ref().and_then(|view| {
             let state = view.read(cx);
             if !state.is_selectable() {

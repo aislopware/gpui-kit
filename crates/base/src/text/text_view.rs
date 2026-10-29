@@ -15,7 +15,7 @@ use crate::text::node::{CodeBlock, TableData};
 use crate::text::range_highlight::{PendingReveal, RevealProgress};
 use crate::text::state::{LineSpan, SelectionFormat, TextViewState};
 use crate::text::stream_fade::TextViewMotion;
-use crate::{GlobalState, TextSelection, text::TextViewStyle};
+use crate::{TextSelection, global_state::TextViewStateStack, text::TextViewStyle};
 
 /// Type for code block actions generator function.
 pub(crate) type CodeBlockActionsFn =
@@ -710,9 +710,9 @@ impl Element for TextViewContent {
         // Descendants read the view through the state stack: `Inline`s report
         // their line spans when `max_lines` is set, and table cells look for
         // the selection anchor.
-        GlobalState::global(cx).push_text_view_state(self.state.clone());
+        TextViewStateStack::push(self.state.clone(), cx);
         self.content.prepaint(window, cx);
-        GlobalState::global(cx).pop_text_view_state();
+        TextViewStateStack::pop(cx);
     }
 
     fn paint(
@@ -731,9 +731,9 @@ impl Element for TextViewContent {
         if self.state.read(cx).selectable {
             self.state.read(cx).selection_adapter.begin_frame();
         }
-        GlobalState::global(cx).push_text_view_state(self.state.clone());
+        TextViewStateStack::push(self.state.clone(), cx);
         self.content.paint(window, cx);
-        GlobalState::global(cx).pop_text_view_state();
+        TextViewStateStack::pop(cx);
 
         // Every list has scrolled by now, so the line of a reveal is where
         // it ends up this frame.

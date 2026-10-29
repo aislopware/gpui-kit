@@ -23,12 +23,6 @@ pub struct GlobalState {
     app_menus: Vec<OwnedMenu>,
     deferred_popovers: Vec<Weak<()>>,
     suppress_text_selection: bool,
-    /// The text views being prepainted or painted, innermost last. Kept
-    /// apart from what views read of this global: pushing and popping as
-    /// they draw is not a change of it.
-    text_view_state_stack: RefCell<Vec<Entity<TextViewState>>>,
-    /// The table cells being prepainted or painted, innermost last.
-    table_cell_stack: RefCell<Vec<Bounds<Pixels>>>,
     /// When a finger last went down. A tap reaches controls as a mouse press;
     /// this is how they tell it from one.
     last_touch: Option<Instant>,
@@ -36,14 +30,58 @@ pub struct GlobalState {
 
 impl Global for GlobalState {}
 
+/// The text views and table cells being prepainted or painted, innermost
+/// last, for the elements drawn inside them.
+///
+/// A global apart from [`GlobalState`], set once and changed only through a
+/// shared reference while drawing: every text view reads it as it draws, so a
+/// write to a global it read, as each mouse press makes to [`GlobalState`],
+/// would count as a change for every text view, which a renderer that draws
+/// unchanged views from the last frame, as GPUI Fast's retained mode does,
+/// would then build again.
+#[derive(Default)]
+pub(crate) struct TextViewStateStack {
+    text_views: RefCell<Vec<Entity<TextViewState>>>,
+    table_cells: RefCell<Vec<Bounds<Pixels>>>,
+}
+
+impl Global for TextViewStateStack {}
+
+impl TextViewStateStack {
+    /// The innermost text view being drawn.
+    pub(crate) fn current(cx: &App) -> Option<Entity<TextViewState>> {
+        cx.try_global::<Self>()?.text_views.borrow().last().cloned()
+    }
+
+    pub(crate) fn push(state: Entity<TextViewState>, cx: &App) {
+        cx.global::<Self>().text_views.borrow_mut().push(state);
+    }
+
+    pub(crate) fn pop(cx: &App) {
+        cx.global::<Self>().text_views.borrow_mut().pop();
+    }
+
+    /// Enters the table cell being prepainted or painted.
+    pub(crate) fn push_table_cell(bounds: Bounds<Pixels>, cx: &App) {
+        cx.global::<Self>().table_cells.borrow_mut().push(bounds);
+    }
+
+    pub(crate) fn pop_table_cell(cx: &App) {
+        cx.global::<Self>().table_cells.borrow_mut().pop();
+    }
+
+    /// The table cell being prepainted or painted, if any.
+    pub(crate) fn table_cell(cx: &App) -> Option<Bounds<Pixels>> {
+        cx.try_global::<Self>()?.table_cells.borrow().last().copied()
+    }
+}
+
 impl GlobalState {
     fn new() -> Self {
         Self {
             app_menus: Vec::new(),
             deferred_popovers: Vec::new(),
             suppress_text_selection: false,
-            text_view_state_stack: RefCell::new(Vec::new()),
-            table_cell_stack: RefCell::new(Vec::new()),
             last_touch: None,
         }
     }
@@ -70,6 +108,9 @@ impl GlobalState {
         if !cx.has_global::<Self>() {
             cx.set_global(Self::new());
         }
+        if !cx.has_global::<TextViewStateStack>() {
+            cx.set_global(TextViewStateStack::default());
+        }
     }
 
     /// Suppresses window-level text selection for the current mouse down.
@@ -77,13 +118,19 @@ impl GlobalState {
     /// Controls that own a press or drag interaction use this so the same
     /// pointer event does not also start application text selection.
     pub fn suppress_text_selection(cx: &mut App) {
-        Self::global_mut(cx).suppress_text_selection = true;
+        // Writing the global, even the value it holds, counts as a change for
+        // every view that read it.
+        if !Self::global(cx).suppress_text_selection {
+            Self::global_mut(cx).suppress_text_selection = true;
+        }
     }
 
     /// Clears the current mouse-down text-selection suppression.
     #[doc(hidden)]
     pub fn reset_text_selection_suppression(cx: &mut App) {
-        Self::global_mut(cx).suppress_text_selection = false;
+        if Self::global(cx).suppress_text_selection {
+            Self::global_mut(cx).suppress_text_selection = false;
+        }
     }
 
     /// Returns whether the current mouse down suppresses text selection.
@@ -98,32 +145,6 @@ impl GlobalState {
 
     pub fn global_mut(cx: &mut App) -> &mut Self {
         cx.global_mut::<Self>()
-    }
-
-    pub(crate) fn text_view_state(&self) -> Option<Entity<TextViewState>> {
-        self.text_view_state_stack.borrow().last().cloned()
-    }
-
-    pub(crate) fn push_text_view_state(&self, state: Entity<TextViewState>) {
-        self.text_view_state_stack.borrow_mut().push(state);
-    }
-
-    pub(crate) fn pop_text_view_state(&self) {
-        self.text_view_state_stack.borrow_mut().pop();
-    }
-
-    /// Enters the table cell being prepainted or painted.
-    pub(crate) fn push_table_cell(&self, bounds: Bounds<Pixels>) {
-        self.table_cell_stack.borrow_mut().push(bounds);
-    }
-
-    pub(crate) fn pop_table_cell(&self) {
-        self.table_cell_stack.borrow_mut().pop();
-    }
-
-    /// The table cell being prepainted or painted, if any.
-    pub(crate) fn table_cell(&self) -> Option<Bounds<Pixels>> {
-        self.table_cell_stack.borrow().last().copied()
     }
 
     #[doc(hidden)]

@@ -1,6 +1,10 @@
 use std::{cell::Cell, ops::Deref, panic::Location, rc::Rc};
 
-use instant::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_family = "wasm"))]
+use std::time::Instant;
+#[cfg(target_family = "wasm")]
+use web_time::Instant;
 
 use crate::{
     AxisExt,
@@ -169,7 +173,14 @@ struct ScrollbarStateInner {
 
 impl Default for ScrollbarState {
     fn default() -> Self {
-        let now = Instant::now();
+        Self::new(Instant::now())
+    }
+}
+
+impl ScrollbarState {
+    /// A hidden scrollbar's state, stamped at `now`: the executor's clock, which its timers and
+    /// a test's simulated time run on.
+    fn new(now: Instant) -> Self {
         Self(Rc::new(Cell::new(ScrollbarStateInner {
             hovered_axis: None,
             hovered_on_thumb: None,
@@ -546,7 +557,7 @@ impl ScrollbarState {
                     return;
                 }
                 inner.drag_update_scheduled = false;
-                inner.last_update = Instant::now();
+                inner.last_update = cx.background_executor().now();
                 state.set(inner);
                 cx.update(|_, cx| cx.notify(view)).ok();
             })
@@ -555,7 +566,7 @@ impl ScrollbarState {
 }
 
 impl ScrollbarStateInner {
-    fn with_drag_pos(&self, axis: Axis, pos: Point<Pixels>) -> Self {
+    fn with_drag_pos(&self, axis: Axis, pos: Point<Pixels>, now: Instant) -> Self {
         let mut state = *self;
         if axis.is_vertical() {
             state.drag_pos.y = pos.y;
@@ -564,7 +575,7 @@ impl ScrollbarStateInner {
         }
 
         state.dragged_axis = Some(axis);
-        state.last_update = Instant::now();
+        state.last_update = now;
         state.drag_update_scheduled = false;
         state.drag_update_generation = state.drag_update_generation.wrapping_add(1);
         state
@@ -586,12 +597,12 @@ impl ScrollbarStateInner {
         state
     }
 
-    fn with_hovered_on_thumb(&self, axis: Option<Axis>) -> Self {
+    fn with_hovered_on_thumb(&self, axis: Option<Axis>, now: Instant) -> Self {
         let mut state = *self;
         state.hovered_on_thumb = axis;
-        if self.is_scrollbar_visible() {
+        if self.is_scrollbar_visible(now) {
             if axis.is_some() {
-                state.last_scroll_time = Some(Instant::now());
+                state.last_scroll_time = Some(now);
             }
         }
         state
@@ -620,8 +631,8 @@ impl ScrollbarStateInner {
         state
     }
 
-    fn is_scrollbar_visible(&self) -> bool {
-        self.dragged_axis.is_some() || self.visibility.sample(Instant::now()).opacity > 0.0
+    fn is_scrollbar_visible(&self, now: Instant) -> bool {
+        self.dragged_axis.is_some() || self.visibility.sample(now).opacity > 0.0
     }
 }
 
@@ -1302,11 +1313,13 @@ impl Element for Scrollbar {
         });
 
         let state = window
-            .use_state(cx, |_, _| ScrollbarState::default())
+            .use_state(cx, |_, cx| {
+                ScrollbarState::new(cx.background_executor().now())
+            })
             .read(cx)
             .clone();
 
-        let now = Instant::now();
+        let now = cx.background_executor().now();
         let base_theme = cx.theme();
         let mode = self.mode.unwrap_or(base_theme.scrollbar.mode());
         let motion = base_theme.scrollbar.motion();
@@ -1661,7 +1674,7 @@ impl Element for Scrollbar {
                                 if scroll_handle.offset() != state.get().last_scroll_offset {
                                     state.set(state.get().with_last_scroll(
                                         scroll_handle.offset(),
-                                        Some(Instant::now()),
+                                        Some(cx.background_executor().now()),
                                     ));
                                     cx.notify(view_id);
                                 }
@@ -1690,6 +1703,7 @@ impl Element for Scrollbar {
                                 state.set(state.get().with_drag_pos(
                                     axis,
                                     event.start_position - thumb_bounds.origin,
+                                    cx.background_executor().now(),
                                 ));
                             } else if state.get().dragged_axis != Some(axis) {
                                 return;
@@ -1704,13 +1718,17 @@ impl Element for Scrollbar {
                             }
                             if matches!(event.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
                                 scroll_handle.end_drag();
-                                state.set(state.get().with_unset_drag_pos(Instant::now()));
+                                state.set(
+                                    state
+                                        .get()
+                                        .with_unset_drag_pos(cx.background_executor().now()),
+                                );
                             }
                             window.prevent_default();
                             cx.stop_propagation();
                             if event.phase == TouchPhase::Moved {
                                 state.notify_drag(
-                                    Instant::now(),
+                                    cx.background_executor().now(),
                                     max_fps_duration,
                                     view_id,
                                     window,
@@ -1740,7 +1758,11 @@ impl Element for Scrollbar {
                                         let pos = event.position - thumb_bounds.origin;
 
                                         scroll_handle.start_drag();
-                                        state.set(state.get().with_drag_pos(axis, pos));
+                                        state.set(state.get().with_drag_pos(
+                                            axis,
+                                            pos,
+                                            cx.background_executor().now(),
+                                        ));
                                         // Active styling can change the inset or minimum length.
                                         // Keep the original grab point under the pointer on that frame.
                                         scroll_handle.set_offset(active_geometry.drag_offset(
@@ -1783,10 +1805,18 @@ impl Element for Scrollbar {
                             let bar_hovered = bar_hitbox.is_hovered(window);
                             if bar_hovered && need_hover_to_update {
                                 let hover_changed = state.get().hovered_axis != Some(axis);
-                                state.set(state.get().with_hovered(Some(axis), Instant::now()));
+                                state.set(
+                                    state
+                                        .get()
+                                        .with_hovered(Some(axis), cx.background_executor().now()),
+                                );
                                 notify |= hover_changed;
                             } else if state.get().hovered_axis == Some(axis) {
-                                state.set(state.get().with_hovered(None, Instant::now()));
+                                state.set(
+                                    state
+                                        .get()
+                                        .with_hovered(None, cx.background_executor().now()),
+                                );
                                 notify = true;
                             }
 
@@ -1796,12 +1826,18 @@ impl Element for Scrollbar {
                                 && thumb_bounds.contains(&event.position)
                             {
                                 if state.get().hovered_on_thumb != Some(axis) {
-                                    state.set(state.get().with_hovered_on_thumb(Some(axis)));
+                                    state.set(state.get().with_hovered_on_thumb(
+                                        Some(axis),
+                                        cx.background_executor().now(),
+                                    ));
                                     notify = true;
                                 }
                             } else {
                                 if state.get().hovered_on_thumb == Some(axis) {
-                                    state.set(state.get().with_hovered_on_thumb(None));
+                                    state.set(state.get().with_hovered_on_thumb(
+                                        None,
+                                        cx.background_executor().now(),
+                                    ));
                                     notify = true;
                                 }
                             }
@@ -1824,7 +1860,7 @@ impl Element for Scrollbar {
                                 }
                                 if notify {
                                     state.notify_drag(
-                                        Instant::now(),
+                                        cx.background_executor().now(),
                                         max_fps_duration,
                                         view_id,
                                         window,
@@ -1853,7 +1889,11 @@ impl Element for Scrollbar {
                                     scroll_handle.offset(),
                                 ));
                                 scroll_handle.end_drag();
-                                state.set(state.get().with_unset_drag_pos(Instant::now()));
+                                state.set(
+                                    state
+                                        .get()
+                                        .with_unset_drag_pos(cx.background_executor().now()),
+                                );
                                 cx.notify(view_id);
                             }
                         }
@@ -2550,6 +2590,41 @@ mod tests {
         assert_eq!(handle.offset(), Point::default());
     }
 
+    /// A scroll shows a scrolling-mode bar until it has been idle for the motion's hold, by the
+    /// executor's clock, which its idle timer and a test's simulated time run on.
+    fn scrolled_then_idle(
+        cx: &mut TestAppContext,
+        idle: Duration,
+    ) -> (&mut VisualTestContext, TestHandle) {
+        let (cx, handle) = harness(
+            cx,
+            ScrollbarAxis::Vertical,
+            ScrollbarMode::Scrolling,
+            size(px(100.), px(500.)),
+        );
+        handle.set_offset(point(px(0.), px(-10.)));
+        cx.update(|window, _| window.refresh());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.executor().advance_clock(idle);
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        (cx, handle)
+    }
+
+    #[gpui::test]
+    fn a_scrolled_bar_takes_a_track_click_within_its_idle_hold(cx: &mut TestAppContext) {
+        let (cx, handle) = scrolled_then_idle(cx, DEFAULT_IDLE / 2);
+        cx.simulate_click(point(px(95.), px(80.)), Modifiers::default());
+        assert!(handle.offset().y < px(-10.));
+    }
+
+    #[gpui::test]
+    fn a_scrolled_bar_hides_once_idle_by_the_executor_clock(cx: &mut TestAppContext) {
+        let (cx, handle) = scrolled_then_idle(cx, DEFAULT_IDLE + Duration::from_millis(1));
+        cx.simulate_click(point(px(95.), px(80.)), Modifiers::default());
+        assert_eq!(handle.offset(), point(px(0.), px(-10.)));
+    }
+
     #[gpui::test]
     fn hidden_hover_scrollbar_ignores_thumb_drag(cx: &mut TestAppContext) {
         let (cx, handle) = harness(
@@ -2691,7 +2766,9 @@ mod tests {
         let state = ScrollbarState::default();
         let now = Instant::now();
         let interval = Duration::from_secs_f64(1. / 30.);
-        let mut inner = state.get().with_drag_pos(Axis::Vertical, Point::default());
+        let mut inner = state
+            .get()
+            .with_drag_pos(Axis::Vertical, Point::default(), Instant::now());
         inner.last_update = now;
         state.set(inner);
         let update = |offset, elapsed, cx: &mut VisualTestContext| {

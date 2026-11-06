@@ -164,10 +164,9 @@ impl TextSnapshot {
     }
 }
 
-// Each Window owns a distinct Arc<WindowTextSystem>, stable even during initial
-// drawing before the Window itself is boxed. Its identity distinguishes equal
-// WindowIds in different Apps. Entries never own a Window or a view.
-type WindowKey = usize;
+// A window's key is a number no other window on this thread is ever given (see
+// `window_key`). Entries never own a Window or a view.
+type WindowKey = u64;
 type Registry = HashMap<WindowKey, HashMap<GlobalElementId, Weak<Registration>>>;
 thread_local! { static REGISTRY: RefCell<Registry> = RefCell::new(HashMap::new()); }
 
@@ -241,8 +240,30 @@ fn descendant_id(window: &mut Window, path: &[ElementId]) -> GlobalElementId {
 // repainted and is missing.
 thread_local! { static TEXTS: RefCell<HashMap<WindowKey, Vec<TextSnapshot>>> = RefCell::new(HashMap::new()); }
 
+// The window each live text system belongs to, by its address. A WindowId is
+// unique only within one App, and an address is reused once its window drops,
+// so a window is known by its text system while that is alive.
+thread_local! {
+    static KEYS: RefCell<(WindowKey, HashMap<usize, (Weak<gpui::WindowTextSystem>, WindowKey)>)> =
+        RefCell::default();
+}
+
 fn window_key(window: &Window) -> WindowKey {
-    window.window_handle().window_id().as_u64() as usize
+    let text_system = window.text_system();
+    KEYS.with_borrow_mut(|(next, keys)| {
+        let address = Rc::as_ptr(text_system) as usize;
+        if let Some((owner, key)) = keys.get(&address)
+            && owner
+                .upgrade()
+                .is_some_and(|owner| Rc::ptr_eq(&owner, text_system))
+        {
+            return *key;
+        }
+        keys.retain(|_, (owner, _)| owner.strong_count() > 0);
+        *next += 1;
+        keys.insert(address, (Rc::downgrade(text_system), *next));
+        *next
+    })
 }
 
 /// Forgets the text of the previous frame. Root calls it as it renders.

@@ -327,7 +327,7 @@ impl Element for ScrollBounce {
                 state.overscroll.offset()
             } else {
                 state.physics.motion = self.motion;
-                let now = Instant::now();
+                let now = cx.background_executor().now();
                 let elapsed = state
                     .sampled_at
                     .replace(now)
@@ -532,7 +532,7 @@ impl Element for ScrollBounce {
                     }
                 }
                 if changed {
-                    state.sampled_at = Some(Instant::now());
+                    state.sampled_at = Some(cx.background_executor().now());
                 }
                 drop(state);
                 if changed {

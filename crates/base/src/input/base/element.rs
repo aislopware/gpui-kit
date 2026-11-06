@@ -18,7 +18,7 @@ use std::{borrow::Cow, collections::BTreeSet, ops::Range, rc::Rc};
 
 use crate::{
     Scrollbar,
-    input::{RopeExt as _, blink_cursor::CURSOR_WIDTH, display_map::LineLayout},
+    input::{RopeExt as _, blink_cursor::cursor_size, display_map::LineLayout},
 };
 
 use super::{
@@ -391,11 +391,12 @@ pub(super) fn clamp_horizontal_scroll_offset(
     scroll_width: Pixels,
     input_width: Pixels,
     text_align: TextAlign,
+    caret_width: Pixels,
 ) -> Pixels {
     let caret_clearance = if text_align == TextAlign::Left {
         px(0.)
     } else {
-        -CURSOR_WIDTH
+        -caret_width
     };
     let min_offset = (input_width - scroll_width + caret_clearance).min(caret_clearance);
     offset.clamp(min_offset, px(0.))
@@ -1039,7 +1040,7 @@ impl<M: InputModeKind> TextElement<M> {
         let safety_margin = match last_layout.text_align {
             TextAlign::Left => RIGHT_MARGIN,
             TextAlign::Right => px(0.),
-            TextAlign::Center => CURSOR_WIDTH,
+            TextAlign::Center => last_layout.caret_size.width,
         };
         let text_width = bounds.size.width - line_number_width;
         let masked = |offset: usize| {
@@ -1152,8 +1153,9 @@ impl<M: InputModeKind> TextElement<M> {
             scroll_width,
             bounds.size.width,
             last_layout.text_align,
+            last_layout.caret_size.width,
         );
-        let cursor_height = 0.85 * line_height;
+        let caret_size = last_layout.caret_size;
 
         for selection in state.selections.iter() {
             let is_active = selection.id == active_id;
@@ -1185,7 +1187,7 @@ impl<M: InputModeKind> TextElement<M> {
             // Right-aligned text keeps the caret inside the viewport edge.
             let cursor_x = bounds.left() + cursor_pos.x + line_number_width + scroll_x;
             let cursor_x = if last_layout.text_align == TextAlign::Right {
-                cursor_x.min(bounds.right() - CURSOR_WIDTH)
+                cursor_x.min(bounds.right() - caret_size.width)
             } else {
                 cursor_x
             };
@@ -1193,9 +1195,9 @@ impl<M: InputModeKind> TextElement<M> {
                 bounds: Bounds::new(
                     point(
                         cursor_x,
-                        bounds.top() + cursor_pos.y + ((line_height - cursor_height) / 2.),
+                        bounds.top() + cursor_pos.y + ((line_height - caret_size.height) / 2.),
                     ),
-                    size(CURSOR_WIDTH, cursor_height),
+                    caret_size,
                 ),
                 is_active,
             });
@@ -3406,6 +3408,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             wrapping_indent,
             line_number_width,
             space_width,
+            caret_size: cursor_size(window, line_height),
             lines: Rc::new(vec![]),
             cursor_bounds: None,
             text_align: state.text_align,
@@ -3673,6 +3676,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 scroll_size.width,
                 input_bounds.size.width,
                 last_layout.text_align,
+                last_layout.caret_size.width,
             );
             let mut geometry =
                 PrepaintCaretGeometry::new(cursor_bounds, line_height, input_bounds, scroll_offset);
@@ -5123,7 +5127,7 @@ mod tests {
                     let minimum = if alignment == TextAlign::Left {
                         -overflow
                     } else {
-                        -overflow - CURSOR_WIDTH
+                        -overflow - layout.caret_size.width
                     };
                     editor.update(cx, |state, _| {
                         state.text_align = alignment;

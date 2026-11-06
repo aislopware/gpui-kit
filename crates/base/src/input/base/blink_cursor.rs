@@ -1,4 +1,4 @@
-use gpui::{App, Context, Pixels, Subscription, Task, px};
+use gpui::{App, Context, Pixels, Size, Subscription, Task, Window, px, size};
 use instant::Duration;
 use web_time::Instant;
 
@@ -6,6 +6,39 @@ static INTERVAL: Duration = Duration::from_millis(500);
 static PAUSE_DELAY: Duration = Duration::from_millis(300);
 
 pub(super) const CURSOR_WIDTH: Pixels = px(1.);
+
+/// The caret's height as a share of the line height.
+const CURSOR_HEIGHT_RATIO: f32 = 0.85;
+
+/// The caret's size, each side a whole number of device pixels, at least one.
+///
+/// The window rounds each edge of a quad to the device pixel grid on its own,
+/// so a side that is a fraction of a device pixel paints a pixel longer at some
+/// positions than at others. Painting already snaps the caret's x and width
+/// (`snap_caret_to_device_pixels`), but not its height, 0.85 of the line
+/// height, and layout (the scroll range, the right-edge clamp, popups anchored
+/// at the caret) used the unsnapped width. Sizing the caret here, once a
+/// frame, gives layout and paint the same caret, the same size on every row.
+///
+/// Ported from zeronsh/gpui-component 81948772, Apache-2.0.
+pub(super) fn cursor_size(window: &Window, line_height: Pixels) -> Size<Pixels> {
+    let device_pixel = px(1. / window.scale_factor());
+    cursor_size_with_snap(CURSOR_WIDTH, line_height, device_pixel, |length| {
+        window.pixel_snap(length)
+    })
+}
+
+fn cursor_size_with_snap(
+    width: Pixels,
+    line_height: Pixels,
+    device_pixel: Pixels,
+    snap: impl Fn(Pixels) -> Pixels,
+) -> Size<Pixels> {
+    size(
+        snap(width).max(device_pixel),
+        snap(CURSOR_HEIGHT_RATIO * line_height).max(device_pixel),
+    )
+}
 
 /// Application-wide caret visibility policy.
 ///
@@ -251,6 +284,54 @@ mod tests {
         assert_eq!(steady.interval(), None);
         assert_eq!(steady.idle_timeout(), None);
         assert_eq!(steady.normalized(), CursorBlink::steady());
+    }
+
+    /// `Window::pixel_snap`'s rounding, at any scale.
+    fn snap_at(scale_factor: f32) -> impl Fn(Pixels) -> Pixels {
+        move |length| px(round_half_toward_zero(length.as_f32() * scale_factor) / scale_factor)
+    }
+
+    fn round_half_toward_zero(value: f32) -> f32 {
+        (value.abs() - 0.5).ceil().copysign(value)
+    }
+
+    /// Where the window puts an edge, in device pixels.
+    fn device_edge(at: Pixels, scale_factor: f32) -> i32 {
+        round_half_toward_zero(at.as_f32() * scale_factor) as i32
+    }
+
+    /// The window rounds each edge of the caret on its own, so the caret keeps
+    /// its painted size wherever it stands only when that size is whole device
+    /// pixels. Ported from zeronsh/gpui-component 81948772, Apache-2.0.
+    #[test]
+    fn the_caret_paints_the_same_size_wherever_it_stands() {
+        let positions = [0., 0.1, 0.25, 0.49, 0.5, 0.75, 1.1, 5.33];
+        for scale_factor in [1., 1.25, 1.5, 1.75, 2., 3.] {
+            let caret = cursor_size_with_snap(
+                CURSOR_WIDTH,
+                px(17.25),
+                px(1. / scale_factor),
+                snap_at(scale_factor),
+            );
+            let width = device_edge(caret.width, scale_factor);
+            let height = device_edge(caret.height, scale_factor);
+            assert!(width >= 1 && height >= 1, "{caret:?} at {scale_factor}x");
+
+            for position in positions {
+                let x = px(position);
+                let y = px(position * 1.37);
+                assert_eq!(
+                    device_edge(x + caret.width, scale_factor) - device_edge(x, scale_factor),
+                    width,
+                    "caret width changed at x={position}, {scale_factor}x"
+                );
+                assert_eq!(
+                    device_edge(y + caret.height, scale_factor) - device_edge(y, scale_factor),
+                    height,
+                    "caret height changed at y={y:?}, {scale_factor}x"
+                );
+            }
+        }
     }
 
     fn advance(cx: &mut TestAppContext, duration: Duration) {

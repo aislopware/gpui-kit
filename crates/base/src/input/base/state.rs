@@ -25,7 +25,7 @@ use super::{
     DiagnosticSet, DisplayMap, FoldPlaceholderRenderer, InputContextMenuCapabilities,
     InputEditorStyle, InputHighlighterFactory, MASK_CHAR, MaskPattern, NativeMenu, NumberStep,
     WrappingIndent,
-    blink_cursor::BlinkCursor,
+    blink_cursor::{BlinkCursor, CURSOR_WIDTH},
     change::Change,
     cursor::{CursorSelection, Selections},
     element::{
@@ -3097,11 +3097,20 @@ impl<M: InputModeKind> InputBaseState<M> {
             self.scroll_size.width,
             self.input_bounds.size.width,
             self.text_align,
+            self.caret_width(),
         );
         if self.scroll_handle.offset() != offset {
             self.scroll_handle.set_offset(offset);
             cx.notify();
         }
+    }
+
+    /// The caret width the last frame drew, which keeps the horizontal scroll
+    /// range the same here as in prepaint.
+    fn caret_width(&self) -> Pixels {
+        self.last_layout
+            .as_ref()
+            .map_or(CURSOR_WIDTH, |layout| layout.caret_size.width)
     }
 
     /// Scroll to make the given offset visible.
@@ -6555,6 +6564,70 @@ mod tests {
         }
     }
 
+    /// Draws `view` at `scale_factor` and checks the caret it lays out: a
+    /// whole number of device pixels on each side, so the window's per-edge
+    /// rounding paints it the same size wherever it stands, and inside the
+    /// input's right edge.
+    fn assert_caret_spans_whole_device_pixels<M: InputModeKind>(
+        view: InputView<M>,
+        text_align: Option<TextAlign>,
+        scale_factor: f32,
+        cx: &mut TestAppContext,
+    ) {
+        let input = view.input;
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.simulate_scale_factor_change(scale_factor);
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("fractional caret geometry", window, cx);
+                if let Some(text_align) = text_align {
+                    state.set_text_align(text_align, cx);
+                }
+            });
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+
+        input.read_with(&cx, |state, _| {
+            let (caret, _) = state.cursor_layout().expect("a caret after drawing");
+            let device = |length: Pixels| length.as_f32() * scale_factor;
+            for (side, length) in [("width", caret.size.width), ("height", caret.size.height)] {
+                assert!(length > px(0.), "{side} {length:?} at {scale_factor}x");
+                assert!(
+                    (device(length) - device(length).round()).abs() < 1e-3,
+                    "caret {side} {length:?} is {} device pixels at {scale_factor}x",
+                    device(length)
+                );
+            }
+            assert!(caret.right() <= state.input_bounds().right());
+        });
+    }
+
+    /// The laid-out caret, which the scroll range, the right-edge clamp and
+    /// caret-anchored popups use, is the caret painted. Unsnapped, a one-pixel
+    /// caret is a pixel and a half wide at 1.5x, and its height, 0.85 of the
+    /// line height, is a fraction of a device pixel at most line heights, which
+    /// the window paints a pixel taller on some rows than on others.
+    /// Ported from zeronsh/gpui-component 81948772, Apache-2.0.
+    #[gpui::test]
+    fn the_caret_spans_whole_device_pixels_in_every_mode(cx: &mut TestAppContext) {
+        for scale_factor in [1., 1.5, 2.] {
+            assert_caret_spans_whole_device_pixels(
+                InputView::build(cx, |state| state),
+                Some(TextAlign::Right),
+                scale_factor,
+                cx,
+            );
+            assert_caret_spans_whole_device_pixels(
+                InputView::build_textarea(cx, |state| state),
+                None,
+                scale_factor,
+                cx,
+            );
+            assert_caret_spans_whole_device_pixels(InputView::new(cx), None, scale_factor, cx);
+        }
+    }
+
     /// Sends one trackpad packet straight to the input.
     fn swipe<M: InputModeKind>(
         view: &InputView<M>,
@@ -7692,6 +7765,7 @@ mod tests {
                 state.scroll_size.width,
                 viewport.size.width,
                 state.text_align,
+                layout.caret_size.width,
             );
             assert!(clamped < px(0.), "the lines must overflow the viewport");
             let stale_x = clamped - px(20.);

@@ -38,10 +38,10 @@ pub use gpui_base::input::{
     PrepaintCaretGeometry, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, Redo,
     Replace, Rope, RopeExt, RopeLines, Search, SelectAll, SelectAllOccurrences,
     SelectNextOccurrence, SelectToEnd, SelectToEndOfLine, SelectToNextWordEnd,
-    SelectToPreviousWordStart, SelectToStart, SelectToStartOfLine, Selection,
-    ShowCharacterPalette, ShowCompletions, ShowDocumentHandler, TabSize, TextDecoration,
-    TextDecorationCollection, TextareaState, ToggleCodeActions, Undo, WrappingIndent,
-    highlight_characters, highlight_contains, highlight_prefix,
+    SelectToPreviousWordStart, SelectToStart, SelectToStartOfLine, Selection, ShowCharacterPalette,
+    ShowCompletions, ShowDocumentHandler, TabSize, TextDecoration, TextDecorationCollection,
+    TextareaState, ToggleCodeActions, Undo, WrappingIndent, highlight_characters,
+    highlight_contains, highlight_prefix,
 };
 pub use gpui_base::input::{EditorMode, InputMode, InputModeKind, TextareaMode};
 #[doc(hidden)]

@@ -242,7 +242,7 @@ fn descendant_id(window: &mut Window, path: &[ElementId]) -> GlobalElementId {
 thread_local! { static TEXTS: RefCell<HashMap<WindowKey, Vec<TextSnapshot>>> = RefCell::new(HashMap::new()); }
 
 fn window_key(window: &Window) -> WindowKey {
-    std::rc::Rc::as_ptr(window.text_system()) as usize
+    window.window_handle().window_id().as_u64() as usize
 }
 
 /// Forgets the text of the previous frame. Root calls it as it renders.

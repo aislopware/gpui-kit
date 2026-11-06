@@ -2095,15 +2095,10 @@ impl std::fmt::Debug for TableColumnWidthsCache {
     }
 }
 
-fn text_system_id(window: &Window) -> usize {
-    std::rc::Rc::as_ptr(window.text_system()) as usize
-}
-
 struct TableColumnWidths {
-    /// Identity of the window text system the widths were measured with.
-    /// `WindowTextSystem` is `Rc`-shared and the cache must stay `Send`, so
-    /// only its address is kept.
-    text_system: usize,
+    /// The window the widths were measured in. Its text system is not `Send`,
+    /// and its id, unlike the address of that `Rc`, no later window takes.
+    window: gpui::WindowId,
     /// The styles the header row and the body rows render with.
     text_styles: TableTextStyles,
     rem_size: Pixels,
@@ -3531,6 +3526,7 @@ fn measure_table_columns(
     let rem_size = window.rem_size();
     let mono_family = cx.theme().tokens.typography.mono.clone();
     let inline_code = node_cx.style.inline_code_highlight();
+    let window_id = window.window_handle().window_id();
     let cached = table.column_widths_cache.0.lock().ok().and_then(|cache| {
         cache
             .as_ref()
@@ -3540,7 +3536,7 @@ fn measure_table_columns(
                     && cached.rem_size == rem_size
                     && cached.mono_family == mono_family
                     && cached.inline_code == inline_code
-                    && cached.text_system == text_system_id(window)
+                    && cached.window == window_id
             })
             .cloned()
     });
@@ -3548,7 +3544,7 @@ fn measure_table_columns(
         let (widths, custom_cells) =
             measure_table_text_columns(table, col_count, &text_styles, node_cx, window, cx);
         let measured = Arc::new(TableColumnWidths {
-            text_system: text_system_id(window),
+            window: window_id,
             text_styles: text_styles.clone(),
             rem_size,
             mono_family,

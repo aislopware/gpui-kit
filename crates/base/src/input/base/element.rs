@@ -5551,7 +5551,12 @@ mod tests {
             window.draw(cx).clear(cx);
             assert!(drawn.borrow().is_empty(), "no placeholder for an open fold");
 
-            editor.update(cx, |state, _| state.display_map.set_folded(0, true));
+            // Fold as the gutter's fold marker does: a retained view draws
+            // the change only once the state notifies.
+            editor.update(cx, |state, cx| {
+                state.display_map.set_folded(0, true);
+                cx.notify();
+            });
             window.draw(cx).clear(cx);
             assert_eq!(*drawn.borrow(), vec![0]);
 

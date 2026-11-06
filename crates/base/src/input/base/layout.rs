@@ -1,6 +1,6 @@
 use std::{ops::Range, rc::Rc};
 
-use gpui::{Bounds, Half, Pixels, ShapedLine, TextAlign, px};
+use gpui::{Bounds, Half, Pixels, ShapedLine, Size, TextAlign, px};
 
 use super::{WrappingIndent, display_map::LineLayout};
 
@@ -27,6 +27,8 @@ pub(super) struct LastLayout {
     /// Past the end of a line there are no glyphs to hit-test against, so this is the
     /// step used to measure how far past the end a pointer sits.
     pub(super) space_width: Pixels,
+    /// The caret's size this frame, whole device pixels at the window's scale.
+    pub(super) caret_size: Size<Pixels>,
     pub(super) cursor_bounds: Option<Bounds<Pixels>>,
     pub(super) text_align: TextAlign,
     pub(super) content_width: Pixels,

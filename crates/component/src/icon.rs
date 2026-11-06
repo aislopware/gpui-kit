@@ -1,5 +1,4 @@
-use std::rc::Rc;
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use crate::{ActiveTheme, Sizable, Size};
 use gpui::{
@@ -75,13 +74,45 @@ impl IconNameExt for gpui_kit_assets::IconName {
     }
 }
 
+struct IconResolver(Rc<dyn Fn(&str, &App) -> Option<SharedString>>);
+
+impl Global for IconResolver {}
+
+/// Set the hook every [`Icon`] drawn from an asset path asks for the path to draw,
+/// including the icons components draw inside their own controls.
+///
+/// The resolver receives the icon's path (for example `icons/check.svg`) and returns
+/// the path to draw in its place, or `None` to keep it. GPUI caches a rendered SVG by
+/// its path, so returning a new path is how an application switches icon styles at
+/// runtime; the application's [`gpui::AssetSource`] must load the returned path.
+/// Icons created with [`Icon::data`] are not resolved.
+///
+/// The resolver runs every time an icon is drawn and should be cheap. Call
+/// [`App::refresh_windows`] after changing what it returns.
+pub fn set_icon_resolver(
+    cx: &mut App,
+    resolver: impl Fn(&str, &App) -> Option<SharedString> + 'static,
+) {
+    cx.set_global(IconResolver(Rc::new(resolver)));
+}
+
+/// Return the path to draw for the icon at `path`: the answer of the resolver set with
+/// [`set_icon_resolver`], or `path` itself.
+pub fn resolve_icon_path(path: SharedString, cx: &App) -> SharedString {
+    match cx.try_global::<IconResolver>() {
+        Some(resolver) if !path.is_empty() => (resolver.0)(&path, cx).unwrap_or(path),
+        _ => path,
+    }
+}
+
 /// How an application paints the icons components name by path, in place of their SVGs:
 /// given the asset path (`icons/check.svg`), the icon's side and its color, the element to
 /// draw, or `None` to draw the SVG as before.
 ///
 /// An application whose own icons come from elsewhere (the operating system's symbols, a font)
 /// sets one, so the components' checkmarks, chevrons and close buttons match the rest of it.
-/// A turned icon keeps its SVG.
+/// A turned icon keeps its SVG. The painter is asked with the icon's own path; one it declines
+/// is drawn from the path [`set_icon_resolver`]'s resolver gives.
 #[derive(Clone)]
 pub struct IconPainter(pub Rc<dyn Fn(&SharedString, Pixels, Hsla) -> Option<AnyElement>>);
 
@@ -185,6 +216,13 @@ impl Icon {
         self
     }
 
+    fn resolved(mut self, cx: &App) -> Self {
+        if let IconSource::Path(path) = self.source {
+            self.source = IconSource::Path(resolve_icon_path(path, cx));
+        }
+        self
+    }
+
     /// The icon as the application's [`IconPainter`] draws it, if one is set and takes it.
     fn painted(&self, text_size: Pixels, fallback_color: Hsla, cx: &App) -> Option<AnyElement> {
         let IconSource::Path(path) = &self.source else {
@@ -271,7 +309,10 @@ impl RenderOnce for Icon {
         let color = window.text_style().color;
         match self.painted(text_size, color, cx) {
             Some(painted) => painted,
-            None => self.into_svg(text_size, color).into_any_element(),
+            None => self
+                .resolved(cx)
+                .into_svg(text_size, color)
+                .into_any_element(),
         }
     }
 }
@@ -288,7 +329,11 @@ impl Render for Icon {
         let color = cx.theme().foreground;
         match self.painted(text_size, color, cx) {
             Some(painted) => painted,
-            None => self.clone().into_svg(text_size, color).into_any_element(),
+            None => self
+                .clone()
+                .resolved(cx)
+                .into_svg(text_size, color)
+                .into_any_element(),
         }
     }
 }
@@ -351,6 +396,49 @@ mod tests {
 
         let icon = icon.path("");
         assert!(matches!(icon.source_ref(), IconSource::Path(path) if path.is_empty()));
+    }
+
+    #[gpui::test]
+    fn test_icon_resolver_replaces_the_path_to_draw(cx: &mut gpui::TestAppContext) {
+        fn drawn_path(icon: Icon, cx: &App) -> SharedString {
+            match icon.resolved(cx).source {
+                IconSource::Path(path) => path,
+                IconSource::Data(_) => panic!("resolving must keep the source type"),
+            }
+        }
+
+        cx.update(|cx| {
+            let search = IconName::Search.path();
+            assert_eq!(drawn_path(Icon::new(IconName::Search), cx), search);
+
+            let asked = Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+            set_icon_resolver(cx, {
+                let asked = asked.clone();
+                let search = search.clone();
+                move |path, _| {
+                    asked.borrow_mut().push(path.to_string());
+                    (path == search.as_ref()).then(|| "icons/alt/search.svg".into())
+                }
+            });
+
+            assert_eq!(
+                drawn_path(Icon::new(IconName::Search), cx),
+                "icons/alt/search.svg"
+            );
+            assert_eq!(
+                drawn_path(Icon::new(IconName::Check), cx),
+                IconName::Check.path()
+            );
+            assert_eq!(drawn_path(Icon::empty(), cx), "");
+            assert!(matches!(
+                Icon::default().data(SVG).resolved(cx).source,
+                IconSource::Data(_)
+            ));
+            assert_eq!(
+                *asked.borrow(),
+                [search.to_string(), IconName::Check.path().to_string()]
+            );
+        });
     }
 
     /// An application's painter draws the icons components name by path, at their side and

@@ -268,7 +268,7 @@ mod tests {
 
     use gpui::{
         AppContext as _, Axis, Context, Entity, InteractiveElement as _, IntoElement, Modifiers,
-        MouseButton, ParentElement as _, Render, ScrollDelta, ScrollHandle, ScrollEvent,
+        MouseButton, ParentElement as _, Render, ScrollDelta, ScrollEvent, ScrollHandle,
         StatefulInteractiveElement as _, Styled as _, TestAppContext, TouchPhase,
         VisualTestContext, Window, div, point, px,
     };

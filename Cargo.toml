@@ -38,7 +38,6 @@ members = [
     "examples/ai_recipes",
     "examples/speech",
     "crates/shell",
-    "crates/shell/rquickjs-compat",
 ]
 # `crates/webview` stays a member, for `gpui-shell`'s optional `webview` feature to
 # resolve, but it does not build on this fork's gpui-fast: see that feature in
@@ -50,14 +49,14 @@ publish = false
 edition = "2024"
 
 [workspace.dependencies]
-gpui-kit = { path = "crates/kit", version = "0.8.0" }
-gpui-component = { path = "crates/component", version = "0.8.0" }
-gpui-base = { path = "crates/base", version = "0.8.0" }
-gpui-component-macros = { path = "crates/component-macros", version = "0.8.0" }
-gpui-kit-assets = { path = "crates/assets", version = "0.8.0" }
-gpui-fps = { path = "crates/fps", version = "0.8.0" }
-gpui-shell = { path = "crates/shell", version = "0.8.0" }
-gpui-webview = { path = "crates/webview", version = "0.8.0" }
+gpui-kit = { path = "crates/kit", version = "0.9.0" }
+gpui-component = { path = "crates/component", version = "0.9.0" }
+gpui-base = { path = "crates/base", version = "0.9.0" }
+gpui-component-macros = { path = "crates/component-macros", version = "0.9.0" }
+gpui-kit-assets = { path = "crates/assets", version = "0.9.0" }
+gpui-fps = { path = "crates/fps", version = "0.9.0" }
+gpui-shell = { path = "crates/shell", version = "0.9.0" }
+gpui-webview = { path = "crates/webview", version = "0.9.0" }
 story = { path = "crates/story" }
 
 # GPUI comes from the `gpui-pre-*` snapshots of Zed's crates, and any snapshot
@@ -67,18 +66,18 @@ story = { path = "crates/story" }
 # onto a newer snapshot that gpui-component did not compile with (#3156). Bump
 # every snapshot crate together with its Cargo.lock entry; `script/check-gpui-pin.ts`
 # fails CI when a pin is not exact.
-gpui = { package = "gpui-pre", version = "=0.3.9" }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui_web = { package = "gpui-pre-web", version = "=0.3.9" }
+gpui = { package = "gpui-pre", version = "=0.3.11" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui_web = { package = "gpui-pre-web", version = "=0.3.11" }
 # Fast is optional; existing crates select it through their gpui-fast feature.
 # Explicit package fields make Cargo use these dependency keys as Rust crate names;
 # the packages declare the same library names as the pre backend.
-gpui-fast = { package = "gpui-fast", version = "0.1.10", features = ["windows-manifest-provided-by-host"] }
-gpui-fast-platform = { package = "gpui-fast-platform", version = "0.1.10", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui-fast-web = { package = "gpui-fast-web", version = "0.1.10" }
-gpui_macros = { package = "gpui-pre-macros", version = "=0.3.9" }
-reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.9" }
-sum-tree = { package = "gpui-pre-sum-tree", version = "=0.3.9" }
+gpui-fast = { package = "gpui-fast", version = "0.1.13", features = ["windows-manifest-provided-by-host"] }
+gpui-fast-platform = { package = "gpui-fast-platform", version = "0.1.13", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui-fast-web = { package = "gpui-fast-web", version = "0.1.13" }
+gpui_macros = { package = "gpui-pre-macros", version = "=0.3.11" }
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.11" }
+sum-tree = { package = "gpui-pre-sum-tree", version = "=0.3.11" }
 reqwest = { package = "gpui-pre-reqwest", version = "=0.12.15", default-features = false, features = [
     "charset",
     "http2",
@@ -188,24 +187,21 @@ cap-std = { opt-level = 3 }
 strip = "symbols"
 
 [patch.crates-io]
-# LLRT's public modules still name their compatible binding dependency
-# `rquickjs`. Route those dependencies through a source-compatible facade so
-# the shell and LLRT share the exact same quickjs-jit types and VM.
-rquickjs = { path = "crates/shell/rquickjs-compat" }
 # Our fork builds GPUI from our gpui-fast fork, whose `compat/` crates stand in for the
-# gpui-pre snapshots under their names (longbridge/gpui-fast#23). An application on this
-# fork patches the same way in its own root manifest.
-gpui-pre = { git = "https://github.com/aislopware/gpui-fast.git" }
-gpui-pre-platform = { git = "https://github.com/aislopware/gpui-fast.git" }
-gpui-pre-web = { git = "https://github.com/aislopware/gpui-fast.git" }
-gpui-pre-macros = { git = "https://github.com/aislopware/gpui-fast.git" }
-gpui-pre-reqwest-client = { git = "https://github.com/aislopware/gpui-fast.git" }
-gpui-pre-sum-tree = { git = "https://github.com/aislopware/gpui-fast.git" }
+# gpui-pre snapshots under their names (longbridge/gpui-fast#23) at the versions pinned
+# above, `=0.3.11` and `0.1.13`. An application on this fork patches every one of these
+# crates to the same `rev` in its own root manifest, so its graph holds one GPUI.
+gpui-pre = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-pre-platform = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-pre-web = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-pre-macros = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-pre-reqwest-client = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-pre-sum-tree = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
 # The `gpui-fast` feature names GPUI Fast's crates.io release; the fork's compat crates stand
 # in for it too, so the feature builds on the same gpui-fast as the rest.
-gpui-fast = { git = "https://github.com/aislopware/gpui-fast.git" }
-gpui-fast-platform = { git = "https://github.com/aislopware/gpui-fast.git" }
-gpui-fast-web = { git = "https://github.com/aislopware/gpui-fast.git" }
+gpui-fast = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-fast-platform = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-fast-web = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
 
 [workspace.metadata.typos]
 files.extend-exclude = ["**/fixtures/*"]

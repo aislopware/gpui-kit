@@ -53,8 +53,8 @@ mod tests {
     use std::time::Duration;
 
     use gpui::{
-        Modifiers, MouseButton, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext,
-        point, px,
+        Modifiers, MouseButton, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point,
+        px,
     };
     use gpui_base::{TextSelection, TextViewStyle};
 

@@ -16,15 +16,12 @@ use gpui::{
     AppContext, Axis, Bounds, ClickEvent, Context, Div, DragMoveEvent, ElementId, EventEmitter,
     FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
     MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollStrategy, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled, Task, UniformListScrollHandle, Window, div,
+    StatefulInteractiveElement as _, Styled, Task, TextAlign, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
 use rust_i18n::t;
 
 use super::*;
-
-/// How far behind the pointer a resize drag trails the column edge.
-const HANDLE_SIZE: Pixels = px(2.);
 
 /// Grab room on each side of a resize handle's hairline, so the divider can be
 /// caught without pixel-hunting. Both halves of the band are this wide, so
@@ -146,6 +143,14 @@ impl TableVisibleRange {
     pub fn cols(&self) -> &Range<usize> {
         &self.cols
     }
+}
+
+/// Where a column resize started: the pointer's x at the press on the
+/// resize handle, and the column's width then.
+#[derive(Clone, Copy)]
+struct ResizeOrigin {
+    x: Pixels,
+    width: Pixels,
 }
 
 /// The state for [`DataTable`].
@@ -277,6 +282,8 @@ pub struct TableState<D: TableDelegate> {
 
     /// The column index that is being resized.
     resizing_col: Option<usize>,
+    /// Where the press on a resize handle was, and the column's width then.
+    resize_origin: Option<ResizeOrigin>,
     /// The column a double-click on its resize handle just fitted.
     ///
     /// The double-click's second press also starts a drag on the handle, which
@@ -317,6 +324,7 @@ where
             selected_col: None,
             selected_cell: None,
             resizing_col: None,
+            resize_origin: None,
             fitted_col: None,
             col_drag_gap: None,
             bounds: Bounds::default(),
@@ -858,7 +866,7 @@ where
         }
 
         cx.stop_propagation();
-        if self.selects_row_on_click(e) {
+        if self.selects_row_on_click(e, cx) {
             self.set_selected_row(row_ix, cx);
         }
 
@@ -868,9 +876,9 @@ where
     }
 
     /// Whether a click on a row selects it, see `select_on_modifier_click`.
-    fn selects_row_on_click(&self, e: &ClickEvent) -> bool {
+    fn selects_row_on_click(&self, e: &ClickEvent, cx: &App) -> bool {
         let modifiers = e.modifiers();
-        self.select_on_modifier_click || !(modifiers.secondary() || modifiers.shift)
+        self.select_on_modifier_click || !(modifiers.secondary(cx) || modifiers.shift)
     }
 
     fn on_col_head_click(&mut self, col_ix: usize, _: &mut Window, cx: &mut Context<Self>) {
@@ -915,7 +923,7 @@ where
             && self.row_selectable
             && is_reselect
             && !is_double_click
-            && self.selects_row_on_click(e);
+            && self.selects_row_on_click(e, cx);
         if should_escalate_to_row {
             self.set_selected_row(row_ix, cx);
             return;
@@ -1524,6 +1532,13 @@ where
             .overflow_hidden()
             .whitespace_nowrap()
             .table_cell_size(self.options.size)
+            // Text alignment is inherited, so this aligns the header name and
+            // the delegate's cell text without changing how cells lay out.
+            .map(|this| match col_group.column.align {
+                TextAlign::Center => this.text_center(),
+                TextAlign::Right => this.text_right(),
+                _ => this,
+            })
             .map(|this| match col_padding {
                 Some(padding) => this
                     .pl(padding.left)
@@ -1532,6 +1547,40 @@ where
                     .pb(padding.bottom),
                 None => this,
             })
+    }
+
+    /// Expose a body cell to assistive technology: its role, its column and
+    /// the delegate's [`cell_label`](TableDelegate::cell_label).
+    ///
+    /// In cell selection mode the cell is a `GridCell` that reports whether it
+    /// is selected; otherwise it is a plain `Cell`.
+    fn a11y_cell<E>(&self, cell: E, row_ix: usize, col_ix: usize, window: &Window, cx: &App) -> E
+    where
+        E: gpui::StatefulInteractiveElement + FluentBuilder,
+    {
+        let cell = if self.cell_selectable {
+            let is_selected = self.selected_cell() == Some((row_ix, col_ix));
+            cell.role(gpui::Role::GridCell)
+                .aria_selected(is_selected)
+                // While the table has focus, the selected cell is the
+                // focused node for assistive technology.
+                .when(
+                    is_selected && self.focus_handle.is_focused(window),
+                    |this| this.aria_active_descendant(),
+                )
+        } else {
+            cell.role(gpui::Role::Cell)
+        };
+        // Labels are only read through the accessibility tree, so skip
+        // building them when no assistive technology is connected (tests
+        // read them through test support).
+        let label = if window.is_a11y_active() || cfg!(feature = "test-support") {
+            self.delegate.cell_label(row_ix, col_ix, cx)
+        } else {
+            None
+        };
+        cell.aria_column_index(col_ix)
+            .when_some(label, |this, label| this.aria_label(label))
     }
 
     /// Show Column selection style, when the column is selected and the selection state is Column.
@@ -1676,9 +1725,17 @@ where
                                 .expect("BUG: invalid col index")
                                 .clone();
 
+                            // The width at the press, plus how far the pointer
+                            // has moved since. The column's left edge isn't a
+                            // fixed point: it moves when the table scrolls,
+                            // and the scroll offset clamps as the columns
+                            // narrow.
+                            let Some(origin) = view.resize_origin else {
+                                return;
+                            };
                             view.resize_cols(
                                 ix,
-                                e.event.position.x - HANDLE_SIZE - col_group.bounds.left(),
+                                origin.width + (e.event.position.x - origin.x),
                                 window,
                                 cx,
                             );
@@ -1695,17 +1752,22 @@ where
             })
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(
-                    move |view, e: &MouseDownEvent, window, cx| match e.click_count {
-                        1 => view.fitted_col = None,
-                        2 if view.fit_col(ix, window, cx) => view.fitted_col = Some(ix),
-                        _ => {}
-                    },
-                ),
+                cx.listener(move |view, e: &MouseDownEvent, window, cx| {
+                    view.resize_origin = view.col_groups.get(ix).map(|col_group| ResizeOrigin {
+                        x: e.position.x,
+                        width: col_group.width,
+                    });
+                    if e.click_count == 1 {
+                        view.fitted_col = None;
+                    } else if e.click_count == 2 && view.fit_col(ix, window, cx) {
+                        view.fitted_col = Some(ix);
+                    }
+                }),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|view, _, _, cx| {
+                    view.resize_origin = None;
                     if view.resizing_col.is_none() {
                         return;
                     }
@@ -1755,7 +1817,7 @@ where
                 this.when(self.row_selectable, |this| {
                     this.on_click(cx.listener(move |table, e: &ClickEvent, _window, cx| {
                         cx.stop_propagation();
-                        if table.selects_row_on_click(e) {
+                        if table.selects_row_on_click(e, cx) {
                             table.set_selected_row(row_ix, cx);
                         }
                     }))
@@ -1826,6 +1888,9 @@ where
             .child(
                 self.render_cell(None, col_ix, window, cx)
                     .id(("col-header", col_ix))
+                    .role(gpui::Role::ColumnHeader)
+                    .aria_label(name.clone())
+                    .aria_column_index(col_ix)
                     .test_support()
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.on_col_head_click(col_ix, window, cx);
@@ -1992,6 +2057,10 @@ where
         let layout = self.header_layout.clone();
 
         header
+            // One header row holds every column header, including the pinned
+            // ones, which are laid out in a separate container.
+            .role(gpui::Role::Row)
+            .aria_row_index(0)
             .h_flex()
             .w_full()
             .flex_shrink_0()
@@ -2190,10 +2259,25 @@ where
 
             let mut tr = self.delegate.render_tr(row_ix, window, cx);
             let style = tr.style().clone();
+            // As with cell labels, only build the name when it can be read.
+            let label = if window.is_a11y_active() || cfg!(feature = "test-support") {
+                self.delegate.row_label(row_ix, cx)
+            } else {
+                None
+            };
 
             tr.test_support()
                 .role(gpui::Role::Row)
+                // Row 0 is the header row.
+                .aria_row_index(row_ix + 1)
+                .when_some(label, |this, label| this.aria_label(label))
                 .aria_selected(is_selected)
+                // While the table has focus, the selected row is the focused
+                // node for assistive technology.
+                .when(
+                    is_selected && self.focus_handle.is_focused(window),
+                    |this| this.aria_active_descendant(),
+                )
                 .h_flex()
                 .w_full()
                 .h(row_height)
@@ -2230,56 +2314,67 @@ where
                                     items.push(
                                         self.render_col_wrap(Some(row_ix), col_ix, window, cx)
                                             .child(
-                                                self.render_cell(Some(row_ix), col_ix, window, cx)
+                                                self.a11y_cell(
+                                                    self.render_cell(
+                                                        Some(row_ix),
+                                                        col_ix,
+                                                        window,
+                                                        cx,
+                                                    )
                                                     .id(format!("table-cell:{}:{}", row_ix, col_ix))
-                                                    .relative()
-                                                    .child(self.measure_render_td(
+                                                    .test_support(),
+                                                    row_ix,
+                                                    col_ix,
+                                                    window,
+                                                    cx,
+                                                )
+                                                .relative()
+                                                .child(
+                                                    self.measure_render_td(
                                                         row_ix, col_ix, window, cx,
-                                                    ))
-                                                    .when(is_cell_selected, |this| {
+                                                    ),
+                                                )
+                                                .when(is_cell_selected, |this| {
+                                                    this.child(
+                                                        div()
+                                                            .absolute()
+                                                            .inset_0()
+                                                            .bg(cx.theme().tokens.table_active),
+                                                    )
+                                                })
+                                                .when(
+                                                    is_cell_right_clicked && !is_cell_selected,
+                                                    |this| {
                                                         this.child(
                                                             div()
                                                                 .absolute()
                                                                 .inset_0()
-                                                                .bg(cx.theme().tokens.table_active),
+                                                                .border_1()
+                                                                .border_color(
+                                                                    cx.theme()
+                                                                        .table_active_border
+                                                                        .opacity(0.5),
+                                                                ),
                                                         )
-                                                    })
-                                                    .when(
-                                                        is_cell_right_clicked && !is_cell_selected,
-                                                        |this| {
-                                                            this.child(
-                                                                div()
-                                                                    .absolute()
-                                                                    .inset_0()
-                                                                    .border_1()
-                                                                    .border_color(
-                                                                        cx.theme()
-                                                                            .table_active_border
-                                                                            .opacity(0.5),
-                                                                    ),
-                                                            )
+                                                    },
+                                                )
+                                                .when(self.cell_selectable, |this| {
+                                                    this.on_click(cx.listener(
+                                                        move |table, e, window, cx| {
+                                                            table.on_cell_click(
+                                                                e, row_ix, col_ix, window, cx,
+                                                            );
                                                         },
+                                                    ))
+                                                    .on_mouse_down(
+                                                        MouseButton::Right,
+                                                        cx.listener(move |table, e, window, cx| {
+                                                            table.on_cell_right_click(
+                                                                e, row_ix, col_ix, window, cx,
+                                                            );
+                                                        }),
                                                     )
-                                                    .when(self.cell_selectable, |this| {
-                                                        this.on_click(cx.listener(
-                                                            move |table, e, window, cx| {
-                                                                table.on_cell_click(
-                                                                    e, row_ix, col_ix, window, cx,
-                                                                );
-                                                            },
-                                                        ))
-                                                        .on_mouse_down(
-                                                            MouseButton::Right,
-                                                            cx.listener(
-                                                                move |table, e, window, cx| {
-                                                                    table.on_cell_right_click(
-                                                                        e, row_ix, col_ix, window,
-                                                                        cx,
-                                                                    );
-                                                                },
-                                                            ),
-                                                        )
-                                                    }),
+                                                }),
                                             ),
                                     );
                                 });
@@ -2326,16 +2421,24 @@ where
                                                 .render_col_wrap(Some(row_ix), col_ix, window, cx)
                                                 .child(
                                                     table
-                                                        .render_cell(
-                                                            Some(row_ix),
+                                                        .a11y_cell(
+                                                            table
+                                                                .render_cell(
+                                                                    Some(row_ix),
+                                                                    col_ix,
+                                                                    window,
+                                                                    cx,
+                                                                )
+                                                                .id(format!(
+                                                                    "table-cell-{}:{}",
+                                                                    row_ix, col_ix
+                                                                ))
+                                                                .test_support(),
+                                                            row_ix,
                                                             col_ix,
                                                             window,
                                                             cx,
                                                         )
-                                                        .id(format!(
-                                                            "table-cell-{}:{}",
-                                                            row_ix, col_ix
-                                                        ))
                                                         .relative()
                                                         .child(table.measure_render_td(
                                                             row_ix, col_ix, window, cx,
@@ -2634,6 +2737,7 @@ where
 
         let inner_table = v_flex()
             .id("table-inner")
+            .test_support()
             .size_full()
             .overflow_hidden()
             .child(self.render_table_header(left_columns_count, window, cx))

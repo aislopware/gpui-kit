@@ -38,6 +38,10 @@ impl Render for AppView {
 
 TextView 默认支持选择。拖动选区靠近视口边缘时，共享选择层会自动滚动相关的 `overflow_*_scroll` 区域，不需要额外设置 TextView 的滚动或选择参数。只有明确需要禁用选择时才使用 `.selectable(false)`。
 
+双击选中单词，三击选中段落。双击或三击后不松开继续拖动，或之后按住 Shift 点击，选区会按整词或整段扩展，并保留最初选中的单词或段落。
+
+从表格单元格内开始的拖动只会选中该单元格的内容；指针离开单元格后，选区停在单元格边缘。从表格外开始的拖动仍会跨过整个表格。如需复制整个表格，请使用 `table_actions` 提供复制操作。
+
 ## Markdown 与 HTML
 
 短内容可以使用自动生成调用点 ID 的 helper，需要明确稳定 ID 时使用构造器：
@@ -74,6 +78,8 @@ TextView::markdown("themed", source).style(style)
 ```
 
 `TextViewStyle::from_theme(&theme)` 可读取 `gpui_kit::base::Theme` 的语义颜色。使用上层组件主题时，可调用 `gpui_kit::component::text::text_view_style(cx.theme())`。
+
+表格正文行默认没有悬停高亮。`with_table_row_hover(color)` 会用 `color` 填充指针下方的正文行，表头行保持自己的背景。GPUI Component 会把它设为主题的 `table_hover`，也就是 `Table` 组件高亮行时使用的颜色。
 
 没有显式设置 `.style()` 的 TextView 可以跟随容器设置的文字颜色，这样放在聊天气泡这类有填充底色的容器里也能看清。在应用默认值里开启：
 
@@ -270,3 +276,46 @@ cargo run -p gpui-base-examples -- text-view
 - Decoration 使用有序的半开区间。文本背景绘制在字形下方；原子节点的 decoration 覆盖整个节点并绘制在内容上方。原子节点的选区颜色应使用半透明色。
 
 这个 API 复用 TextView 的水平块流渲染器。宿主仍需管理原生输入的 UTF-16 转换、无障碍集成和虚拟化。当前的字节索引几何无法表达双向文本中的光标 affinity，也无法区分软换行边界的两侧，因此还不是完整的视觉光标导航 API。
+
+## 行内代码样式
+
+通过 `TextView::inline_code_style(StyleRefinement)` 覆盖行内代码样式。覆盖在主题、显式样式和表面颜色适配之后应用；未指定的属性保留默认值，指定的颜色在反色表面上也保持不变。
+
+Base 样式提供对应的 `TextViewStyle::with_inline_code_style` 构建方法和 `inline_code_style()` 读取方法。现有 `with_inline_code(HighlightStyle)` 保持兼容，新的覆盖样式具有更高优先级。
+
+```rust
+use gpui_kit::{StyleRefinement, Styled as _, rems};
+
+let border = gpui_kit::base::Theme::global(cx).tokens.colors.border;
+
+TextView::markdown("notes", "Run `cargo build` first.")
+    .inline_code_style(
+        StyleRefinement::default()
+            .text_size(rems(1.))
+            .px(rems(0.25))
+            .border_1()
+            .border_color(border),
+    )
+```
+
+支持字体、字号、字体特性、后备字体、字重、斜体、文字颜色、下划线、删除线、背景、边框宽度／颜色／线型、圆角和内边距。字号使用像素或相对于窗口的 rem；非有限值和非正值会被忽略。默认字号仍为周围文字的 0.875 倍，默认不绘制边框。内边距和边框宽度参与换行与表格列宽计算。外边距、定位、flex、显式容器尺寸、overflow 和交互属性不参与渲染；行高由段落控制。
+
+## 列表与引用块样式
+
+通过 `TextView::list_style(StyleRefinement)` 和 `blockquote_style(StyleRefinement)` 覆盖列表标记和引用块样式。覆盖在主题、显式样式和表面颜色适配之后应用；未指定的属性保留默认值，指定的颜色在反色表面上也保持不变。
+
+Base 样式提供对应的 `TextViewStyle::with_list_style`、`with_blockquote_style` 构建方法，以及 `list_style()`、`blockquote_style()` 读取方法。
+
+```rust
+use gpui_kit::{StyleRefinement, Styled as _};
+
+let primary = gpui_kit::base::Theme::global(cx).tokens.colors.primary;
+
+TextView::markdown("notes", "1. First\n2. Second\n\n> Quoted")
+    .list_style(StyleRefinement::default().text_color(primary))
+    .blockquote_style(StyleRefinement::default().border_color(primary))
+```
+
+列表标记样式作用于每个列表项的项目符号或序号列，叠加在默认样式之上：次要文字颜色、以列表缩进为最小宽度、文字右对齐、右内边距为缩进的 0.3 倍。颜色、字体、字号、字重等文字属性用于标记本身；宽度、内边距等盒模型属性会改变标记列。其文字颜色也用于未勾选任务复选框的边框；已勾选的复选框仍使用链接颜色。
+
+引用块样式作用于引用容器，叠加在默认样式之上：次要文字颜色、边框颜色的 2px 左边框、左内边距为正文字号的 0.9 倍。边框宽度和颜色用于引用竖线；文字属性、背景、内边距和圆角作用于引用及其内部内容。子块显式设置的样式仍优先，例如标题和表格的字号。其他元素属性与普通 `div` 一样作用于容器。代码块、表格、分隔线和已完成任务仍使用共享的次要文字颜色和边框颜色。

@@ -13,8 +13,8 @@ mod palette;
 use gpui::{
     App, AppContext as _, Context, InteractiveElement as _, IntoElement, ListAlignment, ListState,
     MouseButton, ParentElement as _, Pixels, PlatformInput, Point, Render, ScrollDelta,
-    ScrollHandle, ScrollEvent, StatefulInteractiveElement as _, Styled as _, TouchPhase,
-    Window, WindowBounds, WindowOptions, div, list, point, px, size,
+    ScrollEvent, ScrollHandle, StatefulInteractiveElement as _, Styled as _, TouchPhase, Window,
+    WindowBounds, WindowOptions, div, list, point, px, size,
 };
 use gpui_base::{Button, ScrollBounce};
 

@@ -7,7 +7,7 @@ use std::{
 #[cfg(target_family = "wasm")]
 use web_time::Instant;
 
-use gpui::{App, Entity, Global, OwnedMenu};
+use gpui::{App, Bounds, Entity, Global, OwnedMenu, Pixels, Point};
 
 use crate::text::TextViewState;
 
@@ -30,38 +30,59 @@ pub struct GlobalState {
 
 impl Global for GlobalState {}
 
-/// The text views being drawn, innermost last, for the inline elements drawn
-/// inside them.
+/// The text views and table cells being prepainted or painted, innermost
+/// last, for the elements drawn inside them.
 ///
 /// A global apart from [`GlobalState`], set once and changed only through a
-/// shared reference while drawing: every text view reads it as it draws, so
-/// a write to a global it read, as each mouse press makes to
-/// [`GlobalState`], would count as a change for every text view, which a
-/// renderer that draws unchanged views from the last frame, as GPUI Fast's
-/// retained mode does, would then build again.
+/// shared reference while drawing: every text view reads it as it draws, so a
+/// write to a global it read, as each mouse press makes to [`GlobalState`],
+/// would count as a change for every text view, which a renderer that draws
+/// unchanged views from the last frame, as GPUI Fast's retained mode does,
+/// would then build again.
 #[derive(Default)]
-pub(crate) struct TextViewStateStack(RefCell<Vec<Entity<TextViewState>>>);
+pub(crate) struct TextViewStateStack {
+    text_views: RefCell<Vec<Entity<TextViewState>>>,
+    table_cells: RefCell<Vec<Bounds<Pixels>>>,
+}
 
 impl Global for TextViewStateStack {}
 
 impl TextViewStateStack {
     /// The innermost text view being drawn.
     pub(crate) fn current(cx: &App) -> Option<Entity<TextViewState>> {
-        cx.try_global::<Self>()?.0.borrow().last().cloned()
+        cx.try_global::<Self>()?.text_views.borrow().last().cloned()
     }
 
     /// Reads the innermost text view being drawn, without taking a handle to it.
     pub(crate) fn read_current<R>(cx: &App, read: impl FnOnce(&TextViewState) -> R) -> Option<R> {
-        let stack = cx.try_global::<Self>()?.0.borrow();
+        let stack = cx.try_global::<Self>()?.text_views.borrow();
         Some(read(stack.last()?.read(cx)))
     }
 
     pub(crate) fn push(state: Entity<TextViewState>, cx: &App) {
-        cx.global::<Self>().0.borrow_mut().push(state);
+        cx.global::<Self>().text_views.borrow_mut().push(state);
     }
 
     pub(crate) fn pop(cx: &App) {
-        cx.global::<Self>().0.borrow_mut().pop();
+        cx.global::<Self>().text_views.borrow_mut().pop();
+    }
+
+    /// Enters the table cell being prepainted or painted.
+    pub(crate) fn push_table_cell(bounds: Bounds<Pixels>, cx: &App) {
+        cx.global::<Self>().table_cells.borrow_mut().push(bounds);
+    }
+
+    pub(crate) fn pop_table_cell(cx: &App) {
+        cx.global::<Self>().table_cells.borrow_mut().pop();
+    }
+
+    /// The table cell being prepainted or painted, if any.
+    pub(crate) fn table_cell(cx: &App) -> Option<Bounds<Pixels>> {
+        cx.try_global::<Self>()?
+            .table_cells
+            .borrow()
+            .last()
+            .copied()
     }
 }
 
@@ -136,6 +157,10 @@ impl GlobalState {
         cx.global_mut::<Self>()
     }
 
+    #[doc(hidden)]
+    // Kept for compatibility; automatic order now belongs to the window's selection state.
+    pub fn begin_selection_frame(&self) {}
+
     /// Returns the application menus.
     pub fn app_menus(&self) -> &[OwnedMenu] {
         &self.app_menus
@@ -177,9 +202,95 @@ impl GlobalState {
     }
 }
 
+/// Confines a selection to its anchor cell and excludes text in other cells.
+pub(crate) fn confine_to_cell(
+    anchor_cell: Option<(Point<Pixels>, Bounds<Pixels>)>,
+    painting: Option<Bounds<Pixels>>,
+    anchor: Point<Pixels>,
+    cursor: Point<Pixels>,
+) -> Option<(Point<Pixels>, Point<Pixels>)> {
+    let Some((_, cell)) = anchor_cell.filter(|(cell_anchor, _)| *cell_anchor == anchor) else {
+        return Some((anchor, cursor));
+    };
+    if painting != Some(cell) {
+        return None;
+    }
+    let cursor = gpui::point(
+        cursor.x.clamp(cell.left(), cell.right()),
+        cursor.y.clamp(cell.top(), cell.bottom()),
+    );
+    Some((anchor, cursor))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod table_cell {
+        use gpui::{Bounds, point, px, size};
+
+        use super::super::confine_to_cell;
+
+        fn cell(x: f32) -> Bounds<gpui::Pixels> {
+            Bounds::new(point(px(x), px(0.)), size(px(100.), px(30.)))
+        }
+
+        #[test]
+        fn a_drag_outside_a_cell_is_unchanged() {
+            let (anchor, cursor) = (point(px(5.), px(5.)), point(px(250.), px(80.)));
+            assert_eq!(
+                confine_to_cell(None, Some(cell(0.)), anchor, cursor),
+                Some((anchor, cursor))
+            );
+            // A cell from an older drag does not hold this anchor.
+            let old = Some((point(px(50.), px(10.)), cell(0.)));
+            assert_eq!(
+                confine_to_cell(old, None, anchor, cursor),
+                Some((anchor, cursor))
+            );
+        }
+
+        #[test]
+        fn a_drag_from_a_cell_selects_nothing_outside_it() {
+            let anchor = point(px(10.), px(10.));
+            let anchor_cell = Some((anchor, cell(0.)));
+            let cursor = point(px(150.), px(20.));
+            assert_eq!(
+                confine_to_cell(anchor_cell, Some(cell(100.)), anchor, cursor),
+                None
+            );
+            assert_eq!(confine_to_cell(anchor_cell, None, anchor, cursor), None);
+        }
+
+        #[test]
+        fn a_drag_from_a_cell_is_clamped_to_it() {
+            let anchor = point(px(10.), px(10.));
+            let anchor_cell = Some((anchor, cell(0.)));
+            assert_eq!(
+                confine_to_cell(
+                    anchor_cell,
+                    Some(cell(0.)),
+                    anchor,
+                    point(px(250.), px(80.))
+                ),
+                Some((anchor, point(px(100.), px(30.))))
+            );
+            assert_eq!(
+                confine_to_cell(
+                    anchor_cell,
+                    Some(cell(0.)),
+                    anchor,
+                    point(px(-20.), px(-5.))
+                ),
+                Some((anchor, point(px(0.), px(0.))))
+            );
+            let inside = point(px(60.), px(12.));
+            assert_eq!(
+                confine_to_cell(anchor_cell, Some(cell(0.)), anchor, inside),
+                Some((anchor, inside))
+            );
+        }
+    }
 
     #[gpui::test]
     fn initialization_is_idempotent_and_suppression_can_be_reset(cx: &mut gpui::TestAppContext) {

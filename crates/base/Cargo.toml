@@ -9,7 +9,7 @@ exclude = ["examples/"]
 repository = "https://github.com/longbridge/gpui-kit"
 homepage = "https://gpui-kit.com"
 documentation = "https://docs.rs/gpui-base"
-version = "0.8.0"
+version = "0.9.0"
 publish = true
 edition.workspace = true
 
@@ -48,8 +48,8 @@ itertools = "0.13.0"
 memchr = "2.8.3"
 lsp-types.workspace = true
 markdown = { version = "1.0.0", features = ["serde"] }
-html5ever = "0.27"
-markup5ever_rcdom = "0.3.0"
+html5ever = "0.39"
+markup5ever_rcdom = "=0.39.0+unofficial"
 num-traits = "0.2"
 ropey.workspace = true
 regex = "1"

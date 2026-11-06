@@ -1,3 +1,10 @@
+> [!NOTE]
+> **aislopware/gpui-kit** is the component kit [onicode](https://github.com/aislopware/onicode) builds its UI with:
+> [longbridge/gpui-kit](https://github.com/longbridge/gpui-kit) on [aislopware/gpui-fast](https://github.com/aislopware/gpui-fast),
+> plus fixes for retained-mode rendering (notify only on change, keep draw state out of globals), the input (IME,
+> caret pixel snapping, gutter clipping, select occurrences, large-text performance) and streamed Markdown. Onicode
+> pins a rev on `main`. Upstream changes are read one by one and taken by intent, never merged blindly.
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/longbridge/gpui-kit/main/website/public/logo.svg" width="112" alt="GPUI Kit logo" />
   <br>

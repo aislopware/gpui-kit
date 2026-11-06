@@ -191,17 +191,17 @@ strip = "symbols"
 # gpui-pre snapshots under their names (longbridge/gpui-fast#23) at the versions pinned
 # above, `=0.3.11` and `0.1.13`. An application on this fork patches every one of these
 # crates to the same `rev` in its own root manifest, so its graph holds one GPUI.
-gpui-pre = { git = "https://github.com/aislopware/gpui-fast.git", rev = "67171c074265e1c2ac37ca0d08dc96d88bc225b9" }
-gpui-pre-platform = { git = "https://github.com/aislopware/gpui-fast.git", rev = "67171c074265e1c2ac37ca0d08dc96d88bc225b9" }
-gpui-pre-web = { git = "https://github.com/aislopware/gpui-fast.git", rev = "67171c074265e1c2ac37ca0d08dc96d88bc225b9" }
-gpui-pre-macros = { git = "https://github.com/aislopware/gpui-fast.git", rev = "67171c074265e1c2ac37ca0d08dc96d88bc225b9" }
-gpui-pre-reqwest-client = { git = "https://github.com/aislopware/gpui-fast.git", rev = "67171c074265e1c2ac37ca0d08dc96d88bc225b9" }
-gpui-pre-sum-tree = { git = "https://github.com/aislopware/gpui-fast.git", rev = "67171c074265e1c2ac37ca0d08dc96d88bc225b9" }
+gpui-pre = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-pre-platform = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-pre-web = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-pre-macros = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-pre-reqwest-client = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-pre-sum-tree = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
 # The `gpui-fast` feature names GPUI Fast's crates.io release; the fork's compat crates stand
 # in for it too, so the feature builds on the same gpui-fast as the rest.
-gpui-fast = { git = "https://github.com/aislopware/gpui-fast.git", rev = "67171c074265e1c2ac37ca0d08dc96d88bc225b9" }
-gpui-fast-platform = { git = "https://github.com/aislopware/gpui-fast.git", rev = "67171c074265e1c2ac37ca0d08dc96d88bc225b9" }
-gpui-fast-web = { git = "https://github.com/aislopware/gpui-fast.git", rev = "67171c074265e1c2ac37ca0d08dc96d88bc225b9" }
+gpui-fast = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-fast-platform = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
+gpui-fast-web = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
 
 [workspace.metadata.typos]
 files.extend-exclude = ["**/fixtures/*"]

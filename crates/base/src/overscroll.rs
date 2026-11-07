@@ -7,10 +7,7 @@
 use crate::scroll_bounce::Physics;
 use gpui::TouchPhase;
 use std::time::Duration;
-#[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
-#[cfg(target_family = "wasm")]
-use web_time::Instant;
 
 /// A pause without packets that ends a gesture.
 ///
@@ -346,7 +343,7 @@ mod tests {
         path
     }
 
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_fling_throws_the_edge_as_far_as_nsscrollview_does() {
         // Measured on NSScrollView: a fling arriving at 1500 px/s peaks about
@@ -368,7 +365,7 @@ mod tests {
         assert!((-36. ..=-34.).contains(&hardest), "{hardest}");
     }
 
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn packets_handed_over_at_once_do_not_throw_the_edge_further() {
         let peak = |path: Vec<f32>| path.iter().copied().fold(0., f32::min);
@@ -402,7 +399,7 @@ mod tests {
         assert_eq!(overscroll.offset(), 0.);
     }
 
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_stretch_follows_the_travel_as_nsscrollview_does() {
         // Measured on a 300 px NSScrollView: 100 px of travel past the end
@@ -422,7 +419,7 @@ mod tests {
         assert!(stretch(100_000.) < 36.);
     }
 
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_still_release_returns_at_full_speed() {
         // NSScrollView lets go of a stretch held still and halves it in

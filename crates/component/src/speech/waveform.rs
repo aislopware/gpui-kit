@@ -8,7 +8,7 @@ use crate::{ActiveTheme as _, Sizable, Size, StyledExt as _};
 
 use std::f32::consts::PI;
 
-use instant::Instant;
+use std::time::Instant;
 
 use super::{
     SpeechState,

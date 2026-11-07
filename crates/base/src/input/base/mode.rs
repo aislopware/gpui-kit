@@ -105,10 +105,6 @@ impl LayoutMode {
     /// Return true if this layout is a code editor with folding enabled.
     #[inline]
     pub(crate) fn is_folding(&self) -> bool {
-        if cfg!(target_family = "wasm") {
-            return false;
-        }
-
         matches!(self, LayoutMode::CodeEditor { folding: true, .. })
     }
 

@@ -51,10 +51,7 @@ pub struct ThemeConfig {
     /// The base font family, default is system font: `.SystemUIFont`.
     #[serde(rename = "font.family")]
     pub font_family: Option<SharedString>,
-    /// The monospace font family, default is platform specific:
-    /// - macOS: `Menlo`
-    /// - Windows: `Consolas`
-    /// - Linux: `DejaVu Sans Mono`
+    /// The monospace font family, default is `Menlo`.
     ///
     /// The default falls back to an installed monospace font, then to
     /// `.SystemUIFont`, when the machine lacks it. A family named here is used

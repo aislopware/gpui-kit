@@ -1,10 +1,5 @@
-#[cfg(feature = "gpui-fast")]
-extern crate gpui_fast as gpui;
-
-// Native-only binary size measurement: WASM assets are fetched from an endpoint.
-#[cfg(not(target_family = "wasm"))]
+// Binary size measurement.
 use gpui::AssetSource;
-#[cfg(not(target_family = "wasm"))]
 fn main() {
     let path = std::env::args()
         .nth(1)
@@ -15,6 +10,3 @@ fn main() {
         std::hint::black_box(gpui_kit_assets::AllAssets.load(&path).unwrap().unwrap()).len()
     );
 }
-
-#[cfg(target_family = "wasm")]
-fn main() {}

@@ -25,7 +25,7 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-use crate::{AxisExt, InteractiveElementExt as _};
+use crate::AxisExt;
 
 struct VirtualListScrollHandleState {
     axis: Axis,
@@ -222,7 +222,7 @@ where
             .id(id)
             .size_full()
             .overflow_scroll()
-            .lock_scroll_axis()
+            .restrict_scroll_to_axis()
             .track_scroll(&scroll_handle),
         scroll_handle,
         items_count: item_sizes.len(),

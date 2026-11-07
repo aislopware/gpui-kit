@@ -2290,27 +2290,33 @@ impl<M: InputModeKind> TextElement<M> {
                     listener(&event, window, cx);
                 }
             })
-            .on_hover(move |hovered, window, cx| {
-                // Hover never selects or edits; it only reports presence so the
-                // application can show a tooltip or run custom logic.
-                let hovered = *hovered;
-                let activation = hover_state.update(cx, |state, _| {
-                    // Anchor to the real laid-out token rect, not the
-                    // range-to-bounds guess: a token at a soft-wrap boundary
-                    // would otherwise report a zero/negative width or a
-                    // two-row height.
-                    let bounds = if hovered {
-                        state.token_bounds.get(&start).copied()?
-                    } else {
-                        // Exits use entry geometry even if an earlier callback
-                        // removed the token and its current bounds.
-                        Bounds::default()
-                    };
-                    state.token_hover(start, bounds, hovered, Some(&hover_token))
-                });
-                if let Some((listener, event)) = activation {
-                    listener(&event, window, cx);
-                }
+            // A token that cannot report hover listens to none. GPUI tells a
+            // listener that heard it was hovered of the exit once its element
+            // is gone, and this element's exit would match the snapshot of the
+            // same token's hover-enabled element that replaces it.
+            .when(hover_enabled, |this| {
+                this.on_hover(move |hovered, window, cx| {
+                    // Hover never selects or edits; it only reports presence so the
+                    // application can show a tooltip or run custom logic.
+                    let hovered = *hovered;
+                    let activation = hover_state.update(cx, |state, _| {
+                        // Anchor to the real laid-out token rect, not the
+                        // range-to-bounds guess: a token at a soft-wrap boundary
+                        // would otherwise report a zero/negative width or a
+                        // two-row height.
+                        let bounds = if hovered {
+                            state.token_bounds.get(&start).copied()?
+                        } else {
+                            // Exits use entry geometry even if an earlier callback
+                            // removed the token and its current bounds.
+                            Bounds::default()
+                        };
+                        state.token_hover(start, bounds, hovered, Some(&hover_token))
+                    });
+                    if let Some((listener, event)) = activation {
+                        listener(&event, window, cx);
+                    }
+                })
             })
             .child(child)
             .into_any_element()
@@ -5072,7 +5078,6 @@ mod tests {
     /// Paints an input moved by its parent, then counts the views a draw with
     /// nothing else to do builds: a notify during a draw only marks a view
     /// dirty, for the next draw. Only GPUI Fast reuses a clean view.
-    #[cfg(feature = "gpui-fast")]
     #[gpui::test]
     fn an_input_moved_by_its_parent_is_dirty_only_while_focused(cx: &mut TestAppContext) {
         use std::{cell::Cell, rc::Rc};
@@ -5142,7 +5147,6 @@ mod tests {
     /// while painting would read as a change to what the page read, and the
     /// page would be built again on the next frame. Only GPUI Fast draws a
     /// view around another.
-    #[cfg(feature = "gpui-fast")]
     #[gpui::test]
     fn drawing_an_input_leaves_the_view_around_it_clean(cx: &mut TestAppContext) {
         use gpui::{

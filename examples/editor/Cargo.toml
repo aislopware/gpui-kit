@@ -17,6 +17,3 @@ tree-sitter-navi = "0.2.3"
 
 [lints]
 workspace = true
-
-[features]
-gpui-fast = ["gpui-kit/gpui-fast"]

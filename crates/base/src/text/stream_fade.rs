@@ -15,11 +15,8 @@
 //! The tracker compares rendered text, not source, so `**bo` completing into
 //! bold `bold` fades the changed glyphs rather than mapping source bytes.
 
-#[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
 use std::{ops::Range, sync::Arc, time::Duration};
-#[cfg(target_family = "wasm")]
-use web_time::Instant;
 
 use gpui::{ElementId, SharedString};
 

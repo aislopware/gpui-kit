@@ -2,9 +2,9 @@ use std::ops::Range;
 
 use anyhow::Result;
 use gpui::{App, Context, HighlightStyle, SharedString, Task, Window};
-use instant::Duration;
 use lsp_types::{Position, SemanticTokens, SemanticTokensLegend};
 use ropey::Rope;
+use std::time::Duration;
 
 use crate::input::{EditorMode, HighlightStyleResolver, InputBaseState, Lsp, RopeExt};
 

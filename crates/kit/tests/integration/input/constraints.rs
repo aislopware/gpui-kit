@@ -100,11 +100,7 @@ fn ui(
 }
 
 fn shortcut(window: &mut Window, key: &str, cx: &mut App) {
-    let modifier = if cfg!(target_os = "macos") {
-        "cmd"
-    } else {
-        "ctrl"
-    };
+    let modifier = "cmd";
     window.press(&format!("{modifier}-{key}"), cx);
 }
 
@@ -409,15 +405,7 @@ fn mask_formats_paste_rejects_overflow_and_round_trips_history(cx: &mut TestAppC
     });
     assert_owner(handle, &view, cx, "", 2);
     ui(handle, cx, |window, cx| {
-        shortcut(
-            window,
-            if cfg!(target_os = "macos") {
-                "shift-z"
-            } else {
-                "y"
-            },
-            cx,
-        );
+        shortcut(window, "shift-z", cx);
         assert_eq!(window.find("constrained").value(), Some("12-34"));
     });
     assert_owner(handle, &view, cx, "12-34", 3);
@@ -769,15 +757,7 @@ fn paste_hook_consumption_preserves_selection_and_redo_then_fallback_normalizes(
     })
     .unwrap();
     ui(handle, cx, |window, cx| {
-        shortcut(
-            window,
-            if cfg!(target_os = "macos") {
-                "shift-z"
-            } else {
-                "y"
-            },
-            cx,
-        );
+        shortcut(window, "shift-z", cx);
         assert_eq!(window.find("constrained").value(), Some("new"));
         shortcut(window, "z", cx);
     });
@@ -853,11 +833,7 @@ fn masked_word_delete_takes_the_secret_and_undo_preserves_privacy(cx: &mut TestA
     ui(handle, cx, |window, cx| {
         window.click("constrained", cx);
         window.press("end", cx);
-        let modifier = if cfg!(target_os = "macos") {
-            "alt"
-        } else {
-            "ctrl"
-        };
+        let modifier = "alt";
         window.press(&format!("{modifier}-backspace"), cx);
         assert_eq!(window.find("constrained").value(), None);
     });
@@ -865,11 +841,7 @@ fn masked_word_delete_takes_the_secret_and_undo_preserves_privacy(cx: &mut TestA
     ui(handle, cx, |window, cx| {
         shortcut(window, "z", cx);
         window.press("home", cx);
-        let modifier = if cfg!(target_os = "macos") {
-            "alt"
-        } else {
-            "ctrl"
-        };
+        let modifier = "alt";
         window.press(&format!("{modifier}-delete"), cx);
         assert_eq!(window.find("constrained").value(), None);
     });
@@ -911,29 +883,13 @@ fn validation_rejection_preserves_redo_and_replacement_selection(cx: &mut TestAp
     })
     .unwrap();
     ui(handle, cx, |window, cx| {
-        shortcut(
-            window,
-            if cfg!(target_os = "macos") {
-                "shift-z"
-            } else {
-                "y"
-            },
-            cx,
-        );
+        shortcut(window, "shift-z", cx);
         assert_eq!(window.find("constrained").value(), Some("123"));
         shortcut(window, "z", cx);
         shortcut(window, "a", cx);
         clipboard(cx, "45");
         shortcut(window, "v", cx);
-        shortcut(
-            window,
-            if cfg!(target_os = "macos") {
-                "shift-z"
-            } else {
-                "y"
-            },
-            cx,
-        );
+        shortcut(window, "shift-z", cx);
         assert_eq!(window.find("constrained").value(), Some("45"));
     });
     assert_owner(handle, &view, cx, "45", 5);

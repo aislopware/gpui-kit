@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use instant::Instant;
+use std::time::Instant;
 
 use gpui::{
     App, Axis, BorderStyle, Bounds, ContentMask, Edges, Element, ElementId, GlobalElementId,
@@ -12,7 +12,7 @@ use gpui::{
 };
 use gpui::{Corners, Pixels};
 
-use crate::{AxisExt, OngoingScrollExt as _, ScrollbarHandle, StyledExt as _};
+use crate::{AxisExt, ScrollbarHandle, StyledExt as _};
 
 thread_local! {
     static LAST_HORIZONTAL_SCROLL_CLAIM: Cell<Option<HorizontalScrollClaim>> =
@@ -566,7 +566,7 @@ impl<H: ScrollbarHandle + Clone> Element for ScrollableMask<H> {
                     if event.delta.precise() {
                         ongoing_scroll
                             .borrow_mut()
-                            .lock_axis(&mut delta, event.touch_phase);
+                            .filter(&mut delta, event.touch_phase);
                     }
 
                     // Limit for only one way scrolling at same time.

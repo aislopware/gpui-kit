@@ -4,7 +4,7 @@ use gpui::{
     WindowId,
     profiler::{FrameEvent, FrameTiming, FrameTimingCollector},
 };
-use web_time::Instant;
+use std::time::Instant;
 
 /// Frames presented longer ago than this stop contributing to the FPS readout.
 const FPS_WINDOW: Duration = Duration::from_secs(1);
@@ -338,14 +338,12 @@ pub(crate) struct ResourceSample {
 /// readings that describe the same steady workload, and the eye tracks the
 /// churn instead of the value. Averaging over a window a few samples long keeps
 /// the readings legible without hiding a real change for longer than the window.
-#[cfg(not(target_family = "wasm"))]
 #[derive(Debug)]
 pub(crate) struct ResourceHistory {
     samples: VecDeque<(Instant, ResourceSample)>,
     window: Duration,
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl ResourceHistory {
     pub(crate) fn new(window: Duration) -> Self {
         Self {
@@ -412,7 +410,6 @@ impl ResourceHistory {
 ///
 /// Refreshing is a blocking syscall walk, so this must be driven from a
 /// background thread rather than from the render loop.
-#[cfg(not(target_family = "wasm"))]
 pub(crate) struct ResourceProbe {
     system: sysinfo::System,
     pid: sysinfo::Pid,
@@ -425,7 +422,6 @@ pub(crate) struct ResourceProbe {
     history: ResourceHistory,
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl ResourceProbe {
     /// Returns `None` when the current process id cannot be determined, which
     /// is the only way sampling can be unavailable on a supported platform.
@@ -487,14 +483,8 @@ impl ResourceProbe {
 }
 
 /// The shortest interval at which CPU usage can be meaningfully resampled.
-#[cfg(not(target_family = "wasm"))]
 pub(crate) fn minimum_resource_interval() -> Duration {
     sysinfo::MINIMUM_CPU_UPDATE_INTERVAL
-}
-
-#[cfg(target_family = "wasm")]
-pub(crate) fn minimum_resource_interval() -> Duration {
-    Duration::from_millis(200)
 }
 
 #[cfg(test)]
@@ -840,7 +830,6 @@ mod tests {
 
     /// The resource history only exists off the web, where there is a process
     /// to sample in the first place.
-    #[cfg(not(target_family = "wasm"))]
     mod resource_history {
         use super::*;
 

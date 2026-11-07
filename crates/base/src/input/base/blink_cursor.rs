@@ -1,6 +1,6 @@
 use gpui::{App, Context, Pixels, Size, Subscription, Task, Window, px, size};
-use instant::Duration;
-use web_time::Instant;
+use std::time::Duration;
+use std::time::Instant;
 
 static INTERVAL: Duration = Duration::from_millis(500);
 static PAUSE_DELAY: Duration = Duration::from_millis(300);

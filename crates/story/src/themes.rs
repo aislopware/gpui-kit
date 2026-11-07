@@ -8,9 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 
-#[cfg(target_family = "wasm")]
-use crate::embedded_themes;
-
 const STATE_FILE: &str = "target/state.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,7 +36,6 @@ impl Default for State {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 fn save_state(cx: &mut App) {
     if AppState::global(cx).previewing_theme {
         return;
@@ -82,31 +78,10 @@ fn apply_persisted_radius(state: &State, cx: &mut App) {
 }
 
 pub fn init(cx: &mut App) {
-    #[cfg(target_family = "wasm")]
-    {
-        tracing::info!("Loading embedded themes for WASM...");
-        let embedded = embedded_themes::embedded_themes();
-        let registry = ThemeRegistry::global_mut(cx);
+    let json = std::fs::read_to_string(STATE_FILE).unwrap_or_default();
+    let state = serde_json::from_str::<State>(&json).unwrap_or_default();
 
-        for (name, content) in embedded {
-            if let Err(e) = registry.load_themes_from_str(content) {
-                tracing::error!("Failed to load embedded theme {}: {}", name, e);
-            } else {
-                tracing::info!("Loaded embedded theme: {}", name);
-            }
-        }
-    }
-
-    let state = if cfg!(not(target_family = "wasm")) {
-        let json = std::fs::read_to_string(STATE_FILE).unwrap_or(String::default());
-        serde_json::from_str::<State>(&json).unwrap_or_default()
-    } else {
-        State::default()
-    };
-
-    #[cfg(not(target_family = "wasm"))]
     let watched_state = state.clone();
-    #[cfg(not(target_family = "wasm"))]
     if let Err(err) =
         ThemeRegistry::watch_dir(std::path::PathBuf::from("./themes"), cx, move |cx| {
             if let Some(theme) = ThemeRegistry::global(cx)
@@ -132,11 +107,8 @@ pub fn init(cx: &mut App) {
     cx.refresh_windows();
 
     // Both globals carry persisted settings, so either changing writes the file.
-    #[cfg(not(target_family = "wasm"))]
-    {
-        cx.observe_global::<Theme>(save_state).detach();
-        cx.observe_global::<AppState>(save_state).detach();
-    }
+    cx.observe_global::<Theme>(save_state).detach();
+    cx.observe_global::<AppState>(save_state).detach();
 
     cx.on_action(|switch: &SwitchTheme, cx| {
         let theme_name = switch.0.clone();

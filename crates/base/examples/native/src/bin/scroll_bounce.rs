@@ -1,11 +1,6 @@
 //! Run with `cargo run -p gpui-base-examples --bin scroll_bounce --release`.
 //! Trackpad gestures exercise the same viewport wrapper as the iOS host.
 
-#[cfg(feature = "gpui-fast")]
-extern crate gpui_fast as gpui;
-#[cfg(feature = "gpui-fast")]
-extern crate gpui_fast_platform as gpui_platform;
-
 #[allow(dead_code)]
 #[path = "../../../shared/palette.rs"]
 mod palette;
@@ -238,9 +233,10 @@ mod tests {
             position: anchor + point(px(0.), px(140.)),
             ..Default::default()
         });
-        // ScrollBounce uses the real monotonic clock, not the test executor's
-        // virtual timer. A delayed frame may settle fully; either is valid.
-        std::thread::sleep(std::time::Duration::from_millis(30));
+        // ScrollBounce reads the executor's clock, which a test advances: the
+        // spring moves 30 ms on, exactly.
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(30));
         cx.update(|window, cx| window.draw(cx).clear(cx));
         let returning = handle.viewport_bounds().origin.y;
         assert!(returning >= bounds.origin.y && returning < stretched);

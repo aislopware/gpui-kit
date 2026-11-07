@@ -226,14 +226,9 @@ fn text_style(size: f32, line_height: f32) -> TextStyleToken {
     }
 }
 
+/// Menlo ships with both macOS and iOS.
 fn default_mono_font_family() -> SharedString {
-    if cfg!(target_os = "macos") {
-        "Menlo".into()
-    } else if cfg!(target_os = "windows") {
-        "Consolas".into()
-    } else {
-        "DejaVu Sans Mono".into()
-    }
+    "Menlo".into()
 }
 
 fn box_shadow(x: f32, y: f32, blur: f32, spread: f32, color: Hsla) -> BoxShadow {

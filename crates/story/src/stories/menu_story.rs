@@ -19,22 +19,10 @@ actions!(menu_story, [Copy, Paste, Cut, SearchAll, ToggleCheck]);
 const CONTEXT: &str = "menu_story";
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-c", Copy, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-v", Paste, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-v", Paste, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-x", Cut, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-x", Cut, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-shift-f", SearchAll, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-shift-f", SearchAll, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-alt-t", ToggleCheck, Some(CONTEXT)),
     ])
 }

@@ -15,9 +15,7 @@ use gpui_kit::component::{
 };
 use rand::seq::SliceRandom as _;
 
-#[cfg(not(target_family = "wasm"))]
 use autocorrect::ignorer::Ignorer;
-#[cfg(not(target_family = "wasm"))]
 use std::path::Path;
 
 use crate::{Story, section};
@@ -34,51 +32,6 @@ pub struct TreeStory {
     items: Vec<TreeItem>,
 }
 
-#[cfg(target_family = "wasm")]
-fn example_file_items() -> Vec<TreeItem> {
-    vec![
-        TreeItem::new("gpui-component", "gpui-component")
-            .expanded(true)
-            .children([
-                TreeItem::new("gpui-component/crates", "crates")
-                    .expanded(true)
-                    .children([
-                        TreeItem::new("gpui-component/crates/component", "ui")
-                            .expanded(true)
-                            .children([
-                                TreeItem::new("gpui-component/crates/component/src", "src")
-                                    .children([
-                                        TreeItem::new(
-                                            "gpui-component/crates/component/src/tree.rs",
-                                            "tree.rs",
-                                        ),
-                                        TreeItem::new(
-                                            "gpui-component/crates/component/src/list/mod.rs",
-                                            "mod.rs",
-                                        ),
-                                    ]),
-                                TreeItem::new(
-                                    "gpui-component/crates/component/Cargo.toml",
-                                    "Cargo.toml",
-                                ),
-                            ]),
-                        TreeItem::new("gpui-component/crates/story", "story").children([
-                            TreeItem::new(
-                                "gpui-component/crates/story/src/stories/tree_story.rs",
-                                "tree_story.rs",
-                            ),
-                            TreeItem::new(
-                                "gpui-component/crates/story/src/gallery.rs",
-                                "gallery.rs",
-                            ),
-                        ]),
-                    ]),
-                TreeItem::new("gpui-component/README.md", "README.md"),
-            ]),
-    ]
-}
-
-#[cfg(not(target_family = "wasm"))]
 fn build_file_items(ignorer: &Ignorer, root: &Path, path: &Path) -> Vec<TreeItem> {
     let mut items = Vec::new();
     if let Ok(entries) = std::fs::read_dir(path) {
@@ -112,12 +65,6 @@ fn build_file_items(ignorer: &Ignorer, root: &Path, path: &Path) -> Vec<TreeItem
     items
 }
 
-#[cfg(target_family = "wasm")]
-fn load_tree_items(_: PathBuf) -> Vec<TreeItem> {
-    example_file_items()
-}
-
-#[cfg(not(target_family = "wasm"))]
 fn load_tree_items(path: PathBuf) -> Vec<TreeItem> {
     let ignorer = Ignorer::new(&path.to_string_lossy());
     build_file_items(&ignorer, &path, &path)

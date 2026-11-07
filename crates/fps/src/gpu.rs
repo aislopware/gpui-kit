@@ -7,20 +7,14 @@
 //! differently, and where none of them can, the reading is simply absent.
 
 #[cfg_attr(target_os = "macos", path = "gpu/macos.rs")]
-#[cfg_attr(target_os = "windows", path = "gpu/windows.rs")]
-#[cfg_attr(target_os = "linux", path = "gpu/linux.rs")]
-#[cfg_attr(
-    not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
-    path = "gpu/unsupported.rs"
-)]
+#[cfg_attr(target_os = "ios", path = "gpu/unsupported.rs")]
 mod platform;
 
 /// Samples GPU utilization.
 ///
 /// Every backend answers the same two questions, and both can say no. [`new`]
 /// returns `None` when this platform has no counter to read at all, or when the
-/// machine does not publish one — a driver on Linux that omits it, a GPU with
-/// no statistics — and the HUD then leaves the row out entirely rather than
+/// machine does not publish one — a GPU with no statistics — and the HUD then leaves the row out entirely rather than
 /// showing an empty slot. [`sample`] returns `None` for a reading that is only
 /// momentarily unavailable, leaving the last one on screen.
 ///

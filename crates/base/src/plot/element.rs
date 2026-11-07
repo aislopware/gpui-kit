@@ -166,7 +166,7 @@ impl<P: Plot + 'static> Element for PlotElement<P> {
             // every sibling view's cache on each pixel of mouse movement.
             let view = window.current_view();
 
-            if cfg!(any(target_os = "ios", target_os = "android")) {
+            if cfg!(target_os = "ios") {
                 // A finger has no hover: only a long press opens the tooltip, drags
                 // the crosshair, and closes it on lift.
                 window.on_mouse_event(

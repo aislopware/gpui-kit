@@ -750,13 +750,11 @@ mod tests {
     }
 
     /// A view reading a [`ResizableState`], counting its renders.
-    #[cfg(feature = "gpui-fast")]
     struct StateReader {
         state: gpui::Entity<ResizableState>,
         renders: Rc<Cell<usize>>,
     }
 
-    #[cfg(feature = "gpui-fast")]
     impl Render for StateReader {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             self.renders.set(self.renders.get() + 1);
@@ -766,13 +764,11 @@ mod tests {
     }
 
     /// Panels beside a [`StateReader`] of their state.
-    #[cfg(feature = "gpui-fast")]
     struct ReaderBesidePanels {
         state: gpui::Entity<ResizableState>,
         reader: gpui::Entity<StateReader>,
     }
 
-    #[cfg(feature = "gpui-fast")]
     impl Render for ReaderBesidePanels {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div()
@@ -791,7 +787,6 @@ mod tests {
     /// Drawing panels again at the bounds they had changes nothing in their
     /// state: a view reading it, beside them in a view drawn again, is not
     /// built again for it.
-    #[cfg(feature = "gpui-fast")]
     #[gpui::test]
     fn redrawing_panels_where_they_were_leaves_their_readers_retained(cx: &mut TestAppContext) {
         let renders = Rc::new(Cell::new(0));

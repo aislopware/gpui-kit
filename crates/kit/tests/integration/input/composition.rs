@@ -9,14 +9,7 @@ use gpui_kit::{App, AppContext, InputHandler, TestAppContext, Window, test::Test
 use super::lifecycle::mount;
 
 fn undo(window: &mut Window, cx: &mut App) {
-    window.press(
-        if cfg!(target_os = "macos") {
-            "cmd-z"
-        } else {
-            "ctrl-z"
-        },
-        cx,
-    );
+    window.press("cmd-z", cx);
 }
 
 fn selection(

@@ -1136,7 +1136,6 @@ mod tests {
     }
 
     /// A slider's bar beside a view that reads its state, under retained views.
-    #[cfg(feature = "gpui-fast")]
     mod retained {
         use std::{cell::Cell, rc::Rc};
 

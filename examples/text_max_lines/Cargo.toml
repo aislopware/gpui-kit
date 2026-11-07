@@ -12,6 +12,3 @@ anyhow.workspace = true
 
 [lints]
 workspace = true
-
-[features]
-gpui-fast = ["gpui-kit/gpui-fast"]

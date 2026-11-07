@@ -810,14 +810,7 @@ fn hidden_line_numbers_keep_wrapped_source_aligned_and_selectable(cx: &mut TestA
         assert!(changed.size.height > keep.size.height * 2.);
         assert!(extra.top() >= changed.bottom());
         window.within(("new", 2usize)).click("source", cx);
-        window.press(
-            if cfg!(target_os = "macos") {
-                "cmd-a"
-            } else {
-                "ctrl-a"
-            },
-            cx,
-        );
+        window.press("cmd-a", cx);
         let state = view.read(cx).state.clone();
         let expected = format!("keep\n{long}\nextra\ntail\n");
         assert_eq!(state.read(cx).selected_text(cx), expected);

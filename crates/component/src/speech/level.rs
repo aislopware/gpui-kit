@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, time::Duration};
 
-use instant::Instant;
+use std::time::Instant;
 
 /// How much audio one level covers, and so how often the waveform takes a
 /// step: about the pace of a syllable, so the bars follow speech without

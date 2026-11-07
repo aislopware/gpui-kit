@@ -1,5 +1,4 @@
 use futures::Stream as _;
-#[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
 use std::{
     ops::{Range, RangeInclusive},
@@ -8,8 +7,6 @@ use std::{
     task::Poll,
     time::Duration,
 };
-#[cfg(target_family = "wasm")]
-use web_time::Instant;
 
 use gpui::{
     App, AppContext as _, Bounds, Context, EntityId, FocusHandle, IntoElement, KeyBinding,
@@ -50,14 +47,8 @@ const STREAM_FADE_TICK: Duration = Duration::from_millis(33);
 
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys(vec![
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-c", input::Copy, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-c", input::Copy, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-a", input::SelectAll, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-a", input::SelectAll, Some(CONTEXT)),
     ]);
 }
 
@@ -1622,7 +1613,6 @@ mod tests {
 
     /// A view reading a text view state, inside a view notified on every
     /// frame, counting its renders.
-    #[cfg(feature = "gpui-fast")]
     mod parse_ack {
         use std::{cell::Cell, rc::Rc};
 

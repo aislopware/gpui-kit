@@ -4,14 +4,14 @@ use quote::quote;
 
 /// Resolve the consumer's GPUI API, preferring the Kit facade over a direct engine.
 pub(crate) fn gpui() -> syn::Result<TokenStream> {
-    for package in ["gpui-kit", "gpui-pre", "gpui-fast"] {
+    for package in ["gpui-kit", "gpui"] {
         if let Ok(found) = crate_name(package) {
             return Ok(found_crate_path(found));
         }
     }
     Err(syn::Error::new(
         Span::call_site(),
-        "IntoPlot requires a direct dependency on gpui-kit, gpui-pre, or gpui-fast",
+        "IntoPlot requires a direct dependency on gpui-kit or gpui",
     ))
 }
 

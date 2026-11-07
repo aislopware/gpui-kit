@@ -36,7 +36,7 @@ pub use theme_color::*;
 pub fn init(cx: &mut App) {
     registry::init(cx);
 
-    // Ensure theme is loaded directly on startup for WASM compatibility
+    // Load the theme on startup, before any window reads it.
     Theme::change(ThemeMode::Light, None, cx);
     Theme::sync_scrollbar_appearance(cx);
 }
@@ -87,11 +87,11 @@ const SCROLLBAR_EXIT: Duration = Duration::from_millis(500);
 /// How long the thumb takes to reach its hovered or resting width.
 const SCROLLBAR_EXPAND: Duration = Duration::from_millis(300);
 
-/// The resting thumb width on iOS and Android, matching the 3pt indicator
+/// The resting thumb width on iOS, matching the 3pt indicator
 /// those platforms draw. Hover and drag keep Base's desktop widths, so a
 /// grabbed thumb still grows under the finger.
 const MOBILE_SCROLLBAR_THUMB_WIDTH: Pixels = px(3.);
-/// How far the resting thumb sits from the edge on iOS and Android. Base's
+/// How far the resting thumb sits from the edge on iOS. Base's
 /// desktop inset leaves a 3px thumb floating too far from the edge.
 const MOBILE_SCROLLBAR_THUMB_INSET: Pixels = px(2.);
 /// Base's resting thumb width, restated so the hovered thumb keeps it when
@@ -172,15 +172,10 @@ pub struct Theme {
     pub font_size: Pixels,
     /// The monospace font family for the application.
     ///
-    /// Defaults to:
-    ///
-    /// - macOS: `Menlo`
-    /// - Windows: `Consolas`
-    /// - Linux: `DejaVu Sans Mono`
+    /// Defaults to `Menlo`.
     ///
     /// When that default is not installed, [`Theme::change`] swaps it for the
-    /// first installed alternative (`Monaco`, `Cascadia Mono`, `Noto Sans Mono`
-    /// and the like) and finally `.SystemUIFont`, so a missing font cannot
+    /// first installed alternative (`Monaco`, then `Courier New`) and finally `.SystemUIFont`, so a missing font cannot
     /// crash text layout. A family set explicitly is used as-is.
     pub mono_font_family: SharedString,
     /// The monospace font size for the application, default is 13px.

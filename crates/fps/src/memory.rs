@@ -19,12 +19,7 @@
 //! looking in Activity Monitor, Task Manager or `top`.
 
 #[cfg_attr(target_os = "macos", path = "memory/macos.rs")]
-#[cfg_attr(target_os = "windows", path = "memory/windows.rs")]
-#[cfg_attr(target_os = "linux", path = "memory/linux.rs")]
-#[cfg_attr(
-    not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
-    path = "memory/unsupported.rs"
-)]
+#[cfg_attr(target_os = "ios", path = "memory/unsupported.rs")]
 mod platform;
 
 /// Samples this process' private memory.
@@ -56,9 +51,8 @@ mod tests {
 
     /// Whether a probe exists is the platform's answer; what must hold is that
     /// one which does exist reports *bytes*, since the counters behind it are
-    /// published in different units — kibibytes on Linux, bytes through the
-    /// other two — and the conversion is the one thing every backend has to get
-    /// right.
+    /// may be published in units other than bytes, and the conversion is the
+    /// one thing every backend has to get right.
     ///
     /// Asserted as growth rather than as an absolute floor: what a process
     /// happens to own says nothing, and a lean test binary owns well under a

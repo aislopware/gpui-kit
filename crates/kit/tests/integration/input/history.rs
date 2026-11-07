@@ -8,18 +8,9 @@ use gpui_kit::{
 
 use crate::common;
 
-#[cfg(target_os = "macos")]
 const UNDO: &str = "cmd-z";
-#[cfg(not(target_os = "macos"))]
-const UNDO: &str = "ctrl-z";
-#[cfg(target_os = "macos")]
 const REDO: &str = "cmd-shift-z";
-#[cfg(not(target_os = "macos"))]
-const REDO: &str = "ctrl-y";
-#[cfg(target_os = "macos")]
 const PASTE: &str = "cmd-v";
-#[cfg(not(target_os = "macos"))]
-const PASTE: &str = "ctrl-v";
 
 struct HistoryInputs {
     text: Entity<InputState>,

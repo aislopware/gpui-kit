@@ -68,14 +68,7 @@ fn commit_navigation_discards_old_results_and_preserves_keyboard_focus(cx: &mut 
                 .focus_handle(cx)
                 .is_focused(window)
         );
-        window.press(
-            if cfg!(target_os = "macos") {
-                "cmd-b"
-            } else {
-                "ctrl-b"
-            },
-            cx,
-        );
+        window.press("cmd-b", cx);
         assert!(!view.read(cx).sidebar_visible);
         window.render_frame(cx);
         window.press("escape", cx);

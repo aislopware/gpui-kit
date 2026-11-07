@@ -17,7 +17,7 @@ use objc2_io_kit::{
     IORegistryEntryGetChildIterator, IOServiceGetMatchingServices, IOServiceMatching,
     io_iterator_t, io_registry_entry_t, kIOMainPortDefault, kIOReturnSuccess,
 };
-use web_time::Instant;
+use std::time::Instant;
 
 /// The registry plane the accelerator's clients hang off, as the fixed size
 /// buffer the call takes.

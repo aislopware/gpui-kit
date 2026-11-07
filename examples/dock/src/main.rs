@@ -430,10 +430,6 @@ impl StoryWorkspace {
                     width: px(640.),
                     height: px(480.),
                 }),
-                #[cfg(target_os = "linux")]
-                window_background: gpui_kit::WindowBackgroundAppearance::Transparent,
-                #[cfg(target_os = "linux")]
-                window_decorations: Some(gpui_kit::WindowDecorations::Client),
                 kind: WindowKind::Normal,
                 ..gpui_kit::component::TitleBar::window_options()
             };

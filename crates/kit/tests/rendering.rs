@@ -1,13 +1,9 @@
-//! These tests need GPUI's real offscreen renderer: Metal on macOS or WGPU on
-//! Linux. No fake renderer is substituted for missing GPU support.
+//! These tests need GPUI's real offscreen renderer, Metal. No fake renderer is
+//! substituted for missing GPU support.
 fn main() {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     rendering::run();
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    println!("rendering: skipped; GPUI does not supply a headless renderer on this platform");
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod rendering {
     use gpui_kit::{
         App, AppContext, AssetSource, Bounds, Context, Entity, Focusable as _, HeadlessAppContext,

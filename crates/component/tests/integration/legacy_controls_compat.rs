@@ -1,6 +1,3 @@
-#[cfg(feature = "gpui-fast")]
-extern crate gpui_fast as gpui;
-
 use gpui::{
     InteractiveElement as _, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
     blue, green, px, red,

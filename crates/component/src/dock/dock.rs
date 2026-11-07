@@ -274,8 +274,7 @@ mod tests {
     /// A renderer that draws no chrome at all: every hook at its trait default.
     ///
     /// This is the position every renderer that is not `DockSkin` starts from,
-    /// including the one gpui-shell installs so a script can draw the chrome
-    /// itself, and the shape of what it gets is base's promise.
+    /// and the shape of what it gets is base's promise.
     struct ChromelessDockSkin;
 
     impl DockAreaRenderer for ChromelessDockSkin {

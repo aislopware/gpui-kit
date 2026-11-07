@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, InteractiveElementExt as _,
-    Selectable as _, Sizable as _, StyledExt as _, Theme, ThemeMode, TitleBar, WindowExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
+    StyledExt as _, Theme, ThemeMode, TitleBar, WindowExt as _,
     button::{Button, ButtonVariants as _},
     diff::{
         Diff, DiffEvent, DiffFile, DiffFileStatus, DiffInlineUnit, DiffLinePosition, DiffMode,
@@ -816,7 +816,7 @@ impl Tig {
                             .border_color(cx.theme().border)
                             .bg(cx.theme().group_box)
                             .overflow_y_scroll()
-                            .lock_scroll_axis()
+                            .restrict_scroll_to_axis()
                             .track_scroll(&self.message_scroll)
                             .child(
                                 div().flex_none().px_4().py_3().text_sm().child(

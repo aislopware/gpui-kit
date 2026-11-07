@@ -1,6 +1,3 @@
-#[cfg(feature = "gpui-fast")]
-extern crate gpui_fast as gpui;
-
 use gpui::App;
 use std::ops::Deref;
 use std::sync::LazyLock;
@@ -102,8 +99,8 @@ pub use global_state::GlobalState;
 pub use gpui_base::Root;
 pub use gpui_base::animation;
 pub use gpui_base::{
-    AxisExt, Edges, FocusTrapElement, InteractiveElementExt, LengthExt, Measure, OngoingScrollExt,
-    Placement, Side, measure, measure_if,
+    AxisExt, Edges, FocusTrapElement, InteractiveElementExt, LengthExt, Measure, Placement, Side,
+    measure, measure_if,
 };
 pub use gpui_component_macros::icon_named;
 pub use icon::*;

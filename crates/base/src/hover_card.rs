@@ -5,7 +5,7 @@ use gpui::{
     ParentElement as _, Render, RenderOnce, Stateful, StatefulInteractiveElement as _,
     StyleRefinement, Styled, Task, Window, div, prelude::FluentBuilder as _,
 };
-use instant::Duration;
+use std::time::Duration;
 
 use crate::{Popup, StyledExt as _};
 
@@ -19,7 +19,7 @@ type ContentBuilder = Box<
 type OpenChangeHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 
 /// An unstyled popup with delayed hover behavior on desktop.
-/// On iOS and Android, tapping toggles it and tapping outside dismisses it.
+/// On iOS, tapping toggles it and tapping outside dismisses it.
 #[derive(IntoElement)]
 pub struct HoverCard {
     id: ElementId,

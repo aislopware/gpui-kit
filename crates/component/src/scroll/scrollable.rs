@@ -1,6 +1,6 @@
 use std::{panic::Location, rc::Rc};
 
-use crate::{InteractiveElementExt as _, StyledExt};
+use crate::StyledExt;
 
 use super::{ScrollableMask, Scrollbar, ScrollbarAxis, ScrollbarHandle};
 use gpui::{
@@ -94,8 +94,8 @@ where
         self
     }
 
-    /// Bounce at the vertical boundaries. On by default on iOS, Android and
-    /// macOS, off elsewhere; horizontal-only areas do not bounce.
+    /// Bounce at the vertical boundaries. On by default; horizontal-only areas
+    /// do not bounce.
     pub fn scroll_bounce(mut self, enabled: bool) -> Self {
         self.scroll_bounce = Some(enabled);
         self
@@ -185,7 +185,7 @@ where
             })
             // On a single-axis area gpui otherwise remaps the other axis' delta
             // onto ours, so a purely horizontal swipe scrolls this vertically.
-            .lock_scroll_axis()
+            .restrict_scroll_to_axis()
             .child(content);
 
         // The wrapper lays the area out as a flex item along the scrolled

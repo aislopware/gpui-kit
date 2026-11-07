@@ -372,9 +372,9 @@ with compact presentation and sizes through `Sizable`. Textarea viewport
 geometry remains with the editing engine. Validation appearance is
 caller-controlled, separately from edit acceptance.
 
-Platform-specific behavior is isolated behind adapters. For example, folding is
-disabled on WebAssembly, time uses `web_time` where needed, and native text
-content support is conditionally compiled.
+Platform-specific behavior is isolated behind adapters. The kit builds for
+macOS and iOS only, and code that differs between them is split by
+`cfg(target_os = "macos")` and `cfg(target_os = "ios")`.
 
 ## Text Rendering for External Components
 

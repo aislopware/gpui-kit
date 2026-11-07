@@ -1,9 +1,6 @@
 mod selection_paint;
 
-#[cfg(target_family = "wasm")]
-use async_channel::bounded;
 use gpui::Corners;
-#[cfg(not(target_family = "wasm"))]
 use smol::channel::bounded;
 use std::{
     cell::{Cell, RefCell},

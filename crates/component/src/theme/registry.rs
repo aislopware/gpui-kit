@@ -94,7 +94,6 @@ impl ThemeRegistry {
     /// Watch themes directory.
     ///
     /// And reload themes to trigger the `on_load` callback.
-    #[cfg(not(target_family = "wasm"))]
     pub fn watch_dir<F>(themes_dir: PathBuf, cx: &mut App, on_load: F) -> Result<()>
     where
         F: Fn(&mut App) + 'static,
@@ -182,7 +181,6 @@ impl ThemeRegistry {
             .collect();
     }
 
-    #[cfg(not(target_family = "wasm"))]
     fn _watch_themes_dir(themes_dir: PathBuf, cx: &mut App) -> anyhow::Result<()> {
         use notify::Watcher as _;
 
@@ -231,7 +229,6 @@ impl ThemeRegistry {
         Ok(())
     }
 
-    #[cfg(not(target_family = "wasm"))]
     fn reload_themes(cx: &mut App) {
         let registry = Self::global_mut(cx);
         match registry.reload() {
@@ -242,7 +239,6 @@ impl ThemeRegistry {
         }
     }
 
-    #[cfg(not(target_family = "wasm"))]
     /// Reload themes from the `themes_dir`.
     fn reload(&mut self) -> Result<()> {
         let mut themes = vec![];

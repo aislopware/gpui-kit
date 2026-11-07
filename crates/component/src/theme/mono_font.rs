@@ -9,21 +9,14 @@
 //!
 //! Only the platform default is probed. A family the application or a theme
 //! file chose explicitly is used as-is: it is usually embedded through
-//! `add_fonts`, and Windows lists families under their localized names, so an
-//! English name for a CJK font would look missing when it is not.
+//! `add_fonts`.
 
 use gpui::{App, SharedString};
 use gpui_base::TypographyTokens;
 use std::sync::OnceLock;
 
 /// Monospace families tried, in order, when the platform default is missing.
-const MONO_FONT_ALTERNATES: &[&str] = if cfg!(target_os = "macos") {
-    &["Monaco", "Courier New"]
-} else if cfg!(target_os = "windows") {
-    &["Cascadia Mono", "Courier New"]
-} else {
-    &["Noto Sans Mono", "Liberation Mono", "Ubuntu Mono"]
-};
+const MONO_FONT_ALTERNATES: &[&str] = &["Monaco", "Courier New"];
 
 /// The virtual family GPUI resolves on every platform; the last resort when
 /// neither the default nor an alternate is installed.

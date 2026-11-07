@@ -32,7 +32,7 @@ impl Global for NativeTouchSelection {}
 /// selection handles and the edit menu a long press leaves behind.
 ///
 /// Use it on a host that already shows its own text UI over the window, such
-/// as Android's floating toolbar and drag handles. The long press still
+/// as iOS's edit menu and selection handles. The long press still
 /// selects a word; the platform follows that selection and drives it back
 /// through the window's input handler. Selections in plain text, outside an
 /// input, keep the handles and menu drawn here.

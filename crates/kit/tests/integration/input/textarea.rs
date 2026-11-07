@@ -12,27 +12,12 @@ use gpui_kit::{
 
 use crate::common;
 
-#[cfg(target_os = "macos")]
 const START: &str = "cmd-up";
-#[cfg(not(target_os = "macos"))]
-const START: &str = "ctrl-home";
-#[cfg(target_os = "macos")]
 const END: &str = "cmd-down";
-#[cfg(not(target_os = "macos"))]
-const END: &str = "ctrl-end";
 
-#[cfg(target_os = "macos")]
 const WORD_MODIFIER: &str = "alt";
-#[cfg(not(target_os = "macos"))]
-const WORD_MODIFIER: &str = "ctrl";
-#[cfg(target_os = "macos")]
 const LINE_END: &str = "cmd-right";
-#[cfg(not(target_os = "macos"))]
-const LINE_END: &str = "end";
-#[cfg(target_os = "macos")]
 const LINE_START: &str = "cmd-left";
-#[cfg(not(target_os = "macos"))]
-const LINE_START: &str = "home";
 
 struct Composer {
     text: Entity<TextareaState>,

@@ -43,10 +43,7 @@ pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("tab", Tab, Some(CONTEXT)),
         KeyBinding::new("shift-tab", TabPrev, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-c", Copy, Some(CONTEXT)),
     ]);
 }
 

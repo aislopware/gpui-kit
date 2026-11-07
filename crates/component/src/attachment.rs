@@ -15,7 +15,7 @@ use gpui_base::{
 use rust_i18n::t;
 
 use crate::{
-    ActiveTheme as _, Icon, IconName, InteractiveElementExt as _, Sizable, Size, StyledExt as _,
+    ActiveTheme as _, Icon, IconName, Sizable, Size, StyledExt as _,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     h_flex,
     progress::ProgressCircle,
@@ -1338,7 +1338,7 @@ impl RenderOnce for AttachmentGroup {
             .gap_3()
             .py_1()
             .overflow_x_scroll()
-            .lock_scroll_axis()
+            .restrict_scroll_to_axis()
             .track_scroll(&handle)
             // Scrolling only moves the offset; the fades need a render to follow.
             .when(fades.is_some(), |this| {

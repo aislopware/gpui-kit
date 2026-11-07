@@ -346,7 +346,7 @@ impl Render for WindowWithTitleBar {
 }
 
 #[gpui_kit::test]
-fn title_bar_and_window_controls_are_observable(cx: &mut TestAppContext) {
+fn title_bar_is_observable_and_leaves_window_controls_to_the_system(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let (handle, _) = common::open_window(cx, Some(size(px(600.), px(400.))), |_, cx| {
         cx.new(|_| WindowWithTitleBar)
@@ -354,23 +354,8 @@ fn title_bar_and_window_controls_are_observable(cx: &mut TestAppContext) {
     cx.update_window(handle.into(), |_, window, cx| {
         window.draw(cx).clear(cx);
         assert!(window.find("title-bar").visible());
-        // Windows draws the caption buttons in the title bar. macOS and the web
-        // leave them to the system, and so does Linux under the server-side
-        // decorations of the test window.
-        #[cfg(target_os = "windows")]
-        {
-            let controls = window.find("window-controls");
-            for id in ["minimize", "maximize", "close"] {
-                let button = window.within("window-controls").find(id);
-                assert!(button.visible(), "{id} should be visible");
-                assert!(controls.bounds().contains(&button.bounds().center()));
-            }
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            assert!(window.try_find("window-controls").is_some());
-            assert!(window.try_find("close").is_none());
-        }
+        // macOS draws the window controls itself; the title bar adds none.
+        assert!(window.try_find("close").is_none());
     })
     .unwrap();
 }

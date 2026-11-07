@@ -29,12 +29,7 @@ actions!(inspector, [ToggleInspector]);
 
 /// Initialize the inspector and register the action to toggle it.
 pub(crate) fn init(cx: &mut App) {
-    cx.bind_keys(vec![
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        KeyBinding::new("cmd-alt-i", ToggleInspector, None),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-shift-i", ToggleInspector, None),
-    ]);
+    cx.bind_keys(vec![KeyBinding::new("cmd-alt-i", ToggleInspector, None)]);
 
     cx.on_action(|_: &ToggleInspector, cx| {
         let Some(active_window) = cx.active_window() else {

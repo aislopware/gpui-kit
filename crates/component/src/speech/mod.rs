@@ -18,29 +18,29 @@ mod state;
 mod surface;
 mod waveform;
 
-#[cfg(all(feature = "speech", not(target_family = "wasm")))]
+#[cfg(feature = "speech")]
 mod microphone;
-#[cfg(all(feature = "speech", not(target_family = "wasm")))]
+#[cfg(feature = "speech")]
 mod system;
 
 use std::rc::Rc;
 
 pub use button::SpeechButton;
 pub use indicator::SpeechIndicator;
-#[cfg(all(feature = "speech", not(target_family = "wasm")))]
+#[cfg(feature = "speech")]
 pub use microphone::Microphone;
 pub use recognizer::{
     AudioFormat, AudioInput, AudioSink, RecognitionSession, SpeechError, SpeechRecognizer,
     SpeechSink,
 };
 pub use state::{SpeechEvent, SpeechState, SpeechStatus};
-#[cfg(all(feature = "speech", not(target_family = "wasm")))]
+#[cfg(feature = "speech")]
 pub use system::SystemRecognizer;
 pub use waveform::SpeechWaveform;
 
 /// The input a [`SpeechState`] captures from unless told otherwise.
 fn default_input() -> Option<Rc<dyn AudioInput>> {
-    #[cfg(all(feature = "speech", not(target_family = "wasm")))]
+    #[cfg(feature = "speech")]
     return Some(Rc::new(Microphone::default()));
     #[allow(unreachable_code)]
     None
@@ -48,7 +48,7 @@ fn default_input() -> Option<Rc<dyn AudioInput>> {
 
 /// The recognizer a [`SpeechState`] falls back to, if this platform has one.
 fn system_recognizer() -> Option<Rc<dyn SpeechRecognizer>> {
-    #[cfg(all(feature = "speech", any(target_os = "macos", target_os = "windows")))]
+    #[cfg(all(target_os = "macos", feature = "speech"))]
     return Some(Rc::new(SystemRecognizer::new()));
     #[allow(unreachable_code)]
     None

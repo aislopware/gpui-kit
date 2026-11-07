@@ -448,10 +448,7 @@ mod tests {
                 content(&story, &mut visual).tokens().len(),
                 initial.tokens().len()
             );
-            #[cfg(target_os = "macos")]
             visual.simulate_keystrokes("cmd-z");
-            #[cfg(not(target_os = "macos"))]
-            visual.simulate_keystrokes("ctrl-z");
             draw(&mut visual);
             assert_eq!(content(&story, &mut visual), inserted);
             click("insert-person", &mut visual);

@@ -1,4 +1,4 @@
-use instant::{Duration, Instant};
+use std::time::{Duration, Instant};
 
 /// A history of grouped undo transactions.
 #[derive(Debug)]
@@ -147,7 +147,7 @@ impl<T> Default for UndoHistory<T> {
 
 #[cfg(test)]
 mod tests {
-    use instant::Duration;
+    use std::time::Duration;
 
     use super::UndoHistory;
 

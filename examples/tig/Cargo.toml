@@ -11,8 +11,5 @@ gpui-kit = { workspace = true, features = ["tree-sitter-rust", "tree-sitter-toml
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
 
-[features]
-gpui-fast = ["gpui-kit/gpui-fast"]
-
 [lints]
 workspace = true

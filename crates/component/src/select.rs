@@ -744,8 +744,8 @@ where
         self
     }
 
-    /// Bounce the dropdown list at its vertical boundaries. On by default on iOS,
-    /// Android and macOS, off elsewhere; reduced motion disables displacement.
+    /// Bounce the dropdown list at its vertical boundaries. On by default;
+    /// reduced motion disables displacement.
     pub fn scroll_bounce(mut self, enabled: bool) -> Self {
         self.options.scroll_bounce = Some(enabled);
         self
@@ -1158,7 +1158,6 @@ mod tests {
     }
 
     /// A page holding a select under retained views.
-    #[cfg(feature = "gpui-fast")]
     mod retained {
         use std::{cell::Cell, rc::Rc};
 

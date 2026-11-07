@@ -1,11 +1,8 @@
-#[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
 };
-#[cfg(target_family = "wasm")]
-use web_time::Instant;
 
 use gpui::{App, Bounds, Entity, Global, OwnedMenu, Pixels, Point};
 

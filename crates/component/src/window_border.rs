@@ -8,10 +8,7 @@ use gpui::{
 
 use crate::ActiveTheme;
 
-#[cfg(not(target_os = "linux"))]
 pub(crate) const SHADOW_SIZE: Pixels = px(0.0);
-#[cfg(target_os = "linux")]
-pub(crate) const SHADOW_SIZE: Pixels = px(20.0);
 const BORDER_SIZE: Pixels = px(1.0);
 /// Half-width of the resize hit band on each side of the visible frame (inner border).
 const RESIZE_HIT_SIZE: Pixels = px(4.0);
@@ -26,7 +23,7 @@ pub fn window_border() -> WindowBorder {
     WindowBorder::new()
 }
 
-/// Renders a custom window border and shadow on Linux.
+/// Renders a custom window border and shadow for client-side decorations.
 #[derive(IntoElement)]
 pub struct WindowBorder {
     shadow_size: Pixels,
@@ -49,7 +46,7 @@ impl WindowBorder {
         Self::default()
     }
 
-    /// Set the shadow size for typical Linux client-side decorations.
+    /// Set the shadow size for client-side decorations.
     ///
     /// Default: [`SHADOW_SIZE`]
     pub fn shadow_size(mut self, size: impl Into<Pixels>) -> Self {

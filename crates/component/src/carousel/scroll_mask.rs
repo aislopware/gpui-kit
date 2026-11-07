@@ -15,7 +15,7 @@ use gpui::{
 };
 
 use super::state::CarouselState;
-use crate::{AxisExt as _, OngoingScrollExt as _, global_state::GlobalState};
+use crate::{AxisExt as _, global_state::GlobalState};
 
 /// A viewport-sized, invisible event surface for a Carousel.
 ///
@@ -186,7 +186,7 @@ impl Element for CarouselScrollMask {
                 if event.delta.precise() {
                     ongoing_scroll
                         .borrow_mut()
-                        .lock_axis(&mut delta, event.touch_phase);
+                        .filter(&mut delta, event.touch_phase);
                 }
 
                 if !delta.x.is_zero() && !delta.y.is_zero() {

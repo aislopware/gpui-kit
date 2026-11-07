@@ -1,4 +1,3 @@
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use gpui_kit::component::{
@@ -710,9 +709,7 @@ impl Render for DialogStory {
                     .child(self.render_custom_style(cx))
                     .child(self.render_dialog_with_content(cx))
                     .child(self.render_textview_dialog(cx))
-                    .when(cfg!(not(target_family = "wasm")), |this| {
-                        this.child(self.render_focus_return_check(cx))
-                    }),
+                    .child(self.render_focus_return_check(cx)),
             )
     }
 }

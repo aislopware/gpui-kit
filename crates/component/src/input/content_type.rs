@@ -169,11 +169,11 @@ pub(super) fn sync_native_content_type(
         content_type.and_then(InputContentType::ns_text_content_type),
     );
 
-    #[cfg(any(not(target_os = "macos"), test))]
+    #[cfg(any(target_os = "ios", test))]
     let _ = (window, content_type);
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(target_os = "macos", test))]
 mod tests {
     use super::*;
 

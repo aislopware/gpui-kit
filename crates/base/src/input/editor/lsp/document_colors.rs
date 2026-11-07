@@ -1,9 +1,9 @@
 use anyhow::Result;
 use gpui::{App, Context, Hsla, Task, Window};
-use instant::Duration;
 use lsp_types::ColorInformation;
 use ropey::Rope;
 use std::ops::Range;
+use std::time::Duration;
 
 use crate::input::{EditorMode, InputBaseState, Lsp, RopeExt};
 

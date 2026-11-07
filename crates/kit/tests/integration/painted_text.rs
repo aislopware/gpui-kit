@@ -65,7 +65,6 @@ fn each_frame_replaces_the_text_of_the_last(cx: &mut TestAppContext) {
         // GPUI Fast draws an unchanged Root again from its last frame without
         // rendering it, so it would not start the frame. Like a cached view,
         // a retained one records no text.
-        #[cfg(feature = "gpui-fast")]
         window.set_view_retention(false);
         window.draw(cx).clear(cx);
         let first = texts(window).len();

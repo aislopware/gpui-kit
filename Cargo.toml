@@ -3,11 +3,9 @@ default-members = ["crates/story"]
 members = [
     "crates/kit",
     "crates/base",
-    "crates/base/examples/wasm",
     "crates/base/examples/native",
     "crates/component-macros",
     "crates/story",
-    "crates/story-web",
     "crates/component",
     "crates/assets",
     "crates/fps",
@@ -35,14 +33,9 @@ members = [
     "examples/touch_selection",
     "examples/table_in_scrollable",
     "examples/markdown_table",
-    "examples/ai_recipes",
     "examples/speech",
-    "crates/shell",
 ]
-# `crates/webview` stays a member, for `gpui-shell`'s optional `webview` feature to
-# resolve, but it does not build on this fork's gpui-fast: see that feature in
-# `crates/shell/Cargo.toml`, and the lint's `--exclude` in CI.
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 publish = false
@@ -55,41 +48,20 @@ gpui-base = { path = "crates/base", version = "0.9.0" }
 gpui-component-macros = { path = "crates/component-macros", version = "0.9.0" }
 gpui-kit-assets = { path = "crates/assets", version = "0.9.0" }
 gpui-fps = { path = "crates/fps", version = "0.9.0" }
-gpui-shell = { path = "crates/shell", version = "0.9.0" }
-gpui-webview = { path = "crates/webview", version = "0.9.0" }
-story = { path = "crates/story" }
 
-# GPUI comes from the `gpui-pre-*` snapshots of Zed's crates, and any snapshot
-# may change GPUI's API. These requirements are what the published gpui-kit
-# crates carry to crates.io, so they pin the exact snapshot the release was
-# built against: a caret requirement let the weekly release move applications
-# onto a newer snapshot that gpui-component did not compile with (#3156). Bump
-# every snapshot crate together with its Cargo.lock entry; `script/check-gpui-pin.ts`
-# fails CI when a pin is not exact.
-gpui = { package = "gpui-pre", version = "=0.3.11" }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui_web = { package = "gpui-pre-web", version = "=0.3.11" }
-# Fast is optional; existing crates select it through their gpui-fast feature.
-# Explicit package fields make Cargo use these dependency keys as Rust crate names;
-# the packages declare the same library names as the pre backend.
-gpui-fast = { package = "gpui-fast", version = "0.1.13", features = ["windows-manifest-provided-by-host"] }
-gpui-fast-platform = { package = "gpui-fast-platform", version = "0.1.13", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui-fast-web = { package = "gpui-fast-web", version = "0.1.13" }
-gpui_macros = { package = "gpui-pre-macros", version = "=0.3.11" }
-reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.11" }
-sum-tree = { package = "gpui-pre-sum-tree", version = "=0.3.11" }
-reqwest = { package = "gpui-pre-reqwest", version = "=0.12.15", default-features = false, features = [
-    "charset",
-    "http2",
-    "macos-system-configuration",
-    "multipart",
-    "rustls-tls-native-roots",
-    "socks",
-    "stream",
-] }
+# GPUI is aislopware/gpui-fast, from git at the rev onicode pins (its root
+# Cargo.toml), so an application on this kit and onicode itself resolve one
+# GPUI: the same packages from the same source, no `[patch]` and no crates.io
+# stand-ins. Only Apple targets are built (macOS on Apple silicon and iOS,
+# 27.2 and up), so no default features: those are the Linux and Windows
+# backends. Bump the rev together with onicode's.
+gpui = { git = "https://github.com/aislopware/gpui-fast", rev = "617af6301e406b7ccf0061c47b6df56dad503061", default-features = false }
+gpui_platform = { git = "https://github.com/aislopware/gpui-fast", rev = "617af6301e406b7ccf0061c47b6df56dad503061", default-features = false }
+gpui_macros = { git = "https://github.com/aislopware/gpui-fast", rev = "617af6301e406b7ccf0061c47b6df56dad503061" }
+reqwest_client = { git = "https://github.com/aislopware/gpui-fast", rev = "617af6301e406b7ccf0061c47b6df56dad503061" }
+sum_tree = { git = "https://github.com/aislopware/gpui-fast", rev = "617af6301e406b7ccf0061c47b6df56dad503061" }
 
 anyhow = "1"
-instant = { version = "0.1", features = ["wasm-bindgen"] }
 log = "0.4"
 lsp-types = { version = "0.97.0", features = ["proposed"] }
 notify = "8.2.0"
@@ -114,13 +86,6 @@ syntect = { version = "5.3.0", default-features = false, features = [
 ] }
 two-face = { version = "0.4.5", default-features = false, features = ["syntect-fancy"] }
 tracing = "0.1.41"
-wasm-bindgen = "0.2.113"
-# Use errno stub for WASM
-errno = { version = "0.3.14", default-features = false }
-
-[workspace.dependencies.windows]
-features = ["Wdk", "Wdk_System", "Wdk_System_SystemServices"]
-version = "0.58.0"
 
 [workspace.lints.clippy]
 almost_complete_range = "allow"
@@ -155,53 +120,24 @@ split-debuginfo = "unpacked"
 # long unoptimized, so optimizing them only adds compile time.
 [profile.dev.package]
 resvg = { opt-level = 3 }
-rustybuzz = { opt-level = 3 }
 taffy = { opt-level = 3 }
-ttf-parser = { opt-level = 3 }
 smol = { opt-level = 3 }
-gpui-pre = { opt-level = 3 }
-gpui-fast = { opt-level = 3 }
-gpui-fast-platform = { opt-level = 3 }
-gpui-pre-platform = { opt-level = 3 }
+gpui = { opt-level = 3 }
+gpui_apple = { opt-level = 3 }
+gpui_macos = { opt-level = 3 }
+gpui_platform = { opt-level = 3 }
 tree-sitter = { opt-level = 3 }
-gpui-pre-sum-tree = { opt-level = 3 }
+sum_tree = { opt-level = 3 }
 ropey = { opt-level = 3 }
 lsp-types = { opt-level = 3 }
-gpui-pre-reqwest-client = { opt-level = 3 }
+reqwest_client = { opt-level = 3 }
 markdown = { opt-level = 3 }
 xml5ever = { opt-level = 3 }
-# `quickjs-jit` is a facade that re-exports `quickjs-jit-core`, so naming it alone
-# optimises neither the interpreter nor the bindings. `quickjs-jit-sys` builds
-# QuickJS itself through `cc`, which reads this package's opt-level; without
-# these two a debug build spends roughly three times as long in every script
-# render. See `website/shell/hosting.md`.
-quickjs-jit = { opt-level = 3 }
-quickjs-jit-runtime = { opt-level = 3 }
-quickjs-jit-sys = { opt-level = 3 }
-quickjs-jit-core = { opt-level = 3 }
-cap-std = { opt-level = 3 }
 
-# Stripping the symbol table costs no build time and removes about a quarter of
-# a release binary (`gpui-shell`: 106 MB to 78 MB on Linux x86_64).
+# Stripping the symbol table costs no build time and shrinks a release binary
+# by about a quarter.
 [profile.release]
 strip = "symbols"
-
-[patch.crates-io]
-# Our fork builds GPUI from our gpui-fast fork, whose `compat/` crates stand in for the
-# gpui-pre snapshots under their names (longbridge/gpui-fast#23) at the versions pinned
-# above, `=0.3.11` and `0.1.13`. An application on this fork patches every one of these
-# crates to the same `rev` in its own root manifest, so its graph holds one GPUI.
-gpui-pre = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
-gpui-pre-platform = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
-gpui-pre-web = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
-gpui-pre-macros = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
-gpui-pre-reqwest-client = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
-gpui-pre-sum-tree = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
-# The `gpui-fast` feature names GPUI Fast's crates.io release; the fork's compat crates stand
-# in for it too, so the feature builds on the same gpui-fast as the rest.
-gpui-fast = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
-gpui-fast-platform = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
-gpui-fast-web = { git = "https://github.com/aislopware/gpui-fast.git", rev = "51bffcc185c0e6c721ebcdfab5a711b61218249e" }
 
 [workspace.metadata.typos]
 files.extend-exclude = ["**/fixtures/*"]

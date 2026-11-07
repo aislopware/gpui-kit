@@ -1194,10 +1194,7 @@ fn late_error_from_older_request_cannot_dismiss_newer_items(cx: &mut TestAppCont
     fixture.assert_editor("private", cx);
 }
 
-#[cfg(target_os = "macos")]
 const CODE_ACTIONS: &str = "cmd-.";
-#[cfg(not(target_os = "macos"))]
-const CODE_ACTIONS: &str = "ctrl-.";
 
 struct Actions {
     id: &'static str,

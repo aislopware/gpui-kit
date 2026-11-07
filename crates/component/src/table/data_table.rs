@@ -131,8 +131,7 @@ where
     }
 
     /// Bounce the rows at the vertical boundaries, keeping headers and
-    /// scrollbars fixed. On by default on iOS,
-    /// Android and macOS, off elsewhere.
+    /// scrollbars fixed. On by default.
     pub fn scroll_bounce(mut self, enabled: bool) -> Self {
         self.options.scroll_bounce = Some(enabled);
         self

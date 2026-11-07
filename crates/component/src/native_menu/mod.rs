@@ -22,26 +22,22 @@
 //!     .show(position, window, cx);
 //! ```
 
-#[cfg(target_os = "windows")]
-use crate::ActiveTheme as _;
 use crate::Icon;
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[cfg(any(target_os = "macos", test))]
 use crate::icon::IconSource;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 use gpui::AssetSource;
 use gpui::{Action, App, Pixels, Point, SharedString, Window};
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 use gpui::{Image, ImageFormat};
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 use std::{path::Path, sync::Arc};
 
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(target_os = "windows")]
-mod windows;
 
-// Drawn-menu fallback (used on platforms without an OS-native popup, e.g. Linux).
+// Drawn-menu fallback (used where there is no OS-native popup: iOS).
 // Compiled on all platforms because `Root` holds the overlay entity.
 mod fallback;
 pub(crate) use fallback::FallbackMenuOverlay;
@@ -112,10 +108,7 @@ impl NativeMenu {
     /// [`crate::IconName`] resolves as an asset and works across all backends.
     /// - **macOS**: loaded into an `NSImage` as a template image, so it tints with the item
     /// text and assigned to the item ([`NSMenuItem::image`]).
-    /// - **Windows**: loaded into an `HBITMAP` and set as the item's
-    /// content bitmap (`MENUITEMINFOW::hbmpItem`), shown beside the label. SVG files are
-    /// rasterized, with `resvg`; other formats (PNG, JPEG, BMP, ...) are decoded by GDI+.
-    /// **Other platforms** (fallback): rendered as the menu item's [`crate::Icon`].
+    /// - **iOS** (fallback): rendered as the menu item's [`crate::Icon`].
     ///
     /// Note: this is the menu item's *content* icon, not its state/check-mark indicator.
     pub fn menu_with_icon(
@@ -207,23 +200,12 @@ impl NativeMenu {
         {
             macos::show(self.items, cx.asset_source().clone(), position, window, cx);
         }
-        #[cfg(target_os = "windows")]
-        {
-            windows::show(
-                self.items,
-                cx.asset_source().clone(),
-                position,
-                cx.theme().is_dark(),
-                window,
-                cx,
-            );
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(target_os = "ios")]
         fallback::show(self.items, position, window, cx);
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 pub(super) fn resolve_icon_image(
     icon: &Icon,
     asset_source: &dyn AssetSource,
@@ -256,7 +238,7 @@ pub(super) fn resolve_icon_image(
     Some(Arc::new(Image::from_bytes(format, bytes)))
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn image_format(path: &str, bytes: &[u8]) -> Option<ImageFormat> {
     if let Some(extension) = Path::new(path)
         .extension()
@@ -280,7 +262,7 @@ fn image_format(path: &str, bytes: &[u8]) -> Option<ImageFormat> {
     image_format_from_bytes(bytes)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn image_format_from_bytes(bytes: &[u8]) -> Option<ImageFormat> {
     let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -309,7 +291,7 @@ fn image_format_from_bytes(bytes: &[u8]) -> Option<ImageFormat> {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn is_svg_bytes(bytes: &[u8]) -> bool {
     let text = match std::str::from_utf8(&bytes[..bytes.len().min(256)]) {
         Ok(text) => text.trim_start(),
@@ -415,7 +397,7 @@ mod tests {
     }
 
     /// Icon resolution is only compiled for the platforms with an OS-native menu.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     mod icon_resolution {
         use super::*;
         use std::{borrow::Cow, fs, path::PathBuf};

@@ -173,14 +173,11 @@ impl Settings {
                     .refine_style(&self.header_style)
                     // The input passes on an Escape it has no use for. Clear a
                     // non-empty query with it; otherwise let it reach an enclosing
-                    // dialog or window. On Android, Escape is the back button,
-                    // which never edits a field.
+                    // dialog or window.
                     .on_action({
                         let search_input = search_input.clone();
                         move |_: &Escape, window, cx| {
-                            if search_input.read(cx).value().is_empty()
-                                || cfg!(target_os = "android")
-                            {
+                            if search_input.read(cx).value().is_empty() {
                                 cx.propagate();
                                 return;
                             }

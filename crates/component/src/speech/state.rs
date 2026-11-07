@@ -122,9 +122,6 @@ impl SpeechState {
 
     /// Whether to fall back to the platform's recognizer when no
     /// [`Self::recognizer`] is set, default `true`.
-    ///
-    /// On Windows the system recognizer dictates through Microsoft's online
-    /// service; turn this off when audio must not leave the application.
     pub fn system_fallback(mut self, system_fallback: bool) -> Self {
         self.system_fallback = system_fallback;
         self
@@ -183,7 +180,7 @@ impl SpeechState {
 
     /// How far past the waveform's trailing edge the newest level sits at
     /// `now`, in levels; see `LevelMeter::lead_at`.
-    pub(super) fn level_lead_at(&self, now: instant::Instant) -> Option<f32> {
+    pub(super) fn level_lead_at(&self, now: std::time::Instant) -> Option<f32> {
         self.meter.lead_at(now)
     }
 
@@ -191,7 +188,7 @@ impl SpeechState {
     /// `now`. The surface is simulated rather than derived from the levels, so
     /// it lives here, with the levels that drive it, and the waveform advances
     /// it once per frame; nothing else reads it, so this does not notify.
-    pub(super) fn advance_surface(&mut self, now: instant::Instant, width: Pixels) {
+    pub(super) fn advance_surface(&mut self, now: std::time::Instant, width: Pixels) {
         self.surfaces.advance(now, width.as_f32(), &self.meter);
     }
 

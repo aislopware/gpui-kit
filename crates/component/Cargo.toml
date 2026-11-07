@@ -15,10 +15,9 @@ edition.workspace = true
 doctest = false
 
 [features]
-gpui-fast = ["dep:gpui-fast", "gpui-base/gpui-fast", "gpui-kit-assets/gpui-fast"]
-test-support = ["gpui/test-support", "gpui-base/test-support", "gpui-fast?/test-support"]
+test-support = ["gpui/test-support", "gpui-base/test-support"]
 decimal = ["gpui-base/decimal"]
-inspector = ["gpui_macros/inspector", "gpui/inspector", "gpui-base/inspector", "gpui-fast?/inspector"]
+inspector = ["gpui_macros/inspector", "gpui/inspector", "gpui-base/inspector"]
 tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-json"]
 # Syntax highlighting for Markdown, Input and Diff from syntect and bat's
 # syntax collection: about 200 languages for a few megabytes, against tens for
@@ -37,9 +36,6 @@ speech = [
     "objc2-foundation/NSDictionary",
     "objc2-foundation/NSError",
     "objc2-foundation/NSLocale",
-    "windows/Foundation_Collections",
-    "windows/Globalization",
-    "windows/Media_SpeechRecognition",
 ]
 
 # For syntax highlighting in Markdown and CodeEditor.
@@ -123,8 +119,7 @@ unicode-segmentation = "1"
 similar = { version = "3.2", features = ["unicode"] }
 regex = "1"
 anyhow.workspace = true
-gpui = { workspace = true }
-gpui-fast = { workspace = true, optional = true }
+gpui.workspace = true
 gpui_macros.workspace = true
 gpui-base.workspace = true
 gpui-component-macros = { workspace = true }
@@ -137,7 +132,8 @@ serde.workspace = true
 serde_json.workspace = true
 serde_repr.workspace = true
 smallvec.workspace = true
-sum-tree.workspace = true
+smol.workspace = true
+sum_tree.workspace = true
 tracing.workspace = true
 log.workspace = true
 markdown = { version = "1.0.0", features = ["serde"] }
@@ -156,16 +152,10 @@ chrono = "0.4.38"
 
 # Code Editor
 lsp-types.workspace = true
-# The `syntect` highlighter, portable to WASM.
+# The `syntect` highlighter.
 syntect = { workspace = true, optional = true }
 two-face = { workspace = true, optional = true }
 
-# Cross-platform time APIs (zero-cost on native, uses web APIs on WASM)
-instant.workspace = true
-
-# Native-only dependencies (not available on WASM)
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
-smol.workspace = true
 cpal = { version = "0.15.3", optional = true }
 tree-sitter = { version = "0.26.13", optional = true }
 tree-sitter-astro-next = { version="0.1.1", optional = true }
@@ -243,25 +233,8 @@ objc2-speech = { version = "0.3", default-features = false, features = [
     "SFTranscription",
 ], optional = true }
 
-[target.'cfg(target_os = "windows")'.dependencies]
-# Native menu (NativeMenu) — drives Win32 popup menus.
-raw-window-handle = { workspace = true }
-resvg = "0.48.1"
-windows = { workspace = true, features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Gdi",
-    "Win32_Graphics_GdiPlus",
-    "Win32_System_Com",
-    "Win32_System_Com_StructuredStorage",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Memory",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_WindowsAndMessaging",
-] }
-
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
-gpui-fast = { workspace = true, features = ["test-support"] }
 indoc = "2"
 
 [lints]

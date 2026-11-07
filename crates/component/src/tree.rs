@@ -63,8 +63,8 @@ impl Tree {
         self
     }
 
-    /// Bounce at the vertical boundaries. On by default on iOS, Android and
-    /// macOS, off elsewhere; reduced motion disables displacement.
+    /// Bounce at the vertical boundaries. On by default; reduced motion
+    /// disables displacement.
     pub fn scroll_bounce(mut self, enabled: bool) -> Self {
         self.scroll_bounce = Some(enabled);
         self

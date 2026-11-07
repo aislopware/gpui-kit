@@ -18,15 +18,12 @@
 //! [`TextViewState::rendered_text`]: super::TextViewState::rendered_text
 //! [`TextViewState::selected_source_range`]: super::TextViewState::selected_source_range
 
-#[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
 use std::{
     ops::Range,
     sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
-#[cfg(target_family = "wasm")]
-use web_time::Instant;
 
 use gpui::{Bounds, EntityId, Hsla, Pixels, SharedString};
 

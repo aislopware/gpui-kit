@@ -4,11 +4,6 @@
 //! colors, sizing, and motion belong to applications or the
 //! `gpui-component` façade.
 
-#[cfg(feature = "gpui-fast")]
-extern crate gpui_fast as gpui;
-#[cfg(all(feature = "gpui-fast", test))]
-extern crate gpui_fast_platform as gpui_platform;
-
 mod a11y_disabled;
 mod accordion;
 pub mod actions;
@@ -115,7 +110,7 @@ pub use dialog::{
     DialogPopup, DialogTitle, DialogTrigger,
 };
 pub use element_ext::ElementExt;
-pub use event::{InteractiveElementExt, OngoingScrollExt};
+pub use event::InteractiveElementExt;
 pub use focus_trap::FocusTrapElement;
 #[doc(hidden)]
 pub use focus_trap::active_focus_trap;
@@ -231,12 +226,12 @@ pub use virtual_list::{VirtualList, VirtualListScrollHandle, h_virtual_list, v_v
 
 use gpui::App;
 
-/// Returns whether the application is compiled for iOS or Android.
+/// Returns whether the application is compiled for iOS.
 ///
 /// This is a compile-time platform check, not a screen-size or input-device check.
 #[inline]
 pub const fn is_mobile() -> bool {
-    cfg!(any(target_os = "ios", target_os = "android"))
+    cfg!(target_os = "ios")
 }
 
 /// Initializes global infrastructure owned by the base layer.

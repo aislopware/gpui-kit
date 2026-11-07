@@ -1,6 +1,3 @@
-#[cfg(feature = "gpui-fast")]
-use gpui_fast as gpui;
-
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},

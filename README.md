@@ -1,9 +1,25 @@
 > [!NOTE]
-> **aislopware/gpui-kit** is the component kit [onicode](https://github.com/aislopware/onicode) builds its UI with:
-> [longbridge/gpui-kit](https://github.com/longbridge/gpui-kit) on [aislopware/gpui-fast](https://github.com/aislopware/gpui-fast),
-> plus fixes for retained-mode rendering (notify only on change, keep draw state out of globals), the input (IME,
-> caret pixel snapping, gutter clipping, select occurrences, large-text performance) and streamed Markdown. Onicode
-> pins a rev on `main`. Upstream changes are read one by one and taken by intent, never merged blindly.
+> **aislopware/gpui-kit** is the component layer of [onicode](https://github.com/aislopware/onicode), a native
+> control plane for coding agents. Onicode wears monocode's look; this fork supplies the behaviour and component
+> machinery underneath it. It is [longbridge/gpui-kit](https://github.com/longbridge/gpui-kit) on
+> [aislopware/gpui-fast](https://github.com/aislopware/gpui-fast), plus fixes for retained-mode rendering (notify
+> only on change, keep draw state out of globals), the input (IME, caret pixel snapping, gutter clipping, select
+> occurrences, large-text performance) and streamed Markdown. Onicode pins a rev on `main`.
+>
+> **GPUI.** The workspace depends on aislopware/gpui-fast's `gpui`, `gpui_platform`, `gpui_macros`, `sum_tree` and
+> `reqwest_client` by git, at the rev onicode pins, so onicode and this kit resolve one GPUI: no `gpui-pre`
+> alias, no crates.io stand-ins and no `[patch]`. Bump the rev together with onicode's.
+>
+> **Platforms (owner ruling, 2026-11-07).** macOS on Apple silicon and iOS only, 27.2 and up
+> (`aarch64-apple-darwin`, `aarch64-apple-ios`, `aarch64-apple-ios-sim`), on the newest toolchain and APIs, with
+> nothing kept for compatibility. Deleted: the web and WebAssembly story (`crates/story-web`, the `website/` and its
+> scripts, the wasm example), `gpui-shell` and its JavaScript examples, `gpui-webview`, the `gpui-fast` feature,
+> every Linux, Windows, FreeBSD, Android and wasm `cfg` and dependency, and the Linux and Windows backends of
+> `gpui-fps`, the native menu and speech input. The Story gallery stays as a macOS component workbench.
+>
+> **Upstream.** Changes are read one by one and taken by intent, never merged blindly. When a merge from upstream
+> touches a deleted crate or file, resolve the modify/delete conflict by keeping the deletion, and drop any new
+> non-Apple `cfg` branch it brings.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/longbridge/gpui-kit/main/website/public/logo.svg" width="112" alt="GPUI Kit logo" />

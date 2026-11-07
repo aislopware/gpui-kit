@@ -6,8 +6,6 @@
 //! Places in the text are found the way a find shows them: a range highlight in its
 //! own color, read back from the quads of the frame. So a position is where the text
 //! was really painted, on any platform's fonts.
-#[cfg(feature = "gpui-fast")]
-extern crate gpui_fast as gpui;
 
 use core::prelude::v1::test;
 use gpui::{prelude::*, *};

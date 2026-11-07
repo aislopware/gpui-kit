@@ -1,5 +1,5 @@
-use instant::Duration;
 use std::ops::Range;
+use std::time::Duration;
 
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
 use crate::input::InputState;
@@ -762,8 +762,8 @@ where
         self
     }
 
-    /// Bounce at the vertical boundaries. On by default on iOS, Android and
-    /// macOS, off elsewhere; reduced motion disables displacement.
+    /// Bounce at the vertical boundaries. On by default; reduced motion
+    /// disables displacement.
     pub fn scroll_bounce(mut self, enabled: bool) -> Self {
         self.options.scroll_bounce = Some(enabled);
         self

@@ -1,4 +1,4 @@
-//! Fallback popup menu for platforms without an OS-native popup (e.g. Linux).
+//! Fallback popup menu where there is no OS-native popup: iOS.
 //!
 //! It renders gpui-component's drawn [`PopupMenu`] through an overlay held by
 //! [`crate::Root`]. Unlike a real native menu it is clipped to the window, but it keeps
@@ -34,7 +34,7 @@ impl FallbackMenuOverlay {
     ///
     /// `action_context` is the focus handle the selected action is dispatched
     /// to, matching the native backends (which dispatch to the window's focus).
-    #[allow(dead_code)] // Only used where the native menu falls back (e.g. Linux).
+    #[allow(dead_code)] // Only used where the native menu falls back (iOS).
     fn show(
         &mut self,
         items: Vec<NativeMenuItem>,
@@ -61,7 +61,7 @@ impl FallbackMenuOverlay {
 }
 
 /// Recursively build a [`PopupMenu`] entity from native menu items.
-#[allow(dead_code)] // Only used where the native menu falls back (e.g. Linux).
+#[allow(dead_code)] // Only used where the native menu falls back (iOS).
 fn build_popup(
     items: Vec<NativeMenuItem>,
     action_context: Option<FocusHandle>,
@@ -134,7 +134,7 @@ impl Render for FallbackMenuOverlay {
 }
 
 /// Show the fallback popup menu through [`crate::Root`]'s overlay.
-#[allow(dead_code)] // Only called where the native menu falls back (e.g. Linux).
+#[allow(dead_code)] // Only called where the native menu falls back (iOS).
 pub(super) fn show(
     items: Vec<NativeMenuItem>,
     position: Point<Pixels>,

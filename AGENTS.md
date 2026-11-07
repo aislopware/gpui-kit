@@ -3,14 +3,32 @@
 This file provides shared guidance for coding agents working in this repository.
 Keep project rules here; `CLAUDE.md` imports this file for Claude Code.
 
+## This Fork
+
+aislopware/gpui-kit is onicode's component layer (see the fork note at the top
+of `README.md`). Its rulings override anything below that disagrees:
+
+- Apple only (owner ruling, 2026-11-07): macOS on Apple silicon and iOS, 27.2
+  and up. Add no `cfg` for Linux, Windows, FreeBSD, Android or wasm, and no
+  dependency only those need; `cfg(target_os = "macos")` and
+  `cfg(target_os = "ios")` are the only platform split.
+- GPUI is aislopware/gpui-fast by git, at the rev onicode pins in its root
+  `Cargo.toml`. There is no `gpui-pre` alias, no `gpui-fast` feature and no
+  `[patch]`; bump the rev in the workspace `Cargo.toml` together with onicode's.
+- No backward compatibility: replace and delete the old API, no shims.
+- Nothing is published to crates.io; onicode depends on this repository by git.
+- Upstream merges keep this fork's deletions (`crates/story-web`, `crates/shell`,
+  `crates/webview`, `website/`): resolve a modify/delete conflict by keeping the
+  deletion.
+
 ## Canonical Design and Coding Guides
 
 Before changing UI, interaction, interface language, layout, styling,
 components, or application architecture, read and follow the repository's
 canonical guides:
 
-- [Design Guides](website/docs/design-guides.md)
-- [Coding Guides](website/docs/coding-guides.md)
+- [Design Guides](skills/gpui-kit-design-guides/references/design-guides.md)
+- [Coding Guides](skills/gpui-kit/references/coding-guides.md)
 
 These guides are requirements, not optional inspiration. Do not copy generic
 web conventions, infer a design system from one existing screen, or add a
@@ -26,20 +44,16 @@ natural Chinese rather than word-for-word translation.
 
 ## Project Overview
 
-GPUI Kit is a Rust desktop application framework built on GPUI, published at <https://gpui-kit.com>. It ships as three crates: `gpui-base` (unstyled behavior and infrastructure), `gpui-shell` (JavaScript extensions for a Rust host), and `gpui-component` (GPUI Component, the styled component library with 60+ cross-platform desktop UI components, inspired by macOS/Windows controls and combined with shadcn/ui design). Applications depend on the umbrella crate `gpui-kit` (`crates/kit`), which pins the matching `gpui-pre-*` snapshot of GPUI and puts GPUI at its root (`use gpui_kit::*;`) with `gpui_kit::platform`, `gpui_kit::base`, `gpui_kit::component` and `gpui_kit::assets` reachable by name, so they never list GPUI itself. `gpui-shell` is published separately and is not part of `gpui-kit`.
-
-Its QuickJS bindings, JIT runtime and standard modules use matching crates.io
-releases.
+GPUI Kit is a Rust application framework built on GPUI. It ships as two crates: `gpui-base` (unstyled behavior and infrastructure) and `gpui-component` (GPUI Component, the styled component library with 60+ UI components, inspired by macOS controls and combined with shadcn/ui design). Applications depend on the umbrella crate `gpui-kit` (`crates/kit`), which depends on GPUI and puts it at its root (`use gpui_kit::*;`) with `gpui_kit::platform`, `gpui_kit::base`, `gpui_kit::component` and `gpui_kit::assets` reachable by name, so they never list GPUI itself.
 
 This is a Rust workspace project with the following main crates:
 
 - `crates/kit` - Umbrella crate applications depend on (published as `gpui-kit`)
 - `crates/component` - Core UI component library (published as `gpui-component`)
-- `crates/story` - Gallery application for showcasing and testing components
-- `crates/story-web` - Web version of the story gallery (using WebAssembly)
+- `crates/story` - Gallery application for showcasing and testing components (macOS)
 - `crates/component-macros` - Procedural macros (`IntoPlot` derive)
 - `crates/assets` - Static assets
-- `crates/webview` - WebView component support
+- `crates/fps` - Realtime FPS, frame time, CPU, GPU and memory HUD
 - `examples/` - Various example applications
 
 ## Common Commands
@@ -113,7 +127,7 @@ implementing this architecture:
   `crates/component` or the application layer.
 
 - Keep GPUI Kit as the ecosystem and product brand; `gpui-component` is its
-  styled component layer, alongside `gpui-base` and `gpui-shell`.
+  styled component layer, alongside `gpui-base`.
 - Name the foundation crate `gpui-base`.
 - Follow the ownership boundary: the framework owns behavior and infrastructure;
   the application owns component source and visual style.
@@ -124,8 +138,9 @@ implementing this architecture:
   shadows), not an ever-growing set of component-specific styling fields.
 - Keep source distribution or registry tooling above the `gpui-base` seam; no
   registry or CLI crate is currently part of the workspace.
-- Preserve 100% backward compatibility for existing consumers, including current
-  imports such as `use gpui_kit::component::button::Button;`.
+- Keep the public paths coherent, such as
+  `use gpui_kit::component::button::Button;`, but carry no backward-compatibility
+  shims: this fork replaces and deletes old API (see "This Fork").
 
 ### Component Initialization
 
@@ -301,7 +316,7 @@ The `Icon` element does not include SVG files by default. You need to:
 
 ## Dependencies
 
-- GPUI: Exact version-aligned `gpui-pre-*` snapshots of Zed, with optional GPUI Fast
+- GPUI: aislopware/gpui-fast by git, at the rev onicode pins
 - Tree-sitter: For syntax highlighting
 - Ropey: Rope data structure for text, and `RopeExt` trait with more features.
 - Markdown rendering: `markdown` crate
@@ -311,26 +326,10 @@ The `Icon` element does not include SVG files by default. You need to:
 
 ## Release Requirements
 
-- Before every release, check crates.io for the latest non-yanked stable
-  `gpui-pre` and `gpui-fast` releases. Update each family together: GPUI,
-  platform, Web, macros, collections and other directly named snapshot crates.
-  Keep `gpui-pre-*` requirements exact. Independently versioned packages such
-  as `gpui-pre-reqwest` must be checked separately.
-- Refresh Cargo.lock after updating both backends, and verify the resolved
-  versions. Do not tag or publish while either backend remains on an older
-  published release. If already current, record that verification.
-- Compile the default and `gpui-fast` configurations, and check public API
-  compatibility against the previous release. Patch releases may include
-  behavior changes, but must not require existing Rust consumers to change
-  signatures, imports, exhaustive struct literals or associated-type bounds.
-  If the user explicitly authorizes an upstream GPUI API migration in a patch
-  release, list those upstream changes and migration steps in its release notes;
-  preserve Kit-owned API compatibility.
-- Publish `gpui-shell` with the other release crates, after its Kit and WebView
-  dependencies. Its QuickJS dependencies must come from crates.io, use the
-  same release, and share one VM implementation without a local patch facade.
-- Follow CONTRIBUTING.md for versioning and release order, and prepare release
-  notes before pushing a release tag.
+Nothing is published. Onicode depends on a rev of this repository's `main`;
+moving GPUI means bumping the gpui-fast rev in the workspace `Cargo.toml` to
+the one onicode pins, refreshing Cargo.lock, and adapting the kit to any API
+change in the same commit.
 
 ## Internationalization
 
@@ -344,31 +343,18 @@ Uses `rust-i18n` crate.
 
 ## Documentation
 
-- The documentation site source is in `website/`.
-- Site docs have two locales: English (`website/docs/`) and Chinese (`website/zh-CN/docs/`).
-- When modifying any documentation file, always sync changes to both `en` and `zh-CN` versions.
+- The documentation site (`website/`) is deleted in this fork. The Design and
+  Coding Guides live at `skills/gpui-kit-design-guides/references/design-guides.md`
+  and `skills/gpui-kit/references/coding-guides.md`; edit them there.
 - `docs/` holds internal architecture specifications (RFC, migration status, reviews).
-  These are single-language and are not published to the site; see `docs/README.md`.
-- `skills/gpui-kit/references/coding-guides.md` and
-  `skills/gpui-kit-design-guides/references/design-guides.md` are verbatim copies
-  of the English `website/docs/` originals, vendored so the skills work after
-  `npx skills add` in a project that does not have this repo. After editing either
-  guide, copy it across:
-
-  ```bash
-  cp website/docs/design-guides.md skills/gpui-kit-design-guides/references/design-guides.md
-  cp website/docs/coding-guides.md skills/gpui-kit/references/coding-guides.md
-  ```
-
-  Never edit the copy directly — edit `website/docs/`.
+  These are single-language; see `docs/README.md`.
 
 ## Platform Support
 
-- macOS (aarch64, x86_64)
-- Linux (x86_64)
-- Windows (x86_64)
+- macOS 27.2 and up on Apple silicon (`aarch64-apple-darwin`)
+- iOS 27.2 and up (`aarch64-apple-ios`, `aarch64-apple-ios-sim`)
 
-CI runs full test suite on each platform.
+CI runs the test suite on macOS and checks the library crates for iOS.
 
 ## Skills Reference
 

@@ -1,14 +1,8 @@
 use std::time::Duration;
 
-// Components and Motion are standalone example apps. The WASM host embeds
-// both, so each deliberately instantiates its own thread-local active palette.
-#[allow(clippy::duplicate_mod)]
 #[path = "../shared/palette.rs"]
 mod palette;
 
-#[cfg(target_family = "wasm")]
-use gpui::ApplicationHandle;
-#[cfg(not(target_family = "wasm"))]
 use gpui::WindowBounds;
 use gpui::{
     App, AppContext as _, Application, AsyncApp, Context, IntoElement, ParentElement as _, Render,
@@ -19,8 +13,6 @@ use gpui_base::{
     Stagger, StaggerOrigin, Timing, Transition, animate_keyframes, spring, transition,
 };
 use palette::{activate as activate_palette, canvas as example_canvas, example_rgb};
-#[cfg(target_family = "wasm")]
-use std::borrow::Cow;
 
 const START_MINUTES: u32 = 8 * 60;
 const END_MINUTES: u32 = 20 * 60;
@@ -683,7 +675,6 @@ fn advance_digit(current: f32, digit: u8) -> f32 {
     current + (i32::from(digit) - visible).rem_euclid(10) as f32
 }
 
-#[cfg(not(target_family = "wasm"))]
 pub fn run() {
     let app: Application = gpui_platform::application();
     app.run(|cx: &mut App| {
@@ -704,26 +695,6 @@ pub fn run() {
         .expect("failed to open motion example");
         cx.activate(true);
     });
-}
-
-#[cfg(target_family = "wasm")]
-pub fn run_embedded(app: Application) -> ApplicationHandle {
-    app.run_embedded(|cx: &mut App| {
-        gpui_base::init(cx);
-        // The web platform resolves GPUI's `.SystemUIFont` alias to IBM Plex Sans and
-        // ships no fonts of its own, so the family has to be bundled or the first
-        // text layout panics and the canvas stays blank (see #2933).
-        cx.text_system()
-            .add_fonts(vec![Cow::Borrowed(
-                include_bytes!("../../../story-web/fonts/IBMPlexSans-Regular.ttf").as_slice(),
-            )])
-            .expect("failed to load motion example font");
-        cx.open_window(WindowOptions::default(), |_, cx| {
-            cx.new(|_| MotionExample::new())
-        })
-        .expect("failed to open motion example");
-        cx.activate(true);
-    })
 }
 
 #[cfg(test)]

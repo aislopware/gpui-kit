@@ -395,11 +395,7 @@ fn tab_moves_between_inputs_with_passive_prefix_and_suffix(cx: &mut TestAppConte
 }
 
 fn word_key(window: &mut Window, key: &str, cx: &mut App) {
-    let modifier = if cfg!(target_os = "macos") {
-        "alt"
-    } else {
-        "ctrl"
-    };
+    let modifier = "alt";
     window.press(&format!("{modifier}-{key}"), cx);
 }
 

@@ -1,6 +1,6 @@
 use std::f32::consts::{PI, TAU};
 
-use instant::Instant;
+use std::time::Instant;
 
 use super::level::LevelMeter;
 

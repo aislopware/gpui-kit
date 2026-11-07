@@ -65,14 +65,7 @@ impl Render for MultilineField {
 }
 
 fn undo(window: &mut Window, cx: &mut App) {
-    window.press(
-        if cfg!(target_os = "macos") {
-            "cmd-z"
-        } else {
-            "ctrl-z"
-        },
-        cx,
-    );
+    window.press("cmd-z", cx);
 }
 
 #[gpui_kit::test]
@@ -96,14 +89,7 @@ fn multiline_composition_undo_restores_backward_unicode_selection(cx: &mut TestA
         cx.update_window(handle.into(), |_, window, cx| {
             let id = field.read(cx).state.id();
             window.click(id.clone(), cx);
-            window.press(
-                if cfg!(target_os = "macos") {
-                    "cmd-down"
-                } else {
-                    "ctrl-end"
-                },
-                cx,
-            );
+            window.press("cmd-down", cx);
             window.press("shift-left", cx);
             let mut input = field.read(cx).state.input(window);
             let before = input.selected_text_range(cx).unwrap();

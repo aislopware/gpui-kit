@@ -178,22 +178,13 @@ pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("backspace", Backspace, Some(CONTEXT)),
         KeyBinding::new("shift-backspace", Backspace, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("ctrl-backspace", Backspace, Some(CONTEXT)),
         KeyBinding::new("delete", Delete, Some(CONTEXT)),
         KeyBinding::new("shift-delete", Delete, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-backspace", DeleteToBeginningOfLine, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-delete", DeleteToEndOfLine, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("alt-backspace", DeleteToPreviousWordStart, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-backspace", DeleteToPreviousWordStart, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("alt-delete", DeleteToNextWordEnd, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-delete", DeleteToNextWordEnd, Some(CONTEXT)),
         KeyBinding::new(
             "enter",
             Enter {
@@ -231,125 +222,48 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("pagedown", MovePageDown, Some(CONTEXT)),
         KeyBinding::new("tab", IndentInline, Some(CONTEXT)),
         KeyBinding::new("shift-tab", OutdentInline, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-]", Indent, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-]", Indent, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-[", Outdent, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-[", Outdent, Some(CONTEXT)),
         KeyBinding::new("shift-left", SelectLeft, Some(CONTEXT)),
         KeyBinding::new("shift-right", SelectRight, Some(CONTEXT)),
         KeyBinding::new("shift-up", SelectUp, Some(CONTEXT)),
         KeyBinding::new("shift-down", SelectDown, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
-        KeyBinding::new("shift-alt-left", SelectLeft, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
-        KeyBinding::new("shift-alt-right", SelectRight, Some(CONTEXT)),
-        // Avoid Ctrl+Alt+arrows on Linux, where desktops may reserve them.
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-alt-up", AddCursorAbove, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-alt-down", AddCursorBelow, Some(CONTEXT)),
-        #[cfg(target_os = "windows")]
-        KeyBinding::new("ctrl-alt-up", AddCursorAbove, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(target_os = "ios")]
         KeyBinding::new("shift-alt-up", AddCursorAbove, Some(CONTEXT)),
-        #[cfg(target_os = "windows")]
-        KeyBinding::new("ctrl-alt-down", AddCursorBelow, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(target_os = "ios")]
         KeyBinding::new("shift-alt-down", AddCursorBelow, Some(CONTEXT)),
         KeyBinding::new("home", MoveHome, Some(CONTEXT)),
         KeyBinding::new("end", MoveEnd, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-home", MoveToStart, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-end", MoveToEnd, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-shift-home", SelectToStart, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-shift-end", SelectToEnd, Some(CONTEXT)),
         KeyBinding::new("shift-home", SelectToStartOfLine, Some(CONTEXT)),
         KeyBinding::new("shift-end", SelectToEndOfLine, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("ctrl-shift-a", SelectToStartOfLine, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("ctrl-shift-e", SelectToEndOfLine, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("shift-cmd-left", SelectToStartOfLine, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("shift-cmd-right", SelectToEndOfLine, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
         KeyBinding::new("alt-shift-left", SelectToPreviousWordStart, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-shift-left", SelectToPreviousWordStart, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
         KeyBinding::new("alt-shift-right", SelectToNextWordEnd, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-shift-right", SelectToNextWordEnd, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-a", SelectAll, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-a", SelectAll, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-c", Copy, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-x", Cut, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-x", Cut, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-v", Paste, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-v", Paste, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("ctrl-a", MoveHome, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-left", MoveHome, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("ctrl-e", MoveEnd, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-right", MoveEnd, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-z", Undo, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-shift-z", Redo, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-up", MoveToStart, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-down", MoveToEnd, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("alt-left", MoveToPreviousWord, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("alt-right", MoveToNextWord, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-left", MoveToPreviousWord, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-right", MoveToNextWord, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-shift-up", SelectToStart, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-shift-down", SelectToEnd, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-z", Undo, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-y", Redo, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-.", ToggleCodeActions, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-.", ToggleCodeActions, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-f", Search, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-f", Search, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         KeyBinding::new("cmd-shift-f", Replace, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        KeyBinding::new("ctrl-h", Replace, Some(CONTEXT)),
     ]);
 }
 
@@ -1070,7 +984,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             column_select_start: None,
             last_cursor: None,
             scroll_handle: ScrollHandle::new(),
-            scroll_bounce: crate::ScrollBounce::enabled_by_default(),
+            scroll_bounce: true,
             overscroll: Overscroll::default(),
             scroll_size: gpui::size(px(0.), px(0.)),
             editor_scrollbar_snapshot: Cell::new(None),
@@ -1517,8 +1431,6 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     /// Set true to clear the input by pressing Escape key.
-    ///
-    /// Not on Android, where Escape is also the back button.
     pub fn clean_on_escape(mut self) -> Self {
         self.clean_on_escape = true;
         self
@@ -2573,9 +2485,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             self.unmark_text(window, cx);
         }
 
-        // Android delivers its back button as escape, and back leaves a field's
-        // text alone: it closes what is open or navigates.
-        if self.clean_on_escape && !cfg!(target_os = "android") {
+        if self.clean_on_escape {
             return self.clean(window, cx);
         }
 
@@ -2875,10 +2785,8 @@ impl<M: InputModeKind> InputBaseState<M> {
 
         // Multi-cursor placement, multi-line only.
         if self.is_multi_line() && event.button == MouseButton::Left {
-            if event.modifiers.alt
-                && (event.modifiers.shift || (cfg!(target_os = "linux") && event.modifiers.control))
-            {
-                // Alt+Shift starts a block; Linux also accepts Ghostty's Ctrl+Alt.
+            if event.modifiers.alt && event.modifiers.shift {
+                // Alt+Shift starts a block.
                 // Mark selecting so the drag handler extends the block.
                 self.column_select_start = Some(ColumnarPoint::new(offset, columns_past_line_end));
                 self.selecting = true;
@@ -6728,15 +6636,14 @@ mod tests {
     }
 
     #[gpui::test]
-    fn test_scroll_bounce_follows_the_platform_by_default(cx: &mut TestAppContext) {
+    fn test_scroll_bounce_is_on_by_default(cx: &mut TestAppContext) {
         let view = InputView::build_textarea(cx, |state| state.default_value(long_text()));
         let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
         let (end, stretch) = swipe_past_the_end(&view, &mut cx);
         assert!(end < px(0.), "the text scrolls");
-        assert_eq!(
-            stretch != 0.,
-            crate::ScrollBounce::enabled_by_default(),
-            "the edge stretches where the platform's scroll views do"
+        assert_ne!(
+            stretch, 0.,
+            "the edge stretches as the platform's scroll views do"
         );
     }
 
@@ -8024,10 +7931,7 @@ mod tests {
             editor.update(cx, |state, cx| state.focus(window, cx));
         });
         cx.run_until_parked();
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         cx.simulate_keystrokes("cmd-f");
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        cx.simulate_keystrokes("ctrl-f");
         cx.run_until_parked();
         (editor, search_requests)
     }
@@ -10834,12 +10738,6 @@ mod tests {
                 shift: true,
                 ..Default::default()
             },
-            #[cfg(target_os = "linux")]
-            gpui::Modifiers {
-                alt: true,
-                control: true,
-                ..Default::default()
-            },
         ] {
             setup_cursors(&mut cx, &view.input, "|abcd\nabcd\nabcd");
             cx.update(|window, cx| {
@@ -11011,10 +10909,7 @@ mod tests {
         });
         // Copy consumes its shortcut without editing text or moving selections.
         for _ in 0..5 {
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
             cx.simulate_keystrokes("cmd-c");
-            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-            cx.simulate_keystrokes("ctrl-c");
             cx.run_until_parked();
             cx.executor()
                 .advance_clock(std::time::Duration::from_millis(200));
@@ -11113,19 +11008,13 @@ mod tests {
         cx.update(|window, cx| {
             view.input.update(cx, |state, cx| state.focus(window, cx));
         });
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         cx.simulate_keystrokes("cmd-alt-up");
-        #[cfg(target_os = "windows")]
-        cx.simulate_keystrokes("ctrl-alt-up");
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(target_os = "ios")]
         cx.simulate_keystrokes("alt-shift-up");
         view.input
             .read_with(&cx, |state, _| assert_eq!(state.selections.len(), 2));
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
         cx.simulate_keystrokes("cmd-alt-down");
-        #[cfg(target_os = "windows")]
-        cx.simulate_keystrokes("ctrl-alt-down");
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(target_os = "ios")]
         cx.simulate_keystrokes("alt-shift-down");
         view.input
             .read_with(&cx, |state, _| assert_eq!(state.selections.len(), 3));
@@ -11141,64 +11030,13 @@ mod tests {
         cx.update(|window, cx| {
             view.input.update(cx, |state, cx| state.focus(window, cx));
         });
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
         cx.simulate_keystrokes("alt-shift-right");
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
-        cx.simulate_keystrokes("ctrl-shift-right");
         cx.simulate_keystrokes("x");
         assert_cursors(&mut cx, &view.input, "one x|\none x|");
         setup_cursors(&mut cx, &view.input, "one two|\none two|");
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
         cx.simulate_keystrokes("alt-shift-left");
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
-        cx.simulate_keystrokes("ctrl-shift-left");
         cx.simulate_keystrokes("x");
         assert_cursors(&mut cx, &view.input, "one x|\none x|");
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    #[gpui::test]
-    fn test_multi_cursor_horizontal_selection_dispatch(cx: &mut TestAppContext) {
-        let view = InputView::<EditorMode>::new(cx);
-        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
-        setup_cursors(&mut cx, &view.input, "ab\na|b");
-        cx.update(|window, cx| {
-            view.input.update(cx, |state, cx| state.focus(window, cx));
-        });
-        #[cfg(target_os = "windows")]
-        cx.simulate_keystrokes("ctrl-alt-up");
-        #[cfg(not(target_os = "windows"))]
-        cx.simulate_keystrokes("alt-shift-up");
-        #[cfg(target_os = "linux")]
-        cx.simulate_keystrokes("shift-right");
-        #[cfg(not(target_os = "linux"))]
-        cx.simulate_keystrokes("alt-shift-right");
-        view.input.read_with(&cx, |state, _| {
-            assert_eq!(
-                state
-                    .selections
-                    .iter()
-                    .map(|s| s.start..s.end)
-                    .collect::<Vec<_>>(),
-                vec![4..5, 1..2]
-            );
-        });
-        #[cfg(target_os = "linux")]
-        cx.simulate_keystrokes("shift-left shift-left");
-        #[cfg(not(target_os = "linux"))]
-        cx.simulate_keystrokes("alt-shift-left alt-shift-left");
-        view.input.read_with(&cx, |state, _| {
-            assert_eq!(
-                state
-                    .selections
-                    .iter()
-                    .map(|s| s.start..s.end)
-                    .collect::<Vec<_>>(),
-                vec![3..4, 0..1]
-            );
-        });
-        cx.simulate_keystrokes("x");
-        assert_cursors(&mut cx, &view.input, "x|b\nx|b");
     }
 
     #[gpui::test]
@@ -13419,10 +13257,8 @@ impl<M: crate::input::MultiLineMode> InputBaseState<M> {
     /// Set whether text taller than the input stretches past its top and
     /// bottom and springs back when precise trackpad or Magic Mouse scrolling
     /// or its momentum runs into an end. Ordinary line-wheel scrolling does
-    /// not bounce. The default follows
-    /// [`crate::ScrollBounce::enabled_by_default`]: on on iOS, Android and
-    /// macOS, off elsewhere. Under reduced motion the text stops at its ends
-    /// without stretching.
+    /// not bounce. On by default, as the scroll views of macOS and iOS bounce.
+    /// Under reduced motion the text stops at its ends without stretching.
     pub fn scroll_bounce(mut self, scroll_bounce: bool) -> Self {
         self.scroll_bounce = scroll_bounce;
         self

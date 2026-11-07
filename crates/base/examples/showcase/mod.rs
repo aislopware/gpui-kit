@@ -1,7 +1,4 @@
 mod components;
-// Components and Motion are standalone example apps. The WASM host embeds
-// both, so each deliberately instantiates its own thread-local active palette.
-#[allow(clippy::duplicate_mod)]
 #[path = "../shared/palette.rs"]
 mod palette;
 mod syntect_highlighter;
@@ -11,7 +8,6 @@ use gpui::{
     ParentElement as _, Render, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Window,
     WindowOptions, actions, div, prelude::FluentBuilder as _, px, size,
 };
-#[cfg(not(target_family = "wasm"))]
 use gpui::{KeyBinding, WindowBounds};
 use gpui_base::ResizeHandleContext;
 use gpui_base::dock::{
@@ -36,8 +32,6 @@ use gpui_base::{
     Tooltip, Tree, TreeItem, TreeState, VirtualListScrollHandle, v_virtual_list,
 };
 use palette::{activate as activate_palette, canvas as example_canvas, example_rgb};
-#[cfg(target_family = "wasm")]
-use std::borrow::Cow;
 use std::{rc::Rc, sync::Arc};
 use syntect_highlighter::{ShowcaseHighlightStyles, SyntectHighlighter};
 
@@ -717,28 +711,15 @@ pub fn run(app: Application, component: impl Into<String>) {
     let component = component.into();
     app.run(move |cx: &mut App| {
         gpui_base::init(cx);
-        #[cfg(not(target_family = "wasm"))]
-        {
-            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-            cx.on_action(|_: &Quit, cx| cx.quit());
-            cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
-        }
-        // The web platform resolves GPUI's `.SystemUIFont` alias to IBM Plex Sans and
-        // ships no fonts of its own, so the family has to be bundled or the first
-        // text layout panics and the canvas stays blank (see #2933).
-        #[cfg(target_family = "wasm")]
-        cx.text_system()
-            .add_fonts(vec![Cow::Borrowed(
-                include_bytes!("../../../story-web/fonts/IBMPlexSans-Regular.ttf").as_slice(),
-            )])
-            .expect("failed to load gpui-base example font");
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
         let options = WindowOptions {
-            #[cfg(not(target_family = "wasm"))]
             window_bounds: Some(WindowBounds::centered(size(px(840.), px(640.)), cx)),
             ..WindowOptions::default()
         };
@@ -750,28 +731,6 @@ pub fn run(app: Application, component: impl Into<String>) {
     });
 }
 
-#[cfg(target_family = "wasm")]
-pub fn run_embedded(app: Application, component: impl Into<String>) -> gpui::ApplicationHandle {
-    let component = component.into();
-    app.run_embedded(move |cx: &mut App| {
-        gpui_base::init(cx);
-        // The web platform resolves GPUI's `.SystemUIFont` alias to IBM Plex Sans and
-        // ships no fonts of its own, so the family has to be bundled or the first
-        // text layout panics and the canvas stays blank (see #2933).
-        cx.text_system()
-            .add_fonts(vec![Cow::Borrowed(
-                include_bytes!("../../../story-web/fonts/IBMPlexSans-Regular.ttf").as_slice(),
-            )])
-            .expect("failed to load gpui-base example font");
-        cx.open_window(WindowOptions::default(), move |window, cx| {
-            cx.new(|cx| BaseShowcase::new(component, window, cx))
-        })
-        .expect("failed to open gpui-base example window");
-        cx.activate(true);
-    })
-}
-
-#[cfg(not(target_family = "wasm"))]
 #[allow(dead_code)]
 pub fn run_native(component: &str) {
     run(gpui_platform::application(), component.to_owned());

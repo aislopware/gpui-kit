@@ -7,7 +7,7 @@ use gpui::{
 use gpui_base::{
     Progress as BaseProgress, ProgressIndicator, ProgressTrack, Transition, transition,
 };
-use instant::Duration;
+use std::time::Duration;
 
 /// A linear horizontal progress bar element.
 #[derive(IntoElement)]

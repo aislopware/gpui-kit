@@ -136,14 +136,7 @@ pub(super) fn mount(
 }
 
 fn select_all(window: &mut Window, cx: &mut App) {
-    window.press(
-        if cfg!(target_os = "macos") {
-            "cmd-a"
-        } else {
-            "ctrl-a"
-        },
-        cx,
-    );
+    window.press("cmd-a", cx);
 }
 
 #[gpui_kit::test]
@@ -281,14 +274,7 @@ fn readonly_transition_keeps_selection_copyable_and_reenable_restores_editing(
             window.input("rejected", cx);
             window.press("backspace", cx);
             cx.write_to_clipboard(ClipboardItem::new_string(format!("uncopied-{ix}")));
-            window.press(
-                if cfg!(target_os = "macos") {
-                    "cmd-c"
-                } else {
-                    "ctrl-c"
-                },
-                cx,
-            );
+            window.press("cmd-c", cx);
             assert_eq!(
                 cx.read_from_clipboard().and_then(|item| item.text()),
                 Some("retained".into())
@@ -382,14 +368,7 @@ fn disabling_focused_controls_blocks_edits_and_click_focus_until_reenabled(
             window.input("blocked", cx);
             window.press("backspace", cx);
             cx.write_to_clipboard(ClipboardItem::new_string("blocked paste".into()));
-            window.press(
-                if cfg!(target_os = "macos") {
-                    "cmd-v"
-                } else {
-                    "ctrl-v"
-                },
-                cx,
-            );
+            window.press("cmd-v", cx);
             assert_eq!(window.find(id.clone()).value(), Some("saved🦀"));
 
             window.blur(cx);

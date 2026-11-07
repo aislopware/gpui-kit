@@ -55,46 +55,6 @@ fn editor_with_readonly(
     (handle, state)
 }
 
-fn add_cursor_below() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "cmd-alt-down"
-    } else if cfg!(target_os = "windows") {
-        "ctrl-alt-down"
-    } else {
-        "shift-alt-down"
-    }
-}
-
-fn replace_shortcut() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "cmd-shift-f"
-    } else {
-        "ctrl-h"
-    }
-}
-
-fn platform_shortcut(macos: &'static str, other: &'static str) -> &'static str {
-    if cfg!(target_os = "macos") {
-        macos
-    } else {
-        other
-    }
-}
-
-fn add_cursor_above() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "cmd-alt-up"
-    } else if cfg!(target_os = "windows") {
-        "ctrl-alt-up"
-    } else {
-        "shift-alt-up"
-    }
-}
-
-fn redo_shortcut() -> &'static str {
-    platform_shortcut("cmd-shift-z", "ctrl-y")
-}
-
 #[gpui_kit::test]
 fn nested_json_pairs_skip_their_generated_closers(cx: &mut TestAppContext) {
     let (handle, state) = editor(cx, "json", "");
@@ -287,8 +247,8 @@ fn keyboard_multicursor_replacement_undo_and_escape_keep_the_active_cursor(
         window.press("secondary-a", cx);
         window.press("left", cx);
         window.press("right", cx);
-        window.press(add_cursor_below(), cx);
-        window.press(add_cursor_below(), cx);
+        window.press("cmd-alt-down", cx);
+        window.press("cmd-alt-down", cx);
         window.press("shift-right", cx);
         // Additional cursors do not replace the original primary selection.
         assert_eq!(state.read(cx).selected_range(), 1..2);
@@ -454,7 +414,7 @@ fn replace_overlay_tabs_to_replacement_and_replace_all_is_one_undo(cx: &mut Test
         window.click(("input", state.entity_id()), cx);
         window.press("secondary-a", cx);
         window.press("left", cx);
-        window.press(replace_shortcut(), cx);
+        window.press("cmd-shift-f", cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -638,8 +598,8 @@ fn block_indent_outdent_preserves_reversed_selection_and_redo(cx: &mut TestAppCo
     let (handle, state) = editor(cx, "plaintext", "one\n  two");
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-down", "ctrl-end"), cx);
-        window.press(platform_shortcut("cmd-shift-up", "ctrl-shift-home"), cx);
+        window.press("cmd-down", cx);
+        window.press("cmd-shift-up", cx);
         assert_eq!(state.read(cx).selected_range(), 0..9);
         assert_eq!(state.read(cx).cursor(), 0);
         window.press("secondary-]", cx);
@@ -653,7 +613,7 @@ fn block_indent_outdent_preserves_reversed_selection_and_redo(cx: &mut TestAppCo
         window.press("secondary-z", cx);
         assert_eq!(state.read(cx).value(), "  one\n    two");
         assert_eq!(state.read(cx).cursor(), 2);
-        window.press(redo_shortcut(), cx);
+        window.press("cmd-shift-z", cx);
         assert_eq!(state.read(cx).value(), "one\n  two");
         assert_eq!(state.read(cx).selected_range(), 0..9);
         assert_eq!(state.read(cx).cursor(), 0);
@@ -670,7 +630,7 @@ fn block_indent_at_a_caret_changes_only_its_line(cx: &mut TestAppContext) {
     let (handle, state) = editor(cx, "plaintext", "one\ntwo\nthree");
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
+        window.press("cmd-up", cx);
         window.press("right", cx);
         window.press("down", cx);
         assert_eq!(state.read(cx).cursor(), 5);
@@ -693,23 +653,23 @@ fn word_and_document_movement_select_and_replace_across_lines(cx: &mut TestAppCo
     let (handle, state) = editor(cx, "plaintext", value);
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
-        window.press(platform_shortcut("alt-right", "ctrl-right"), cx);
+        window.press("cmd-up", cx);
+        window.press("alt-right", cx);
         assert_eq!(state.read(cx).selected_range(), 5..5);
-        window.press(platform_shortcut("alt-shift-right", "ctrl-shift-right"), cx);
+        window.press("alt-shift-right", cx);
         assert_eq!(state.read(cx).selected_range(), 5..10);
-        window.press(platform_shortcut("alt-left", "ctrl-left"), cx);
+        window.press("alt-left", cx);
         assert_eq!(state.read(cx).selected_range(), 6..6);
-        window.press(platform_shortcut("alt-shift-left", "ctrl-shift-left"), cx);
+        window.press("alt-shift-left", cx);
         assert_eq!(state.read(cx).selected_range(), 0..6);
         assert_eq!(state.read(cx).cursor(), 0);
-        window.press(platform_shortcut("cmd-down", "ctrl-end"), cx);
+        window.press("cmd-down", cx);
         assert_eq!(state.read(cx).selected_range(), value.len()..value.len());
-        window.press(platform_shortcut("cmd-shift-up", "ctrl-shift-home"), cx);
+        window.press("cmd-shift-up", cx);
         assert_eq!(state.read(cx).selected_range(), 0..value.len());
         assert_eq!(state.read(cx).cursor(), 0);
         window.press("left", cx);
-        window.press(platform_shortcut("cmd-shift-down", "ctrl-shift-end"), cx);
+        window.press("cmd-shift-down", cx);
         assert_eq!(state.read(cx).cursor(), value.len());
         assert_eq!(state.read(cx).selected_range(), 0..value.len());
         window.input("中🦀", cx);
@@ -735,7 +695,7 @@ fn page_movement_preserves_column_and_clamps_at_document_edges(cx: &mut TestAppC
         state.update(cx, |state, cx| state.set_value(value.clone(), window, cx));
         window.render_frame(cx);
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
+        window.press("cmd-up", cx);
         window.press("right", cx);
         window.press("right", cx);
         window.press("pagedown", cx);
@@ -747,7 +707,7 @@ fn page_movement_preserves_column_and_clamps_at_document_edges(cx: &mut TestAppC
         assert_eq!(state.read(cx).selected_range(), 2..2);
         window.press("pageup", cx);
         assert_eq!(state.read(cx).cursor(), 2);
-        window.press(platform_shortcut("cmd-down", "ctrl-end"), cx);
+        window.press("cmd-down", cx);
         window.press("left", cx);
         window.press("left", cx);
         window.press("pagedown", cx);
@@ -764,7 +724,7 @@ fn gutter_fold_and_unfold_change_vertical_navigation_without_editing(cx: &mut Te
     cx.run_until_parked();
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
+        window.press("cmd-up", cx);
         // Supply a deterministic language-provider fixture; folding itself is
         // exercised through the production gutter's native mouse handler.
         state.update(cx, |state, cx| {
@@ -776,7 +736,7 @@ fn gutter_fold_and_unfold_change_vertical_navigation_without_editing(cx: &mut Te
         assert_eq!(state.read(cx).cursor(), 13);
         assert_eq!(state.read(cx).value(), value);
         window.click(("fold-icon", 0usize), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
+        window.press("cmd-up", cx);
         window.press("down", cx);
         assert_eq!(state.read(cx).cursor(), 6);
         window.input("!", cx);
@@ -794,10 +754,10 @@ fn multicursor_copy_cut_paste_and_redo_restore_every_selection(cx: &mut TestAppC
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(("input", state.entity_id()), cx);
         // Add upwards so clipboard order cannot accidentally follow creation order.
-        window.press(platform_shortcut("cmd-down", "ctrl-end"), cx);
+        window.press("cmd-down", cx);
         window.press("home", cx);
-        window.press(add_cursor_above(), cx);
-        window.press(add_cursor_above(), cx);
+        window.press("cmd-alt-up", cx);
+        window.press("cmd-alt-up", cx);
         window.press("shift-right", cx);
         window.press("secondary-c", cx);
         assert_eq!(
@@ -813,13 +773,13 @@ fn multicursor_copy_cut_paste_and_redo_restore_every_selection(cx: &mut TestAppC
         );
         window.press("secondary-z", cx);
         assert_eq!(state.read(cx).value(), value);
-        window.press(redo_shortcut(), cx);
+        window.press("cmd-shift-z", cx);
         assert_eq!(state.read(cx).value(), "b\nd\nf");
         window.press("secondary-v", cx);
         assert_eq!(state.read(cx).value(), value);
         window.press("secondary-z", cx);
         assert_eq!(state.read(cx).value(), "b\nd\nf");
-        window.press(redo_shortcut(), cx);
+        window.press("cmd-shift-z", cx);
         assert_eq!(state.read(cx).value(), value);
         window.press("escape", cx);
         window.input("!", cx);
@@ -833,10 +793,10 @@ fn multicursor_paste_broadcasts_when_clipboard_line_count_differs(cx: &mut TestA
     let (handle, state) = editor(cx, "plaintext", "ab\ncd\nef");
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
+        window.press("cmd-up", cx);
         window.press("right", cx);
-        window.press(add_cursor_below(), cx);
-        window.press(add_cursor_below(), cx);
+        window.press("cmd-alt-down", cx);
+        window.press("cmd-alt-down", cx);
         cx.write_to_clipboard(ClipboardItem::new_string("中\n🦀".into()));
         window.press("secondary-v", cx);
         assert_eq!(state.read(cx).value(), "a中\n🦀b\nc中\n🦀d\ne中\n🦀f");
@@ -867,7 +827,7 @@ fn readonly_editor_rejects_native_mutations_and_keeps_search_available(cx: &mut 
             "secondary-]",
             "secondary-[",
             "secondary-z",
-            redo_shortcut(),
+            "cmd-shift-z",
         ] {
             window.press(key, cx);
             assert_eq!(state.read(cx).value(), value, "readonly {key}");
@@ -901,7 +861,7 @@ fn readonly_editor_rejects_native_mutations_and_keeps_search_available(cx: &mut 
                 .as_ref(),
             &[6..10]
         );
-        window.press(replace_shortcut(), cx);
+        window.press("cmd-shift-f", cx);
         assert!(!state.read(cx).search_session().replace_mode);
         assert!(window.try_find("replace-all").is_none());
         window.press("escape", cx);
@@ -919,7 +879,7 @@ fn search_case_toggle_recomputes_matches_and_buttons_wrap(cx: &mut TestAppContex
     let (handle, state) = editor(cx, "plaintext", "Cat cat CAT");
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
+        window.press("cmd-up", cx);
         window.press("secondary-f", cx);
     })
     .unwrap();
@@ -970,7 +930,7 @@ fn search_treats_regex_metacharacters_literally_and_handles_no_matches(cx: &mut 
     let (handle, state) = editor(cx, "plaintext", "a.b axb a.b");
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
+        window.press("cmd-up", cx);
         window.press("secondary-f", cx);
     })
     .unwrap();
@@ -1027,8 +987,8 @@ fn replace_one_updates_unicode_match_offsets_and_undoes_atomically(cx: &mut Test
     let (handle, state) = editor(cx, "plaintext", value);
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
-        window.press(replace_shortcut(), cx);
+        window.press("cmd-up", cx);
+        window.press("cmd-shift-f", cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -1073,7 +1033,7 @@ fn replace_one_updates_unicode_match_offsets_and_undoes_atomically(cx: &mut Test
         assert_eq!(state.read(cx).value(), "🦀 猫 cat 中");
         window.press("secondary-z", cx);
         assert_eq!(state.read(cx).value(), value);
-        window.press(redo_shortcut(), cx);
+        window.press("cmd-shift-z", cx);
         assert_eq!(state.read(cx).value(), "🦀 猫 cat 中");
     })
     .unwrap();
@@ -1085,8 +1045,8 @@ fn replace_all_with_empty_replacement_preserves_unicode_suffix(cx: &mut TestAppC
     let (handle, state) = editor(cx, "plaintext", value);
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
-        window.press(replace_shortcut(), cx);
+        window.press("cmd-up", cx);
+        window.press("cmd-shift-f", cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -1104,7 +1064,7 @@ fn replace_all_with_empty_replacement_preserves_unicode_suffix(cx: &mut TestAppC
         window.within("search-panel").click("close", cx);
         window.press("secondary-z", cx);
         assert_eq!(state.read(cx).value(), value);
-        window.press(redo_shortcut(), cx);
+        window.press("cmd-shift-z", cx);
         assert_eq!(state.read(cx).value(), "🦀   中");
     })
     .unwrap();
@@ -1116,10 +1076,10 @@ fn multicursor_block_indent_outdent_is_one_history_entry(cx: &mut TestAppContext
     let (handle, state) = editor(cx, "plaintext", value);
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
+        window.press("cmd-up", cx);
         window.press("right", cx);
-        window.press(add_cursor_below(), cx);
-        window.press(add_cursor_below(), cx);
+        window.press("cmd-alt-down", cx);
+        window.press("cmd-alt-down", cx);
         window.press("secondary-]", cx);
         assert_eq!(state.read(cx).value(), "  ab\n  cd\n  ef");
         assert_eq!(state.read(cx).cursor(), 3);
@@ -1130,7 +1090,7 @@ fn multicursor_block_indent_outdent_is_one_history_entry(cx: &mut TestAppContext
         assert_eq!(state.read(cx).value(), "  ab\n  cd\n  ef");
         window.press("secondary-z", cx);
         assert_eq!(state.read(cx).value(), value);
-        window.press(redo_shortcut(), cx);
+        window.press("cmd-shift-z", cx);
         assert_eq!(state.read(cx).value(), "  ab\n  cd\n  ef");
         window.input("!", cx);
         assert_eq!(state.read(cx).value(), "  a!b\n  c!d\n  e!f");
@@ -1144,14 +1104,14 @@ fn word_deletion_at_multiple_cursors_restores_ranges_on_undo(cx: &mut TestAppCon
     let (handle, state) = editor(cx, "plaintext", value);
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
-        window.press(add_cursor_below(), cx);
-        window.press(platform_shortcut("alt-delete", "ctrl-delete"), cx);
+        window.press("cmd-up", cx);
+        window.press("cmd-alt-down", cx);
+        window.press("alt-delete", cx);
         assert_eq!(state.read(cx).value(), " two\n fox");
         window.press("secondary-z", cx);
         assert_eq!(state.read(cx).value(), value);
         window.press("end", cx);
-        window.press(platform_shortcut("alt-backspace", "ctrl-backspace"), cx);
+        window.press("alt-backspace", cx);
         assert_eq!(state.read(cx).value(), "one \nred ");
         window.press("secondary-z", cx);
         assert_eq!(state.read(cx).value(), value);
@@ -1173,7 +1133,7 @@ fn unwrapped_editor_scrolls_horizontally_and_navigates_logical_lines(cx: &mut Te
         });
         window.render_frame(cx);
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
+        window.press("cmd-up", cx);
         window.press("end", cx);
         assert_eq!(state.read(cx).cursor(), first_line.len());
         assert!(state.read(cx).scroll_offset().x < px(0.));
@@ -1214,8 +1174,8 @@ fn open_replace_panel_tracks_live_readonly_changes(cx: &mut TestAppContext) {
     let state = cx.update(|cx| view.read(cx).state.clone());
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
-        window.press(replace_shortcut(), cx);
+        window.press("cmd-up", cx);
+        window.press("cmd-shift-f", cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -1283,9 +1243,9 @@ fn shift_end_then_down_preserves_editor_visual_row_end_affinity(cx: &mut TestApp
         });
         window.render_frame(cx);
         window.click(("input", state.entity_id()), cx);
-        let start = platform_shortcut("cmd-up", "ctrl-home");
-        let end = platform_shortcut("cmd-right", "end");
-        let select_end = platform_shortcut("cmd-shift-right", "shift-end");
+        let start = "cmd-up";
+        let end = "cmd-right";
+        let select_end = "cmd-shift-right";
         window.press(start, cx);
         let first_row_top = state.read(cx).cursor_layout().unwrap().0.top();
         window.press(end, cx);
@@ -1352,12 +1312,12 @@ fn visual_end_does_not_scroll_a_fully_visible_wrapped_editor_row(cx: &mut TestAp
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
         window.click(("input", state.entity_id()), cx);
-        window.press(platform_shortcut("cmd-up", "ctrl-home"), cx);
+        window.press("cmd-up", cx);
         window.press("down", cx);
         let before = state.read(cx).scroll_offset();
         let row_start = state.read(cx).cursor();
         let top = state.read(cx).cursor_layout().unwrap().0.top();
-        window.press(platform_shortcut("cmd-right", "end"), cx);
+        window.press("cmd-right", cx);
         assert!(state.read(cx).cursor() > row_start && state.read(cx).cursor() < value.len());
         assert_eq!(state.read(cx).scroll_offset(), before);
         let caret = state.read(cx).cursor_layout().unwrap().0;

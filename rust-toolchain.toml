@@ -1,0 +1,6 @@
+[toolchain]
+# The same channel and components as onicode's rust-toolchain.toml, so the kit
+# builds with the compiler onicode builds it with.
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = ["aarch64-apple-darwin", "aarch64-apple-ios", "aarch64-apple-ios-sim"]

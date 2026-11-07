@@ -199,8 +199,8 @@ impl Command {
         self
     }
 
-    /// Bounce the command list at its vertical boundaries. On by default on iOS,
-    /// Android and macOS, off elsewhere; reduced motion disables displacement.
+    /// Bounce the command list at its vertical boundaries. On by default;
+    /// reduced motion disables displacement.
     pub fn scroll_bounce(mut self, enabled: bool) -> Self {
         self.options.scroll_bounce = Some(enabled);
         self

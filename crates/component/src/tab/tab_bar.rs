@@ -18,8 +18,8 @@ use crate::button::{Button, ButtonVariants as _};
 use crate::menu::{DropdownMenu as _, PopupMenuItem};
 use crate::scroll::ScrollableMask;
 use crate::{
-    ActiveTheme, ElementExt, Icon, InteractiveElementExt as _, Selectable, Sizable, Size,
-    StyledExt, h_flex, styled::raised_shadow,
+    ActiveTheme, ElementExt, Icon, Selectable, Sizable, Size, StyledExt, h_flex,
+    styled::raised_shadow,
 };
 
 struct TabIndicatorBounds {
@@ -700,7 +700,7 @@ impl RenderOnce for TabBar {
                             .pt(tabs_top_padding)
                             .gap(gap)
                             .overflow_x_scroll()
-                            .lock_scroll_axis()
+                            .restrict_scroll_to_axis()
                             .track_scroll(&scroll_handle)
                             .children(rendered_tabs)
                             .when(has_suffix_or_menu, |this| this.child(self.last_empty_space)),
@@ -1685,6 +1685,15 @@ mod tests {
             ..Default::default()
         });
         draw(cx);
+        // A wheel notch glides through a list over frames (gpui's wheel glide, 70 ms time
+        // constant, at most 50 ms a frame), each step run as a frame is delivered: step the
+        // clock and deliver frames until it lands.
+        for _ in 0..20 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(50));
+            cx.update(|window, cx| window.simulate_next_frame(cx));
+            draw(cx);
+        }
     }
 
     #[gpui::test]
@@ -1787,7 +1796,7 @@ mod tests {
                     .w(px(160.))
                     .h(px(100.))
                     .overflow_y_scroll()
-                    .lock_scroll_axis()
+                    .restrict_scroll_to_axis()
                     .track_scroll(parent)
                     .child(div().w_full().h(px(60.)).flex_shrink_0().child(wheel_tabs(
                         Some(&self.scroll_handle),

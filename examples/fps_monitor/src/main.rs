@@ -396,12 +396,7 @@ actions!(fps_monitor, [Quit]);
 fn main() {
     gpui_kit::application().run(move |cx: &mut App| {
         gpui_kit::init(cx);
-        cx.bind_keys([
-            #[cfg(target_os = "macos")]
-            KeyBinding::new("cmd-q", Quit, None),
-            #[cfg(not(target_os = "macos"))]
-            KeyBinding::new("alt-f4", Quit, None),
-        ]);
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
         cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
 
         // This is a single-window demo, so closing the window ends it rather

@@ -1,6 +1,6 @@
 //! A recognizer that needs no service, permission or network: it types a
-//! scripted passage as you speak, so the whole flow can be tried anywhere,
-//! including on Linux.
+//! scripted passage as you speak, so the whole flow can be tried without
+//! speech recognition permission, including on iOS.
 //!
 //! It does not recognize words, but it follows your voice: tokens appear only
 //! while the input is loud enough to be speech, and a pause ends the sentence.

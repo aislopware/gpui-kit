@@ -6,7 +6,6 @@
 //! prints the same checks to the terminal and exits.
 
 mod demo;
-#[cfg(target_os = "macos")]
 mod responsibility;
 
 use std::{
@@ -151,15 +150,7 @@ fn input_device_name() -> Option<SharedString> {
 }
 
 fn platform_name() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "macOS"
-    } else if cfg!(target_os = "windows") {
-        "Windows"
-    } else if cfg!(target_os = "linux") {
-        "Linux"
-    } else {
-        "Other"
-    }
+    "macOS"
 }
 
 struct SpeechApp {
@@ -774,15 +765,8 @@ fn log_row(entry: &LogEntry, cx: &App) -> impl IntoElement {
 }
 
 fn unavailable_hint() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "This Mac can’t recognize the language offline, or speech recognition access is off \
-         in System Settings › Privacy & Security."
-    } else if cfg!(target_os = "windows") {
-        "Install the language’s speech pack and turn on Online speech recognition in Settings › \
-         Privacy & security › Speech."
-    } else {
-        "The recognizer can’t start right now."
-    }
+    "This Mac can’t recognize the language offline, or speech recognition access is off \
+     in System Settings › Privacy & Security."
 }
 
 fn non_empty(text: SharedString, fallback: &'static str) -> SharedString {
@@ -834,7 +818,6 @@ fn print_checks(cx: &mut App) {
 }
 
 fn main() {
-    #[cfg(target_os = "macos")]
     responsibility::disclaim();
 
     let check = std::env::args().any(|arg| arg == "--check");

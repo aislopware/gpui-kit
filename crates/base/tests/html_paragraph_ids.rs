@@ -1,8 +1,5 @@
 #![cfg(feature = "test-support")]
 
-#[cfg(feature = "gpui-fast")]
-use gpui_fast as gpui;
-
 use gpui::{Context, IntoElement, ParentElement as _, Render, TestAppContext, Window, div};
 use gpui_base::{TextView, test_support::texts};
 

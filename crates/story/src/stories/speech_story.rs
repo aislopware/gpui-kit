@@ -109,37 +109,6 @@ impl RecognitionSession for DemoSession {
     }
 }
 
-/// Stands in for the microphone on the web, which the story cannot capture:
-/// pushes a tone whose loudness rises and falls like speech.
-#[cfg(target_family = "wasm")]
-struct GeneratedInput;
-
-#[cfg(target_family = "wasm")]
-impl gpui_kit::component::speech::AudioInput for GeneratedInput {
-    fn start(
-        &self,
-        format: gpui_kit::component::speech::AudioFormat,
-        sink: gpui_kit::component::speech::AudioSink,
-        cx: &mut App,
-    ) -> Result<Subscription, SpeechError> {
-        const CHUNK: std::time::Duration = std::time::Duration::from_millis(100);
-        let len = (format.sample_rate() / 10) as usize * format.channels() as usize;
-        let task = cx.spawn(async move |cx| {
-            let mut tick = 0u8;
-            loop {
-                cx.background_executor().timer(CHUNK).await;
-                tick = tick.wrapping_add(1);
-                let loudness = 0.05 + 0.25 * (tick as f32 * 0.9).sin().abs();
-                let samples = (0..len)
-                    .map(|ix| ((ix as f32 * 0.07).sin() * loudness * i16::MAX as f32) as i16)
-                    .collect();
-                cx.update(|cx| sink.push(samples, cx));
-            }
-        });
-        Ok(Subscription::new(move || drop(task)))
-    }
-}
-
 /// A text field the user can dictate into.
 struct Dictation {
     speech: Entity<SpeechState>,
@@ -232,8 +201,6 @@ impl SpeechStory {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let custom = cx.new(|cx| {
             let state = SpeechState::new(cx).recognizer(DemoRecognizer);
-            #[cfg(target_family = "wasm")]
-            let state = state.input(GeneratedInput);
             state
         });
         let system = cx.new(SpeechState::new);

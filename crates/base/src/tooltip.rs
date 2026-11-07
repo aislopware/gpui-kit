@@ -168,7 +168,7 @@ pub enum TooltipTransition {
 
 /// Per-window tooltip provider and overlay.
 ///
-/// Show requests are ignored on iOS and Android, where touch input must not
+/// Show requests are ignored on iOS, where touch input must not
 /// open hover tooltips. This does not control GPUI's native `.tooltip()` API.
 pub struct TooltipOverlay {
     enabled: bool,

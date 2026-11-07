@@ -4,11 +4,6 @@
 //! [`Assets`] for the default component bundle, or [`AllAssets`] for the full
 //! catalog. Applications can provide their own source for additional icons.
 
-#[cfg(feature = "gpui-fast")]
-extern crate gpui_fast as gpui;
-#[cfg(all(feature = "gpui-fast", test))]
-extern crate gpui_fast_platform as gpui_platform;
-
 mod icon;
 pub use icon::{IconName, IconNamed};
 
@@ -24,28 +19,10 @@ pub use icon::{IconName, IconNamed};
 /// let app = gpui_platform::application().with_assets(Assets);
 /// ```
 ///
-/// ## Platform Differences
-///
-/// - **Native (Desktop)**: Icons are embedded in the binary using RustEmbed
-/// - **WASM (Web)**: Icons are downloaded from CDN using web_sys::Request
-///   - This significantly reduces WASM bundle size
-///   - Icons are downloaded on-demand when first used
-///   - Downloaded icons are cached in memory
-#[cfg(not(target_family = "wasm"))]
+/// Icons are embedded in the binary with RustEmbed.
 mod native_assets;
 
-#[cfg(target_family = "wasm")]
-mod wasm_assets;
-
-#[cfg(not(target_family = "wasm"))]
 pub use native_assets::{AllAssets, Assets};
-
-#[cfg(target_family = "wasm")]
-pub use wasm_assets::Assets;
-
-/// On WASM, the complete catalog uses the same on-demand CDN source.
-#[cfg(target_family = "wasm")]
-pub use wasm_assets::Assets as AllAssets;
 
 // Public only so exported macros can resolve dependencies in downstream crates,
 // including applications that depend solely on the gpui-kit umbrella crate.
@@ -55,7 +32,7 @@ pub mod __private {
     pub use gpui::{AssetSource, Result, SharedString};
 }
 
-/// Embed only the selected icons in a native or WebAssembly application.
+/// Embed only the selected icons in an application.
 ///
 /// ```ignore
 /// use gpui_kit::assets::{icon_assets, IconName};

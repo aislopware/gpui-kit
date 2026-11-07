@@ -262,10 +262,7 @@ fn empty_search_keeps_input_editable_and_restores_selected_page(cx: &mut TestApp
     });
     assert!(cx.debug_bounds("settings-no-results").is_some());
 
-    #[cfg(target_os = "macos")]
     cx.simulate_keystrokes("cmd-a backspace");
-    #[cfg(not(target_os = "macos"))]
-    cx.simulate_keystrokes("ctrl-a backspace");
     draw(cx);
     cx.update(|window, cx| {
         assert!(input.read(cx).value().is_empty());

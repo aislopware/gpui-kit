@@ -1,10 +1,7 @@
 use std::{cell::Cell, ops::Deref, panic::Location, rc::Rc};
 
 use std::time::Duration;
-#[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
-#[cfg(target_family = "wasm")]
-use web_time::Instant;
 
 use crate::{
     AxisExt,

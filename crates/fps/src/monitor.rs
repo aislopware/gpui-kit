@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{
     App, Bounds, Context, DisplayId, Div, Hsla, InteractiveElement as _, IntoElement, MouseButton,
@@ -26,7 +26,6 @@ const DEFAULT_RESOURCE_INTERVAL: Duration = Duration::from_millis(500);
 /// that is six readings: long enough to settle the churn between one sample and
 /// the next, short enough that a real change reaches the HUD while the reader
 /// is still looking at what caused it.
-#[cfg(not(target_family = "wasm"))]
 const RESOURCE_WINDOW: Duration = Duration::from_secs(3);
 
 /// Which frame the `P95` row reports. The 95th rather than the 99th: the chart
@@ -86,22 +85,9 @@ const READOUT_INTERVAL: Duration = Duration::from_millis(500);
 /// the concrete names.
 #[cfg(target_os = "macos")]
 const DEFAULT_FONT: &str = "Menlo";
-#[cfg(target_os = "windows")]
-const DEFAULT_FONT: &str = "Consolas";
 // The iOS backend resolves this native family but not the generic monospace alias.
 #[cfg(target_os = "ios")]
 const DEFAULT_FONT: &str = ".SystemUIFont";
-// Android's cosmic-text backend has no `monospace` alias either (GPUI panics when
-// neither it nor its desktop fallbacks resolve); every Android ships this family.
-#[cfg(target_os = "android")]
-const DEFAULT_FONT: &str = "Droid Sans Mono";
-#[cfg(not(any(
-    target_os = "macos",
-    target_os = "windows",
-    target_os = "ios",
-    target_os = "android"
-)))]
-const DEFAULT_FONT: &str = "monospace";
 
 /// A realtime performance HUD: frames per second, a rolling frame time chart,
 /// and this process' GPU, CPU and memory usage.
@@ -375,7 +361,6 @@ impl FpsMonitor {
     /// so without this the figures would freeze at whatever the application
     /// last drew — exactly when a frozen `137` is most likely to be read as
     /// the truth.
-    #[cfg(not(target_family = "wasm"))]
     fn start_clock(&mut self, cx: &mut Context<Self>) {
         use crate::sampler::ResourceProbe;
 
@@ -432,35 +417,6 @@ impl FpsMonitor {
                     }
                     // The frame this notify buys is the HUD's, not the
                     // application's; say so before it is drawn.
-                    this.sampler.expect_own_frame(Instant::now());
-                    cx.notify();
-                    true
-                });
-                if !matches!(shown, Ok(true)) {
-                    break;
-                }
-            }
-        }));
-    }
-
-    #[cfg(target_family = "wasm")]
-    fn start_clock(&mut self, cx: &mut Context<Self>) {
-        let _ = minimum_resource_interval();
-
-        if self.clock.is_some() {
-            return;
-        }
-        let frames_rendered = self.frames_rendered;
-        self.clock = Some(cx.spawn(async move |this, cx| {
-            let executor = cx.background_executor().clone();
-            let mut watch = RenderWatch::watching(frames_rendered);
-            loop {
-                executor.timer(READOUT_INTERVAL).await;
-                let shown = this.update(cx, |this, cx| {
-                    if watch.tick(this.frames_rendered) {
-                        this.sleep();
-                        return false;
-                    }
                     this.sampler.expect_own_frame(Instant::now());
                     cx.notify();
                     true

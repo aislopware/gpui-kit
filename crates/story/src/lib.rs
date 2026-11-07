@@ -94,9 +94,9 @@ impl AppState {
             invisible_panels: cx.new(|_| Vec::new()),
             show_fps_monitor: false,
             // macOS draws the app menus in the system menu bar, so an in-window
-            // menu bar would be a second copy of them. Off by default there,
-            // but still switchable so the component stays demoable on a Mac.
-            show_app_menu_bar: !cfg!(target_os = "macos"),
+            // menu bar would be a second copy of them. Off by default, but
+            // still switchable so the component stays demoable.
+            show_app_menu_bar: false,
             previewing_theme: false,
         };
         cx.set_global::<AppState>(state);
@@ -145,10 +145,6 @@ pub fn create_new_window_with_size<F, E>(
                 height: px(320.),
             }),
             kind: WindowKind::Normal,
-            #[cfg(target_os = "linux")]
-            window_background: story_window_background(),
-            #[cfg(target_os = "linux")]
-            window_decorations: Some(gpui_kit::WindowDecorations::Client),
             ..TitleBar::window_options()
         };
 
@@ -181,14 +177,6 @@ pub fn create_new_window_with_size<F, E>(
     .detach();
 }
 
-#[cfg(target_os = "linux")]
-fn story_window_background() -> gpui_kit::WindowBackgroundAppearance {
-    // The component gallery is a normal application window. Advertising an
-    // alpha surface lets compositors show the desktop through light themes,
-    // even though every story is designed against an opaque canvas.
-    gpui_kit::WindowBackgroundAppearance::Opaque
-}
-
 impl Global for AppState {}
 
 /// Layers the story locales over the component ones. `extend!` takes the
@@ -201,30 +189,14 @@ fn extend_component_translations() {
 
 pub fn init(cx: &mut App) {
     // Try to initialize tracing subscriber, but ignore if already initialized
-    #[cfg(not(target_family = "wasm"))]
-    {
-        use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
-        let _ = tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer())
-            .with(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("gpui_component=trace".parse().unwrap()),
-            )
-            .try_init();
-    }
-
-    // For WASM, use a subscriber without time support
-    #[cfg(target_family = "wasm")]
-    {
-        use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
-        let _ = tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().without_time())
-            .with(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("gpui_component=trace".parse().unwrap()),
-            )
-            .try_init();
-    }
+    use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
+    let _ = tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("gpui_component=trace".parse().unwrap()),
+        )
+        .try_init();
 
     extend_component_translations();
     gpui_kit::init(cx);
@@ -232,28 +204,15 @@ pub fn init(cx: &mut App) {
     themes::init(cx);
     stories::init(cx);
 
-    #[cfg(not(target_family = "wasm"))]
-    {
-        let http_client =
-            reqwest_client::ReqwestClient::user_agent("gpui-component/story").unwrap();
-        cx.set_http_client(std::sync::Arc::new(http_client));
-    }
+    let http_client = reqwest_client::ReqwestClient::user_agent("gpui-component/story").unwrap();
+    cx.set_http_client(std::sync::Arc::new(http_client));
 
     cx.bind_keys([
         KeyBinding::new("/", ToggleSearch, None),
         KeyBinding::new("ctrl-shift-p", OpenCommandPalette, None),
-        #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-o", Open, None),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-o", Open, None),
-        #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-q", Quit, None),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("alt-f4", Quit, None),
-        #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-k", SelectTheme, None),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-k", SelectTheme, None),
     ]);
 
     cx.on_action(|_: &Quit, cx: &mut App| {
@@ -1235,15 +1194,6 @@ impl Render for StoryRoot {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn component_story_window_is_opaque() {
-        assert_eq!(
-            super::story_window_background(),
-            gpui_kit::WindowBackgroundAppearance::Opaque
-        );
-    }
-
     #[test]
     fn extends_component_translations_with_story_locales() {
         super::extend_component_translations();

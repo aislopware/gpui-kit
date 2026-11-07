@@ -1,24 +1,21 @@
 //! Boundary displacement only: the list keeps its clamped logical position.
 
+use crate::ScrollbarHandle;
 use crate::overscroll::Overscroll;
-use crate::{OngoingScrollExt as _, ScrollbarHandle};
 use gpui::{
     AnyElement, App, Bounds, ContentMask, DispatchPhase, Element, ElementId, Global,
     GlobalElementId, Hitbox, HitboxBehavior, HitboxId, InspectorElementId, IntoElement, LayoutId,
     OngoingScroll, Pixels, ScrollDelta, ScrollEvent, TouchPhase, Window, point, px,
 };
-#[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
 use std::{cell::RefCell, rc::Rc, time::Duration};
-#[cfg(target_family = "wasm")]
-use web_time::Instant;
 
 /// Motion tokens for [`ScrollBounce`]: how far a drag stretches the viewport
 /// past an edge, and how quickly a released edge returns.
 ///
 /// Base plays the stretch and the return; the feel belongs to the caller.
-/// The default is tuned to feel like a `UIScrollView` bounce on iOS and
-/// Android, and like an `NSScrollView` bounce elsewhere.
+/// The default is tuned to feel like a `UIScrollView` bounce on iOS and like
+/// an `NSScrollView` bounce on macOS.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollBounceMotion {
     tracking: f32,
@@ -36,7 +33,7 @@ impl Default for ScrollBounceMotion {
     /// travel, which GPUI does not report; the limit keeps a hard swipe as
     /// short as Finder's.
     fn default() -> Self {
-        if cfg!(any(target_os = "ios", target_os = "android")) {
+        if cfg!(target_os = "ios") {
             Self {
                 tracking: 0.55,
                 response: Duration::from_millis(524),
@@ -130,8 +127,8 @@ impl ScrollBounceMotion {
 /// The stable `id` owns gesture and spring state. Change it when replacing the
 /// document. Put fixed chrome (scrollbars, toolbars) outside this wrapper.
 ///
-/// Enabled by default where the platform's own scroll views bounce: iOS,
-/// Android and macOS. Reduced motion disables displacement. Keyboard and
+/// Enabled by default, as the scroll views of macOS and iOS bounce. Reduced
+/// motion disables displacement. Keyboard and
 /// focus remain owned by the child. No colors, padding, or dimensions are
 /// imposed.
 ///
@@ -160,24 +157,15 @@ impl ScrollBounce {
             id: id.into(),
             handle: Rc::new(handle.clone()),
             child: child.into_any_element(),
-            enabled: Self::enabled_by_default(),
+            enabled: true,
             scroll_wheel: true,
             motion: ScrollBounceMotion::default(),
             on_scroll: None,
         }
     }
 
-    /// Whether scroll areas bounce on this platform unless told otherwise:
-    /// on iOS, Android and macOS, whose own scroll views do.
-    pub const fn enabled_by_default() -> bool {
-        cfg!(any(
-            target_os = "ios",
-            target_os = "android",
-            target_os = "macos"
-        ))
-    }
-
-    /// Turn the bounce on or off. Defaults to [`Self::enabled_by_default`].
+    /// Turn the bounce on or off. On by default, as the scroll views of macOS
+    /// and iOS bounce.
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
@@ -428,9 +416,7 @@ impl Element for ScrollBounce {
                 // swipe cannot wobble out of the stretch from one packet to
                 // the next. Both dispatch phases see the same packet, and the
                 // lock gives both the same answer.
-                state
-                    .ongoing_scroll
-                    .lock_axis(&mut delta, event.touch_phase);
+                state.ongoing_scroll.filter(&mut delta, event.touch_phase);
                 if delta.x.abs() > delta.y.abs() {
                     return;
                 }
@@ -563,9 +549,7 @@ impl Element for ScrollBounce {
                 }
                 let mut delta = event.delta.pixel_delta(window.line_height());
                 let mut state = state.borrow_mut();
-                state
-                    .ongoing_scroll
-                    .lock_axis(&mut delta, event.touch_phase);
+                state.ongoing_scroll.filter(&mut delta, event.touch_phase);
                 let max = max_scroll_extent(handle.as_ref());
                 if max <= px(0.) {
                     state.overscroll.reset();

@@ -34,12 +34,7 @@
 //! This crate depends only on `gpui`, so it can be used from any GPUI
 //! application.
 
-#[cfg(feature = "gpui-fast")]
-extern crate gpui_fast as gpui;
-
-#[cfg(not(target_family = "wasm"))]
 mod gpu;
-#[cfg(not(target_family = "wasm"))]
 mod memory;
 mod monitor;
 mod overlay;

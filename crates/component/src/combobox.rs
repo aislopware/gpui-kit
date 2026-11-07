@@ -1868,7 +1868,6 @@ mod tests {
     }
 
     /// A page holding a combobox under retained views.
-    #[cfg(feature = "gpui-fast")]
     mod retained {
         use std::{cell::Cell, rc::Rc};
 

@@ -18,17 +18,13 @@ doctest = false
 # `gpui/profiler` belongs here, not on the workspace dependency: this is the
 # only crate that uses it, and cargo unifies features across the graph.
 gpui = { workspace = true, features = ["profiler"] }
-gpui-fast = { workspace = true, features = ["profiler"] , optional = true }
-web-time = "1"
-
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
 sysinfo = "0.37"
 
 # This process' GPU usage is read straight from the platform, since `sysinfo`
 # does not report it, and so is its private memory, which `sysinfo` reports only
-# as a resident set that counts every shared library page. Each backend is the
-# counter the platform's own activity monitor attributes per process with, so no
-# vendor SDK or elevated privilege is involved.
+# as a resident set that counts every shared library page. Both are the counters
+# Activity Monitor attributes per process with, so no vendor SDK or elevated
+# privilege is involved. iOS has neither and leaves those readings out.
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"
 libc = "0.2"
@@ -44,24 +40,8 @@ objc2-io-kit = { version = "0.3", default-features = false, features = [
     "libc",
 ] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-uuid = { version = "1", features = ["v5"] }
-wayland-client = "0.31"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows = { workspace = true, features = [
-    "Win32_Graphics_Gdi",
-    "Win32_System_Performance",
-    "Win32_System_ProcessStatus",
-    "Win32_System_Threading",
-] }
-
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
-gpui-fast = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true
-
-[features]
-gpui-fast = ["dep:gpui-fast"]

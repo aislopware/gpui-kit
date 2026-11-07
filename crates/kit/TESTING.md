@@ -9,11 +9,6 @@ Enable `gpui-kit/test-support` under development dependencies and import
 `gpui_kit::test::{TestWindowExt, TestAppContextExt, TestSupportExt, ElementSnapshot}`.
 The implementation uses GPUI public APIs, with no fork, Cargo patch or separate crate.
 
-Read the [testing guide](../../website/docs/test.md) for
-setup, a compiled application workflow, the control coverage matrix, scoped IDs,
-state assertions, mouse/keyboard/scroll/drag operations, async waits and CI.
-The [Chinese guide](../../website/zh-CN/docs/test.md) covers the same API.
-
 For a component regression example, start with the
 [Input, Textarea and Editor suite](tests/integration/input/README.md). It groups real editing
 workflows by behavior and explains how to add a case without bypassing focus,
@@ -200,16 +195,12 @@ Unicode input, disabled/read-only controls, masked-value privacy, cache invalida
 mount/remount, reordered composite IDs, multi-window/App isolation, accessibility forwarding,
 and stale registration cleanup when a 1,000-element list shrinks to 10 elements.
 
-The full command runs in the existing CI platform matrix. Large-list cases check
-correctness, not rendering performance. The `rendering` target additionally checks
-real offscreen images on macOS (Metal) and Linux (WGPU), using a main-thread
-harness. It is opt-in (`test = false`): run
-`cargo test -p gpui-kit --features test-support --test rendering --locked` with a
-working renderer. Linux can use a software Vulkan adapter such as Mesa lavapipe.
-The macOS and Linux CI jobs run this command as a required step. Windows runs the
-portable interaction/layout suite and explicitly skips this target because the
-pinned GPUI 0.3.8 platform crate has no Windows headless renderer. Missing renderer
-support on macOS or Linux fails instead of producing fake images.
+The full command runs in CI on macOS. Large-list cases check correctness, not
+rendering performance. The `rendering` target additionally checks real offscreen
+images with Metal, using a main-thread harness. It is opt-in (`test = false`): run
+`cargo test -p gpui-kit --features test-support --test rendering --locked`. The
+macOS CI job runs this command as a required step. A missing renderer fails
+instead of producing fake images.
 
 The rendering suite detects missing checkbox marks and invisible input text even
 when native state stays correct. It also checks wrapped CJK text with inline code,

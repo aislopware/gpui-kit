@@ -41,8 +41,8 @@ pub use languages::*;
 #[cfg(feature = "tree-sitter")]
 pub use registry::*;
 
-// WASM stub implementation (no tree-sitter support or disabled)
+// The theme types and highlighter stub of a build without tree-sitter.
 #[cfg(not(feature = "tree-sitter"))]
-mod wasm_stub;
+mod without_tree_sitter;
 #[cfg(not(feature = "tree-sitter"))]
-pub use wasm_stub::*;
+pub use without_tree_sitter::*;

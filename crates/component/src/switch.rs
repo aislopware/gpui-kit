@@ -24,6 +24,13 @@ pub struct Switch {
     on_click: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
     size: Size,
     color: Option<Hsla>,
+    /// The track while off; the theme's `switch` when unset.
+    off_color: Option<Hsla>,
+    /// The thumb; the theme's `switch_thumb` when unset.
+    thumb_color: Option<Hsla>,
+    /// Fades the whole control by this while disabled, as an application's own look may;
+    /// unset, the track alone fades to half.
+    disabled_opacity: Option<f32>,
     tooltip: ComponentTooltip,
     tab_stop: bool,
     tab_index: isize,
@@ -45,6 +52,9 @@ impl Switch {
             label_side: Side::Right,
             size: Size::Medium,
             color: None,
+            off_color: None,
+            thumb_color: None,
+            disabled_opacity: None,
             tooltip: ComponentTooltip::default(),
             tab_stop: true,
             tab_index: 0,
@@ -102,6 +112,26 @@ impl Switch {
     /// Defaults to `cx.theme().primary`.
     pub fn color(mut self, color: impl Into<Hsla>) -> Self {
         self.color = Some(color.into());
+        self
+    }
+
+    /// Set the background color of the switch when unchecked.
+    /// Defaults to the theme's `switch`.
+    pub fn off_color(mut self, color: impl Into<Hsla>) -> Self {
+        self.off_color = Some(color.into());
+        self
+    }
+
+    /// Set the thumb's color. Defaults to the theme's `switch_thumb`.
+    pub fn thumb_color(mut self, color: impl Into<Hsla>) -> Self {
+        self.thumb_color = Some(color.into());
+        self
+    }
+
+    /// Fade the whole control by `opacity` while disabled, track and thumb alike, instead of
+    /// fading the track alone to half.
+    pub fn disabled_opacity(mut self, opacity: f32) -> Self {
+        self.disabled_opacity = Some(opacity);
         self
     }
 
@@ -182,13 +212,24 @@ impl RenderOnce for Switch {
             .color
             .map(Background::from)
             .unwrap_or(cx.theme().tokens.primary.into());
-        let unchecked_bg: Background = cx.theme().tokens.switch.into();
+        let unchecked_bg: Background = self
+            .off_color
+            .map(Background::from)
+            .unwrap_or(cx.theme().tokens.switch.into());
         // GPUI's element opacity multiplies each primitive's alpha instead of
         // compositing the subtree as one group, so fading the whole control
         // would let the track show through the thumb. Fading the track alone
         // lands on the pixels a grouped fade would: the thumb is `background`.
-        let disabled_bg = if checked { checked_bg } else { unchecked_bg }.opacity(0.5);
-        let toggle_bg: Background = cx.theme().tokens.switch_thumb.into();
+        let resting_bg = if checked { checked_bg } else { unchecked_bg };
+        let disabled_bg = match self.disabled_opacity {
+            Some(_) => resting_bg,
+            None => resting_bg.opacity(0.5),
+        };
+        let toggle_bg: Background = self
+            .thumb_color
+            .map(Background::from)
+            .unwrap_or(cx.theme().tokens.switch_thumb.into());
+        let fade = self.disabled_opacity.filter(|_| self.disabled);
         let disabled_label_color = cx.theme().muted_foreground;
 
         let (bg_width, bg_height) = match self.size {
@@ -225,88 +266,91 @@ impl RenderOnce for Switch {
             cx,
         );
 
-        div().refine_style(&self.style).child(
-            BaseSwitch::new(self.id.clone())
-                .checked(checked)
-                .disabled(self.disabled)
-                .styles(|styles| {
-                    styles.disabled(|style| {
-                        style.text_color(disabled_label_color).cursor_not_allowed()
+        div()
+            .refine_style(&self.style)
+            .when_some(fade, |this, opacity| this.opacity(opacity))
+            .child(
+                BaseSwitch::new(self.id.clone())
+                    .checked(checked)
+                    .disabled(self.disabled)
+                    .styles(|styles| {
+                        styles.disabled(|style| {
+                            style.text_color(disabled_label_color).cursor_not_allowed()
+                        })
                     })
-                })
-                .when_some(accessibility_label, |this, label| {
-                    this.accessibility_label(label)
-                })
-                .when_some(on_click, |this, on_click| {
-                    this.on_change(move |next, _, window, cx| on_click(&next, window, cx))
-                })
-                .tab_stop(self.tab_stop)
-                .tab_index(self.tab_index)
-                .track_focus(&focus_handle)
-                .h_flex()
-                .gap_2()
-                .items_start()
-                .when(self.label_side.is_left(), |this| this.flex_row_reverse())
-                .child(
-                    // Switch Bar
-                    SwitchTrack::new((self.id.clone(), "track"))
-                        .checked(checked)
-                        .disabled(self.disabled)
-                        .when(cfg!(test), |this| {
-                            this.debug_selector(|| "switch-bar".into())
-                        })
-                        .w(bg_width)
-                        .h(bg_height)
-                        .flex_shrink_0()
-                        .rounded(radius)
-                        .flex()
-                        .items_center()
-                        // The thumb inset is a 1px border plus 1px padding,
-                        // not a 2px border: the focus ring tints the border
-                        // solid, and that 1px line is what keeps the ring
-                        // visible on an unchecked track. Its 50% halo alone
-                        // lands within a few values of `switch.background`
-                        // in both default modes.
-                        .border_1()
-                        .border_color(cx.theme().transparent)
-                        .p(inset - px(1.))
-                        .when(!checked, |this| this.bg(unchecked_bg))
-                        .styles(|styles| {
-                            styles
-                                .checked(|style| style.bg(checked_bg))
-                                .disabled(|style| style.bg(disabled_bg))
-                        })
-                        // The ring hugs the track, not the row, so the label
-                        // stays outside it.
-                        .when(is_focused && self.focus_ring_enabled, |this| {
-                            this.focus_ring_style(window, cx)
-                        })
-                        .map(|this| self.tooltip.apply(this))
-                        .child(
-                            // Switch Toggle
-                            SwitchThumb::new(checked)
-                                .rounded(radius)
-                                .size(bar_width)
-                                .left(thumb_x)
-                                .bg(toggle_bg),
-                        ),
-                )
-                .when_some(self.label, |this, label| {
-                    this.child(
-                        div()
+                    .when_some(accessibility_label, |this, label| {
+                        this.accessibility_label(label)
+                    })
+                    .when_some(on_click, |this, on_click| {
+                        this.on_change(move |next, _, window, cx| on_click(&next, window, cx))
+                    })
+                    .tab_stop(self.tab_stop)
+                    .tab_index(self.tab_index)
+                    .track_focus(&focus_handle)
+                    .h_flex()
+                    .gap_2()
+                    .items_start()
+                    .when(self.label_side.is_left(), |this| this.flex_row_reverse())
+                    .child(
+                        // Switch Bar
+                        SwitchTrack::new((self.id.clone(), "track"))
+                            .checked(checked)
+                            .disabled(self.disabled)
                             .when(cfg!(test), |this| {
-                                this.debug_selector(|| "switch-label".into())
+                                this.debug_selector(|| "switch-bar".into())
                             })
-                            .min_w_0()
-                            .line_height(bg_height)
-                            .child(label)
-                            .map(|this| match self.size {
-                                Size::Size(_) => this.input_text_size(Size::Medium),
-                                size => this.input_text_size(size),
-                            }),
+                            .w(bg_width)
+                            .h(bg_height)
+                            .flex_shrink_0()
+                            .rounded(radius)
+                            .flex()
+                            .items_center()
+                            // The thumb inset is a 1px border plus 1px padding,
+                            // not a 2px border: the focus ring tints the border
+                            // solid, and that 1px line is what keeps the ring
+                            // visible on an unchecked track. Its 50% halo alone
+                            // lands within a few values of `switch.background`
+                            // in both default modes.
+                            .border_1()
+                            .border_color(cx.theme().transparent)
+                            .p(inset - px(1.))
+                            .when(!checked, |this| this.bg(unchecked_bg))
+                            .styles(|styles| {
+                                styles
+                                    .checked(|style| style.bg(checked_bg))
+                                    .disabled(|style| style.bg(disabled_bg))
+                            })
+                            // The ring hugs the track, not the row, so the label
+                            // stays outside it.
+                            .when(is_focused && self.focus_ring_enabled, |this| {
+                                this.focus_ring_style(window, cx)
+                            })
+                            .map(|this| self.tooltip.apply(this))
+                            .child(
+                                // Switch Toggle
+                                SwitchThumb::new(checked)
+                                    .rounded(radius)
+                                    .size(bar_width)
+                                    .left(thumb_x)
+                                    .bg(toggle_bg),
+                            ),
                     )
-                }),
-        )
+                    .when_some(self.label, |this, label| {
+                        this.child(
+                            div()
+                                .when(cfg!(test), |this| {
+                                    this.debug_selector(|| "switch-label".into())
+                                })
+                                .min_w_0()
+                                .line_height(bg_height)
+                                .child(label)
+                                .map(|this| match self.size {
+                                    Size::Size(_) => this.input_text_size(Size::Medium),
+                                    size => this.input_text_size(size),
+                                }),
+                        )
+                    }),
+            )
     }
 }
 

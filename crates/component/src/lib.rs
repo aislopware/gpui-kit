@@ -122,10 +122,14 @@ pub use window_ext::WindowExt;
 
 rust_i18n::i18n!("locales", fallback = "en");
 
-/// Initialize the components.
-///
-/// You must initialize the components at your application's entry point.
+/// Sets gpui-component up in `cx`: its theme, the globals its behaviours keep, and every
+/// component's key bindings. It runs on its own for every [`App`] as it is made
+/// ([`gpui::on_every_app!`]), test apps included; calling it again does nothing.
 pub fn init(cx: &mut App) {
+    if cx.has_global::<Initialized>() {
+        return;
+    }
+    cx.set_global(Initialized);
     theme::init(cx);
     global_state::init(cx);
     #[cfg(any(feature = "inspector", debug_assertions))]
@@ -147,6 +151,13 @@ pub fn init(cx: &mut App) {
     table::init(cx);
     tooltip::init(cx);
 }
+
+/// Marks an [`App`] that [`init`] already set up.
+struct Initialized;
+
+impl gpui::Global for Initialized {}
+
+gpui::on_every_app!(init);
 
 #[inline]
 pub fn locale() -> impl Deref<Target = str> {

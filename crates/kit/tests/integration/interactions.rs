@@ -749,7 +749,7 @@ impl Render for KeyboardEvents {
 }
 
 #[gpui_kit::test]
-fn press_sends_key_down_and_up_without_synthetic_enter_or_tab_text(cx: &mut TestAppContext) {
+fn press_sends_key_down_and_up_without_synthetic_enter_text(cx: &mut TestAppContext) {
     let events = Rc::new(RefCell::new(Vec::new()));
     let clicks = Rc::new(std::cell::Cell::new(0));
     let (handle, _) = common::open_window(cx, None, |_, cx| {
@@ -761,8 +761,10 @@ fn press_sends_key_down_and_up_without_synthetic_enter_or_tab_text(cx: &mut Test
     });
     cx.update_window(handle.into(), |_, window, cx| {
         window.click("keys", cx);
+        // Tab and Shift-Tab belong to the root's focus traversal, which gpui-kit binds in every
+        // app (`gpui::on_every_app!`); the keys no binding claims reach the element raw.
         for scoped in [false, true] {
-            for key in ["enter", "shift-enter", "tab", "shift-tab"] {
+            for key in ["enter", "shift-enter"] {
                 events.borrow_mut().clear();
                 if scoped {
                     window.within("keyboard-scope").press(key, cx);

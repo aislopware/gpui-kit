@@ -12,7 +12,7 @@ use crate::{
 use gpui::{
     AnyElement, App, Background, ClickEvent, Corners, Edges, ElementId, FocusHandle, Hsla,
     InteractiveElement, Interactivity, IntoElement, MouseButton, ParentElement, Pixels, RenderOnce,
-    Role, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    Role, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, relative, transparent_white,
 };
 
@@ -36,13 +36,22 @@ impl From<Pixels> for ButtonRounded {
     }
 }
 
+/// A button painted in exactly the colours it is given: its background, text, hover and press
+/// colours are used as they are, unmixed, so an application's own look (onicode wears monocode's)
+/// comes through pixel for pixel. A disabled custom button keeps its colours; the caller dims it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ButtonCustomVariant {
     color: Hsla,
     foreground: Hsla,
     shadow: bool,
     hover: Hsla,
-    active: Hsla,
+    hover_foreground: Option<Hsla>,
+    /// The press colour; the hover colour when unset.
+    active: Option<Hsla>,
+    /// A one-pixel ring in this colour; none when unset.
+    border: Option<Hsla>,
+    /// The ring's colour while hovered or pressed; the ring's own when unset.
+    hover_border: Option<Hsla>,
 }
 
 pub trait ButtonVariants: Sized {
@@ -105,7 +114,25 @@ impl ButtonCustomVariant {
             color: cx.theme().transparent,
             foreground: cx.theme().foreground,
             hover: cx.theme().transparent,
-            active: cx.theme().transparent,
+            hover_foreground: None,
+            active: None,
+            border: None,
+            hover_border: None,
+            shadow: false,
+        }
+    }
+
+    /// A button painted `color` with `foreground` text that keeps its colour under the pointer
+    /// until told otherwise, without asking the theme: an application's own palette.
+    pub fn colors(color: Hsla, foreground: Hsla) -> Self {
+        Self {
+            color,
+            foreground,
+            hover: color,
+            hover_foreground: None,
+            active: None,
+            border: None,
+            hover_border: None,
             shadow: false,
         }
     }
@@ -128,10 +155,40 @@ impl ButtonCustomVariant {
         self
     }
 
-    /// Set active background color, default is transparent.
-    pub fn active(mut self, color: Hsla) -> Self {
-        self.active = color;
+    /// Set the text color while hovered, default is the foreground.
+    pub fn hover_foreground(mut self, color: Hsla) -> Self {
+        self.hover_foreground = Some(color);
         self
+    }
+
+    /// Set the background color while pressed, default is the hover color.
+    pub fn active(mut self, color: Hsla) -> Self {
+        self.active = Some(color);
+        self
+    }
+
+    /// Set a one-pixel ring around the button, default is none.
+    pub fn border(mut self, color: Hsla) -> Self {
+        self.border = Some(color);
+        self
+    }
+
+    /// Set the ring's color while hovered or pressed, default is the ring's own.
+    pub fn hover_border(mut self, color: Hsla) -> Self {
+        self.hover_border = Some(color);
+        self
+    }
+
+    fn pressed(&self) -> Hsla {
+        self.active.unwrap_or(self.hover)
+    }
+
+    fn ring(&self) -> Hsla {
+        self.border.unwrap_or(self.color)
+    }
+
+    fn hover_ring(&self) -> Hsla {
+        self.hover_border.unwrap_or_else(|| self.ring())
     }
 
     /// Set shadow, default is false.
@@ -179,9 +236,13 @@ impl ButtonVariant {
         self.is_link() || self.is_text()
     }
 
-    #[inline]
-    fn is_default(&self) -> bool {
-        matches!(self, Self::Default)
+    /// Whether the variant draws a ring of its own, as the default one does.
+    fn has_ring(&self) -> bool {
+        match self {
+            Self::Default => true,
+            Self::Custom(colors) => colors.border.is_some(),
+            _ => false,
+        }
     }
 }
 
@@ -617,6 +678,10 @@ impl InteractiveElement for Button {
     }
 }
 
+/// A button always has an id, so it takes the stateful element's methods too (its accessibility
+/// states: expanded, selected, and the rest).
+impl StatefulInteractiveElement for Button {}
+
 impl RenderOnce for Button {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let style: ButtonVariant = self.variant;
@@ -721,7 +786,7 @@ impl RenderOnce for Button {
             .when(self.border_corners.bottom_right, |this| {
                 this.rounded_br(rounding)
             })
-            .when(self.variant.is_default() || self.outline, |this| {
+            .when(self.variant.has_ring() || self.outline, |this| {
                 this.when(self.border_edges.left, |this| this.border_l_1())
                     .when(self.border_edges.right, |this| this.border_r_1())
                     .when(self.border_edges.top, |this| this.border_t_1())
@@ -780,6 +845,10 @@ impl RenderOnce for Button {
             .items_center()
             .justify_center()
             .button_text_size(self.size)
+            // A text size set on the button itself wins over the one its size gives.
+            .when_some(instance_style.text.font_size, |this, size| {
+                this.text_size(size)
+            })
             .map(|this| match self.size {
                 Size::XSmall => this.gap_1(),
                 Size::Small => this.gap_1(),
@@ -1025,7 +1094,7 @@ impl ButtonVariant {
             Self::Success => cx.theme().tokens.button_success.into(),
             Self::Info => cx.theme().tokens.button_info.into(),
             Self::Ghost | Self::Link | Self::Text => cx.theme().transparent.into(),
-            Self::Custom(colors) => colors.color.mix_oklab(cx.theme().transparent, 0.2).into(),
+            Self::Custom(colors) => colors.color.into(),
         }
     }
 
@@ -1119,7 +1188,7 @@ impl ButtonVariant {
                 if outline {
                     colors.color.mix_oklab(transparent_white(), 0.4)
                 } else {
-                    colors.color
+                    colors.ring()
                 }
             }
         }
@@ -1219,11 +1288,15 @@ impl ButtonVariant {
             Self::Text => cx.theme().transparent.into(),
         };
 
-        let border = self.border_color(outline, cx);
+        let border = match self {
+            Self::Custom(colors) if !outline => colors.hover_ring(),
+            _ => self.border_color(outline, cx),
+        };
         let fg = match self {
             Self::Link => cx.theme().link_hover,
             Self::Text => cx.theme().foreground,
             Self::Ghost => cx.theme().accent_foreground,
+            Self::Custom(colors) => colors.hover_foreground.unwrap_or(colors.foreground),
             _ => self.text_color(outline, cx),
         };
 
@@ -1291,11 +1364,14 @@ impl ButtonVariant {
                     cx.theme().tokens.button_info_active.into()
                 }
             }
-            Self::Custom(colors) => colors.active.into(),
+            Self::Custom(colors) => colors.pressed().into(),
             Self::Link => cx.theme().transparent.into(),
             Self::Text => cx.theme().transparent.into(),
         };
-        let border = self.border_color(outline, cx);
+        let border = match self {
+            Self::Custom(colors) if !outline => colors.hover_ring(),
+            _ => self.border_color(outline, cx),
+        };
         let fg = match self {
             Self::Link => cx.theme().link_active,
             Self::Text => cx.theme().foreground.opacity(0.7),
@@ -1334,7 +1410,7 @@ impl ButtonVariant {
             Self::Info => cx.theme().tokens.button_info_active.into(),
             Self::Link => cx.theme().transparent.into(),
             Self::Text => cx.theme().transparent.into(),
-            Self::Custom(colors) => colors.active.into(),
+            Self::Custom(colors) => colors.pressed().into(),
         };
 
         let border = self.border_color(outline, cx);
@@ -1364,9 +1440,12 @@ impl ButtonVariant {
             Self::Success => cx.theme().tokens.button_success.background.opacity(0.15),
             Self::Info => cx.theme().tokens.button_info.background.opacity(0.15),
             Self::Secondary => cx.theme().tokens.button_secondary.background.opacity(1.5),
-            Self::Custom(style) => style.color.opacity(0.15).into(),
+            Self::Custom(style) => style.color.into(),
         };
-        let fg = cx.theme().muted_foreground.opacity(0.5);
+        let fg = match self {
+            Self::Custom(style) => style.foreground,
+            _ => cx.theme().muted_foreground.opacity(0.5),
+        };
         let (bg, border) = if outline {
             (
                 self.outline_background(ButtonStyleState::Normal, cx)
@@ -1386,7 +1465,7 @@ impl ButtonVariant {
                 Self::Warning => cx.theme().button_warning.opacity(0.15),
                 Self::Success => cx.theme().button_success.opacity(0.15),
                 Self::Info => cx.theme().button_info.opacity(0.15),
-                Self::Custom(style) => style.color.opacity(0.15),
+                Self::Custom(style) => style.ring(),
                 Self::Default | Self::Link | Self::Ghost | Self::Text => cx.theme().transparent,
             };
             (bg, border)

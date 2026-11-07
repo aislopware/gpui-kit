@@ -38,13 +38,21 @@ pub(crate) const POPUP_APPROACH: Pixels = px(8.);
 /// trigger's edge, on an ease-out curve so it decelerates into place, and
 /// plays the same back when it closes, as Base UI keeps a closing popup
 /// mounted for its ending style. Reopening on the way out turns it around
-/// from where it is. Reduced motion settles it at once.
+/// from where it is.
+///
+/// Reduced motion keeps the fade and drops the slide
+/// ([`gpui_base::ReducedMotion::Continue`], and the positioner draws no
+/// approach there): Apple's guidance for Reduce Motion replaces movement with
+/// a dissolve, and WCAG counts no opacity change as motion animation, so a
+/// popup still eases in and out instead of popping.
 ///
 /// shadcn also scales the surface from 95% (`zoom-in-95`). GPUI has no element
 /// transform — only images and SVGs take a `TransformationMatrix` — so the
 /// fade and slide carry the motion on their own.
 pub(crate) fn popup_motion() -> gpui_base::Transition {
-    gpui_base::Transition::new(POPUP_MOTION_DURATION).ease(ease_out_cubic)
+    gpui_base::Transition::new(POPUP_MOTION_DURATION)
+        .ease(ease_out_cubic)
+        .reduced_motion(gpui_base::ReducedMotion::Continue)
 }
 
 /// Draws a popup surface `progress` of the way through [`popup_motion`].
@@ -1105,6 +1113,40 @@ mod tests {
             "reopening should start the motion over at {opening:?} rather than showing a \
              settled surface, but the first frame was already at {reopening:?}",
         );
+    }
+
+    /// Under reduced motion a dropdown fades in and out where it rests: it
+    /// is drawn at its place from the first frame, and still drawn part way
+    /// through its exit.
+    #[gpui::test]
+    fn under_reduced_motion_a_dropdown_fades_in_place(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let executor = cx.executor();
+        let (view, window) = cx.add_window_view(|_, _| Harness {
+            open: true,
+            trigger_y: 100.,
+        });
+
+        window.update(|window, cx| crate::test_redraw(window, cx));
+        let opening = window.debug_bounds("surface").unwrap().origin;
+        executor.advance_clock(POPUP_MOTION_DURATION * 4);
+        window.update(|window, cx| crate::test_redraw(window, cx));
+        let settled = window.debug_bounds("surface").unwrap().origin;
+        assert_eq!(opening, settled, "no slide under reduced motion");
+
+        set_open(&view, false, window);
+        executor.advance_clock(POPUP_MOTION_DURATION / 2);
+        window.update(|window, cx| crate::test_redraw(window, cx));
+        let closing = window
+            .debug_bounds("surface")
+            .expect("the fade out still plays under reduced motion")
+            .origin;
+        assert_eq!(closing, settled);
+
+        executor.advance_clock(POPUP_MOTION_DURATION * 4);
+        window.update(|window, cx| crate::test_redraw(window, cx));
+        assert!(window.debug_bounds("surface").is_none());
     }
 
     /// Closing, the surface lets a press through to what lies beneath it.

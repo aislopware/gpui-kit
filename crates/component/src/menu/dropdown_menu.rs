@@ -499,9 +499,6 @@ mod tests {
     fn shortcut_hint_is_painted_on_the_frame_the_menu_opens(cx: &mut TestAppContext) {
         cx.update(|cx| {
             crate::init(cx);
-            // The entry motion would ask for frames of its own after the
-            // first, which is the one under test.
-            cx.set_reduce_motion(true);
             cx.bind_keys([KeyBinding::new("ctrl-c", CopyText, Some(CONTEXT))]);
         });
         let frames = Rc::new(Cell::new(0));
@@ -513,21 +510,31 @@ mod tests {
         cx.update(|window, cx| window.draw(cx).clear(cx));
         let frames_before_open = frames.get();
 
-        cx.simulate_mouse_down(
-            point(px(10.), px(10.)),
-            MouseButton::Left,
-            Default::default(),
-        );
-
-        assert_eq!(
-            frames.get(),
-            frames_before_open + 1,
-            "the press must be followed by exactly one frame for this to test the first one"
-        );
-        assert!(
-            cx.debug_bounds("kbd:ctrl-c").is_some(),
-            "the shortcut hint must be painted on the same frame as its item"
-        );
+        // The press and one frame after it, drawn by hand and read before the
+        // update ends: the entry motion leaves the window dirty, and the end
+        // of the update draws it again.
+        cx.update(|window, cx| {
+            window.dispatch_event(
+                gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: point(px(10.), px(10.)),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+            window.draw(cx).clear(cx);
+            assert_eq!(
+                frames.get(),
+                frames_before_open + 1,
+                "the press must be followed by exactly one frame for this to test the first one"
+            );
+            assert!(
+                window.debug_bounds("kbd:ctrl-c").is_some(),
+                "the shortcut hint must be painted on the same frame as its item"
+            );
+        });
     }
 
     /// A press on the trigger of an open menu closes it, as a native popup

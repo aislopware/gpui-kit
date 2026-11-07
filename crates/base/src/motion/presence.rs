@@ -58,7 +58,11 @@ impl Presence {
         });
         let snapshot = *state.read(cx);
 
-        if cx.reduce_motion() || self.transition.duration.is_zero() {
+        // Reduced motion settles a presence at once unless its transition
+        // keeps its timing there, as a fade-only one may.
+        let settles =
+            cx.reduce_motion() && self.transition.reduced_motion == super::ReducedMotion::Finish;
+        if settles || self.transition.duration.is_zero() {
             if snapshot.from != target || snapshot.target != target {
                 state.update(cx, |state, _| {
                     state.from = target;

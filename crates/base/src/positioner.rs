@@ -304,6 +304,9 @@ impl Positioner {
     /// Only the drawing moves: [`Positioner::on_position`] still reports the
     /// place the popup settles at. A corner-positioned popup comes out of the
     /// corner it hangs from, the flipped one when it flipped.
+    ///
+    /// The approach is spatial motion, so reduced motion draws the popup in
+    /// its place: a popup that keeps its fade there only fades.
     pub fn approach(mut self, distance: Pixels) -> Self {
         self.approach = distance;
         self
@@ -725,7 +728,12 @@ impl Element for Positioner {
             window.insert_hitbox(position.bounds, HitboxBehavior::BlockMouse);
         }
 
-        let shift = approach_shift(position.placement, position.anchor, self.approach);
+        let approach = if cx.reduce_motion() {
+            px(0.)
+        } else {
+            self.approach
+        };
+        let shift = approach_shift(position.placement, position.anchor, approach);
         let offset = position.bounds.origin + shift - bounds.origin;
         let offset = point(offset.x.round(), offset.y.round());
 

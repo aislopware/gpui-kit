@@ -136,8 +136,9 @@ impl Transition {
     /// Select reduced-motion behavior for this transition only.
     /// The application's preference and other motion channels are unchanged.
     ///
-    /// [`transition`] and [`transition_with_status`] read it. [`Presence`]
-    /// still finishes at once under reduced motion.
+    /// [`transition`], [`transition_with_status`] and [`Presence`] read it. A
+    /// presence that continues should draw only non-spatial effects from its
+    /// progress under reduced motion: fade it, never slide or scale it.
     pub fn reduced_motion(mut self, behavior: ReducedMotion) -> Self {
         self.reduced_motion = behavior;
         self
@@ -1370,6 +1371,64 @@ mod tests {
 
         assert_eq!(reentering.phase, PresencePhase::Entering);
         assert_eq!(reentering.progress, 0.6);
+    }
+
+    /// A presence whose transition continues under reduced motion keeps its
+    /// timing there, both ways.
+    #[gpui::test]
+    fn a_continuing_presence_keeps_its_timing_under_reduced_motion(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let present = Rc::new(Cell::new(true));
+        let samples = Rc::new(RefCell::new(Vec::new()));
+        let window = cx.open_window(size(px(100.), px(100.)), {
+            let present = present.clone();
+            let samples = samples.clone();
+            move |_, _| ContinuingPresenceView { present, samples }
+        });
+        cx.run_until_parked();
+        let render = |cx: &mut TestAppContext, now: bool| {
+            present.set(now);
+            window.update(cx, |_, window, _| window.refresh()).unwrap();
+            cx.run_until_parked();
+            *samples.borrow().last().unwrap()
+        };
+
+        assert_eq!(render(cx, true).phase, PresencePhase::Entering);
+        cx.executor().advance_clock(Duration::from_millis(50));
+        let entering = render(cx, true);
+        assert_eq!(entering.phase, PresencePhase::Entering);
+        assert!((entering.progress - 0.5).abs() < 1e-6);
+        cx.executor().advance_clock(Duration::from_millis(100));
+        assert_eq!(render(cx, true).phase, PresencePhase::Present);
+
+        let exiting = render(cx, false);
+        assert_eq!(exiting.phase, PresencePhase::Exiting);
+        assert!(exiting.should_render());
+        cx.executor().advance_clock(Duration::from_millis(200));
+        assert_eq!(render(cx, false).phase, PresencePhase::Absent);
+    }
+
+    struct ContinuingPresenceView {
+        present: Rc<Cell<bool>>,
+        samples: Rc<RefCell<Vec<PresenceSample>>>,
+    }
+
+    impl Render for ContinuingPresenceView {
+        fn render(
+            &mut self,
+            window: &mut Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let sample = Presence::new("continuing", self.present.get())
+                .transition(
+                    Transition::new(Duration::from_millis(100))
+                        .ease(|t| t)
+                        .reduced_motion(ReducedMotion::Continue),
+                )
+                .sample(window, cx);
+            self.samples.borrow_mut().push(sample);
+            Empty
+        }
     }
 
     #[gpui::test]

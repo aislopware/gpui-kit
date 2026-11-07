@@ -15,11 +15,13 @@ use gpui::{
     SystemNotification, SystemNotificationResponse, TouchPhase, WeakEntity, WeakFocusHandle,
     Window, WindowId, actions, canvas, div, point, prelude::FluentBuilder, px, relative,
 };
+pub use gpui_base::SwipeDirection;
 use gpui_base::{
-    SwipeDirection, Toast as BaseToast, ToastManager, ToastMotion, ToastOptions, ToastStack,
-    ToastStackState, ToastSwipe, ToastTransitionStatus, actions::Cancel, motion::spring,
+    Toast as BaseToast, ToastManager, ToastMotion, ToastOptions, ToastStack, ToastStackState,
+    ToastSwipe, ToastTransitionStatus, actions::Cancel, motion::spring,
 };
 
+use crate::ThemeStyled as _;
 use crate::{
     ActiveTheme as _, Edges, Icon, IconName, Sizable as _, StyledExt, TITLE_BAR_HEIGHT,
     animation::cubic_bezier,
@@ -149,6 +151,9 @@ pub struct Notification {
     /// can focus it.
     focus_handle: Option<FocusHandle>,
     swipe: ToastSwipe,
+    /// The directions a swipe may dismiss it in, when not the ones off its
+    /// stack's edges (Base UI's `swipeDirection`).
+    swipe_directions: Option<Vec<SwipeDirection>>,
     /// What drives the swipe in progress.
     swipe_input: Option<SwipeInput>,
     /// The direction a swipe threw the notification out in, which its exit
@@ -226,6 +231,7 @@ impl Notification {
             transition_status: ToastTransitionStatus::Starting,
             focus_handle: None,
             swipe: ToastSwipe::default(),
+            swipe_directions: None,
             swipe_input: None,
             swipe_exit: None,
         }
@@ -361,6 +367,17 @@ impl Notification {
         self
     }
 
+    /// The directions a swipe dismisses the notification in, as Base UI's
+    /// `swipeDirection`. By default, the ones that carry it off the edges its
+    /// stack sits against; none makes it one a swipe cannot dismiss.
+    pub fn swipe_directions(
+        mut self,
+        directions: impl IntoIterator<Item = SwipeDirection>,
+    ) -> Self {
+        self.swipe_directions = Some(directions.into_iter().collect());
+        self
+    }
+
     /// Set the click callback of the notification.
     pub fn on_click(
         mut self,
@@ -429,7 +446,11 @@ impl Notification {
         if self.transition_status == ToastTransitionStatus::Ending {
             return;
         }
-        self.swipe = ToastSwipe::new(SwipeDirection::off_screen(placement));
+        self.swipe = ToastSwipe::new(
+            self.swipe_directions
+                .clone()
+                .unwrap_or_else(|| SwipeDirection::off_screen(placement)),
+        );
         self.swipe.begin(position, cx.background_executor().now());
         self.swipe_input = Some(input);
         cx.notify();
@@ -641,6 +662,16 @@ impl Render for Notification {
             .px_4()
             .gap_3()
             .refine_style(&self.style)
+            // Reached from the keyboard (F6, Tab), the toast shows where the
+            // focus is, as `:focus-visible` would; a click does not.
+            .when(
+                window.last_input_was_keyboard()
+                    && self
+                        .focus_handle
+                        .as_ref()
+                        .is_some_and(|handle| handle.is_focused(window)),
+                |this| this.focus_ring_style(window, cx),
+            )
             .when_some(self.focus_handle.clone(), |this, handle| {
                 this.track_focus(&handle)
             })
@@ -1465,7 +1496,7 @@ impl Render for NotificationList {
 mod tests {
     use super::*;
     use crate::{WindowExt as _, theme::Theme};
-    use gpui::{Modifiers, Role, TestAppContext, VisualTestContext};
+    use gpui::{Modifiers, TestAppContext, VisualTestContext};
     use std::cell::Cell;
 
     struct FooKind;
@@ -1636,6 +1667,38 @@ mod tests {
             ..Default::default()
         });
         draw(cx);
+    }
+
+    /// A notification's own swipe directions replace the ones off its
+    /// stack's edges: one that may only leave to the left is not thrown out
+    /// to the right, however far it is pulled there.
+    #[gpui::test]
+    fn a_notification_s_own_swipe_directions_replace_its_stack_s(cx: &mut TestAppContext) {
+        let (list, cx) = mount(cx);
+        let note = show(
+            &list,
+            Notification::info("left only")
+                .id::<FooKind>()
+                .autohide(false)
+                .swipe_directions([SwipeDirection::Left]),
+            cx,
+        );
+        let rest = toast_bounds(cx);
+        let right = shifted(rest.center(), 60., 0.);
+        drag(cx, rest.center(), right);
+        cx.simulate_mouse_up(right, MouseButton::Left, Modifiers::default());
+        draw(cx);
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Present);
+
+        let left = shifted(rest.center(), -60., 0.);
+        drag(cx, rest.center(), left);
+        cx.simulate_mouse_up(left, MouseButton::Left, Modifiers::default());
+        draw(cx);
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Ending);
+        assert_eq!(
+            note.read_with(cx, |note, _| note.swipe_exit),
+            Some(SwipeDirection::Left)
+        );
     }
 
     #[gpui::test]
@@ -1889,13 +1952,19 @@ mod tests {
             cx,
         );
 
+        assert!(cx.debug_bounds("focus-ring").is_none());
         cx.simulate_keystrokes("f6");
         draw(cx);
         assert!(is_focused(&note_focus(&newest, cx), cx));
+        assert!(
+            cx.debug_bounds("focus-ring").is_some(),
+            "a toast reached from the keyboard shows its focus"
+        );
 
         cx.simulate_keystrokes("shift-f6");
         draw(cx);
         assert!(is_focused(&content, cx));
+        assert!(cx.debug_bounds("focus-ring").is_none());
 
         cx.simulate_keystrokes("f6");
         draw(cx);
@@ -1963,6 +2032,7 @@ mod tests {
         assert_eq!(status(&note, cx), ToastTransitionStatus::Ending);
     }
 
+    #[cfg(feature = "test-support")]
     #[gpui::test]
     fn the_toast_stack_is_a_notifications_landmark(cx: &mut TestAppContext) {
         let (_, cx) = mount_in_root(cx);
@@ -1980,7 +2050,7 @@ mod tests {
             )
             .expect("the stack is painted")
         });
-        assert_eq!(stack.role(), Some(Role::Region));
+        assert_eq!(stack.role(), Some(gpui::Role::Region));
         assert_eq!(stack.label(), Some("Notifications"));
     }
 

@@ -1,7 +1,7 @@
 use std::ops::Range;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
+use crate::actions::{Cancel, Confirm, SelectDown, SelectFirst, SelectLast, SelectUp};
 use crate::input::InputState;
 use crate::list::cache::{MeasuredEntrySize, RowEntry, RowsCache};
 use crate::{
@@ -14,8 +14,9 @@ use crate::{Icon, IndexPath, Selectable, Sizable, StyledExt};
 use crate::{VirtualListScrollHandle, list::ListDelegate, v_virtual_list};
 use gpui::{
     App, AvailableSpace, ClickEvent, Context, DefiniteLength, EdgesRefinement, EventEmitter,
-    ListSizingBehavior, RenderOnce, Role, ScrollStrategy, SharedString, StatefulInteractiveElement,
-    StyleRefinement, Subscription, px, size,
+    KeyDownEvent, ListSizingBehavior, MouseMoveEvent, Pixels, Point, RenderOnce, Role,
+    ScrollStrategy, SharedString, StatefulInteractiveElement, StyleRefinement, Subscription, px,
+    size,
 };
 use gpui::{
     AppContext, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
@@ -38,8 +39,26 @@ pub(crate) fn init(cx: &mut App) {
         ),
         KeyBinding::new("up", SelectUp, context),
         KeyBinding::new("down", SelectDown, context),
+        KeyBinding::new("home", SelectFirst, context),
+        KeyBinding::new("end", SelectLast, context),
     ]);
 }
+
+/// How long typeahead waits for the next key before a new query starts.
+const TYPEAHEAD_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// The text typed so far to move the highlight to the item it begins.
+#[derive(Default)]
+struct Typeahead {
+    /// The typed text, lowercased.
+    query: String,
+    /// The highlight when the query started; matches are searched after it.
+    anchor: Option<IndexPath>,
+    last_key_at: Option<Instant>,
+}
+
+type ItemLabel<D> = Box<dyn Fn(&D, IndexPath, &App) -> Option<SharedString> + 'static>;
+type ItemEnabled<D> = Box<dyn Fn(&D, IndexPath, &App) -> bool + 'static>;
 
 #[derive(Clone)]
 pub enum ListEvent {
@@ -91,6 +110,13 @@ pub struct ListState<D: ListDelegate> {
     reset_on_cancel: bool,
     searchable: bool,
     selectable: bool,
+    highlight_on_hover: bool,
+    /// Where the pointer last was, so that only a pointer that really moved
+    /// takes the highlight, never one the items scrolled or opened under.
+    pointer_position: Option<Point<Pixels>>,
+    typeahead: Typeahead,
+    item_label: Option<ItemLabel<D>>,
+    item_enabled: Option<ItemEnabled<D>>,
     _search_task: Task<()>,
     _load_more_task: Task<()>,
     _query_input_subscription: Subscription,
@@ -121,6 +147,11 @@ where
             mouse_right_clicked_index: None,
             scroll_handle: VirtualListScrollHandle::new(),
             reset_on_cancel: true,
+            highlight_on_hover: false,
+            pointer_position: None,
+            typeahead: Typeahead::default(),
+            item_label: None,
+            item_enabled: None,
             _search_task: Task::ready(()),
             _load_more_task: Task::ready(()),
             _query_input_subscription,
@@ -152,6 +183,42 @@ where
     pub fn set_selectable(&mut self, selectable: bool, cx: &mut Context<Self>) {
         self.selectable = selectable;
         cx.notify();
+    }
+
+    /// Sets whether moving the pointer over an enabled item moves the
+    /// highlight (the selected index) to it, default is `false`.
+    ///
+    /// Turn it on for a popup list, such as a select's or a completion menu's,
+    /// where the highlight is a cursor that follows the pointer and arrow keys
+    /// continue from wherever it is. Leave it off for a list whose selected
+    /// row is a selection. Either way a list item paints no hover of its own,
+    /// so there is only ever one highlighted row.
+    pub fn highlight_on_hover(mut self, highlight_on_hover: bool) -> Self {
+        self.highlight_on_hover = highlight_on_hover;
+        self
+    }
+
+    /// Sets the text typeahead matches for each item.
+    ///
+    /// When the list is not searchable and has focus, typing moves the
+    /// highlight to the next item whose label begins with the typed text, as
+    /// a select does. Items without a label are skipped. Without this the list
+    /// has no typeahead.
+    pub fn item_label(
+        mut self,
+        label: impl Fn(&D, IndexPath, &App) -> Option<SharedString> + 'static,
+    ) -> Self {
+        self.item_label = Some(Box::new(label));
+        self
+    }
+
+    /// Sets which items can be highlighted; every item can by default.
+    ///
+    /// Arrow keys, Home, End, typeahead and the pointer pass over an item
+    /// this returns `false` for.
+    pub fn item_enabled(mut self, enabled: impl Fn(&D, IndexPath, &App) -> bool + 'static) -> Self {
+        self.item_enabled = Some(Box::new(enabled));
+        self
     }
 
     pub fn delegate(&self) -> &D {
@@ -270,10 +337,10 @@ where
         &self.scroll_handle
     }
 
-    pub fn scroll_to_selected_item(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    /// Scroll only as far as it takes to reveal the selected item.
+    pub fn scroll_to_selected_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(ix) = self.selected_index {
-            self.deferred_scroll_to_index = Some((ix, ScrollStrategy::Top));
-            cx.notify();
+            self.scroll_to_item(ix, ScrollStrategy::Nearest, window, cx);
         }
     }
 
@@ -414,12 +481,7 @@ where
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.rows_cache.len() == 0 {
-            return;
-        }
-
-        let prev_ix = self.rows_cache.prev(self.selected_index);
-        self.select_item(prev_ix, window, cx);
+        self.step_highlight(false, window, cx);
     }
 
     pub(crate) fn on_action_select_next(
@@ -428,12 +490,168 @@ where
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.rows_cache.len() == 0 {
+        self.step_highlight(true, window, cx);
+    }
+
+    /// Move the highlight to the next enabled item, wrapping around, from
+    /// wherever the highlight is.
+    fn step_highlight(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let mut ix = self.selected_index;
+        for _ in 0..self.rows_cache.items_count() {
+            let next = if forward {
+                self.rows_cache.next(ix)
+            } else {
+                self.rows_cache.prev(ix)
+            };
+            if self.is_item_enabled(next, cx) {
+                self.select_item(next, window, cx);
+                return;
+            }
+            ix = Some(next);
+        }
+    }
+
+    fn on_action_select_first(
+        &mut self,
+        _: &SelectFirst,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ix) = self
+            .item_paths(cx)
+            .into_iter()
+            .find(|ix| self.is_item_enabled(*ix, cx))
+        {
+            self.select_item(ix, window, cx);
+        }
+    }
+
+    fn on_action_select_last(
+        &mut self,
+        _: &SelectLast,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ix) = self
+            .item_paths(cx)
+            .into_iter()
+            .rfind(|ix| self.is_item_enabled(*ix, cx))
+        {
+            self.select_item(ix, window, cx);
+        }
+    }
+
+    /// Every item, in display order, as the delegate has them now; unlike the
+    /// rows cache this does not wait for the list to be drawn.
+    fn item_paths(&self, cx: &App) -> Vec<IndexPath> {
+        (0..self.delegate.sections_count(cx).max(1))
+            .flat_map(|section| {
+                (0..self.delegate.items_count(section, cx))
+                    .map(move |row| IndexPath::new(row).section(section))
+            })
+            .collect()
+    }
+
+    fn is_item_enabled(&self, ix: IndexPath, cx: &App) -> bool {
+        self.item_enabled
+            .as_ref()
+            .is_none_or(|enabled| enabled(&self.delegate, ix, cx))
+    }
+
+    /// Add `character`, typed at `now`, to the typeahead query and return the
+    /// enabled item the query now begins, if any. The highlight is left alone.
+    ///
+    /// A query continues while keys come within [`TYPEAHEAD_TIMEOUT`] of each
+    /// other and is matched from the item after the highlight it started at,
+    /// so typing the start of the highlighted item's label moves on to the
+    /// next item that begins with it. Repeating one character cycles through
+    /// the items that begin with it.
+    pub(crate) fn typeahead(
+        &mut self,
+        character: char,
+        now: Instant,
+        cx: &App,
+    ) -> Option<IndexPath> {
+        if self.item_label.is_none() {
+            return None;
+        }
+        let expired = self
+            .typeahead
+            .last_key_at
+            .is_none_or(|at| now.saturating_duration_since(at) > TYPEAHEAD_TIMEOUT);
+        if expired {
+            self.typeahead.query.clear();
+        }
+        if self.typeahead.query.is_empty() && character.is_whitespace() {
+            return None;
+        }
+        self.typeahead.last_key_at = Some(now);
+
+        let typed: String = character.to_lowercase().collect();
+        let repeats = !self.typeahead.query.is_empty()
+            && self
+                .typeahead
+                .query
+                .trim_start_matches(typed.as_str())
+                .is_empty();
+        if self.typeahead.query.is_empty() || repeats {
+            self.typeahead.query.clear();
+            self.typeahead.anchor = self.selected_index;
+        }
+        self.typeahead.query.push_str(&typed);
+
+        let items = self.item_paths(cx);
+        let start = self
+            .typeahead
+            .anchor
+            .and_then(|anchor| items.iter().position(|ix| ix.eq_row(anchor)))
+            .map_or(0, |position| position + 1);
+        let query = self.typeahead.query.as_str();
+        let item_label = self.item_label.as_ref()?;
+        (0..items.len())
+            .map(|offset| items[(start + offset) % items.len()])
+            .find(|ix| {
+                self.is_item_enabled(*ix, cx)
+                    && item_label(&self.delegate, *ix, cx)
+                        .is_some_and(|label| label.to_lowercase().starts_with(query))
+            })
+    }
+
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(character) = gpui_base::Select::typeahead_character(&event.keystroke) else {
+            return;
+        };
+        cx.stop_propagation();
+        let now = cx.background_executor().now();
+        if let Some(ix) = self.typeahead(character, now, cx) {
+            self.select_item(ix, window, cx);
+        }
+    }
+
+    /// Move the highlight to the item under a pointer that really moved.
+    fn highlight_on_pointer(
+        &mut self,
+        ix: IndexPath,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let moved = self.pointer_position.replace(event.position) != Some(event.position);
+        if !moved
+            || !self.highlight_on_hover
+            || !self.selectable
+            || self
+                .selected_index
+                .is_some_and(|selected| selected.eq_row(ix))
+            || !self.is_item_enabled(ix, cx)
+        {
             return;
         }
 
-        let next_ix = self.rows_cache.next(self.selected_index);
-        self.select_item(next_ix, window, cx);
+        self.selected_index = Some(ix);
+        self.delegate.set_selected_index(Some(ix), window, cx);
+        cx.emit(ListEvent::Select(ix));
+        cx.notify();
     }
 
     fn prepare_items_if_needed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -511,7 +729,10 @@ where
                     .secondary_selected(mouse_right_clicked)
             }))
             .when(selectable, |this| {
-                this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                this.on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, window, cx| {
+                    this.highlight_on_pointer(ix, e, window, cx);
+                }))
+                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     this.set_right_clicked_index(None, window, cx);
                     this.selected_index = Some(ix);
                     this.on_action_confirm(
@@ -640,6 +861,10 @@ where
 {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.prepare_items_if_needed(window, cx);
+        // Items that open or scroll under a still pointer are not hovered by
+        // a move; only a pointer leaving this position takes the highlight.
+        self.pointer_position = Some(window.mouse_position());
+        let typeahead = !self.searchable && self.item_label.is_some();
 
         // Scroll to the selected item if it is set.
         if let Some((ix, strategy)) = self.deferred_scroll_to_index.take() {
@@ -714,6 +939,11 @@ where
                     .on_action(cx.listener(Self::on_action_confirm))
                     .on_action(cx.listener(Self::on_action_select_next))
                     .on_action(cx.listener(Self::on_action_select_prev))
+                    .on_action(cx.listener(Self::on_action_select_first))
+                    .on_action(cx.listener(Self::on_action_select_last))
+                    .when(typeahead, |this| {
+                        this.on_key_down(cx.listener(Self::on_key_down))
+                    })
                     .map(|this| {
                         if let Some(view) = initial_view {
                             this.child(view)
@@ -973,5 +1203,228 @@ mod measurement_tests {
                 div()
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod highlight_tests {
+    use super::*;
+    use crate::list::ListItem;
+    use gpui::{Modifiers, TestAppContext, VisualTestContext, point};
+
+    const FRUITS: [&str; 6] = [
+        "Apple",
+        "Banana",
+        "Blueberry",
+        "Cherry",
+        "Coconut",
+        "Cranberry",
+    ];
+    const ROW: f32 = 30.;
+
+    struct Fruits {
+        disabled: Vec<usize>,
+    }
+
+    impl ListDelegate for Fruits {
+        type Item = ListItem;
+        fn items_count(&self, _: usize, _: &App) -> usize {
+            FRUITS.len()
+        }
+        fn set_selected_index(
+            &mut self,
+            _: Option<IndexPath>,
+            _: &mut Window,
+            _: &mut Context<ListState<Self>>,
+        ) {
+        }
+        fn render_item(
+            &mut self,
+            ix: IndexPath,
+            _: &mut Window,
+            _: &mut Context<ListState<Self>>,
+        ) -> Option<ListItem> {
+            Some(ListItem::new(ix.row).h(px(ROW)).child(FRUITS[ix.row]))
+        }
+    }
+
+    /// A popup-style list, three and a bit rows tall, at the window's origin.
+    struct Popup(Entity<ListState<Fruits>>);
+
+    impl Render for Popup {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(200.))
+                .h(px(100.))
+                .child(List::new(&self.0).size_full())
+        }
+    }
+
+    fn popup(
+        cx: &mut TestAppContext,
+        disabled: Vec<usize>,
+    ) -> (Entity<ListState<Fruits>>, &mut VisualTestContext) {
+        cx.update(crate::init);
+        let (popup, cx) = cx.add_window_view(|window, cx| {
+            Popup(cx.new(|cx| {
+                ListState::new(Fruits { disabled }, window, cx)
+                    .highlight_on_hover(true)
+                    .item_label(|_, ix, _| FRUITS.get(ix.row).map(|&fruit| fruit.into()))
+                    .item_enabled(|fruits, ix, _| !fruits.disabled.contains(&ix.row))
+            }))
+        });
+        let list = popup.read_with(cx, |popup, _| popup.0.clone());
+        cx.update(|window, cx| {
+            list.read(cx).focus_handle(cx).focus(window, cx);
+            window.draw(cx).clear(cx);
+        });
+        (list, cx)
+    }
+
+    fn draw(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    fn highlighted(list: &Entity<ListState<Fruits>>, cx: &mut VisualTestContext) -> Option<usize> {
+        list.read_with(cx, |list, _| list.selected_index().map(|ix| ix.row))
+    }
+
+    /// The pointer at `x` across the row at `row`, with the list unscrolled.
+    fn pointer_at(cx: &mut VisualTestContext, row: usize, x: f32) {
+        let y = ROW * row as f32 + ROW / 2.;
+        cx.simulate_mouse_move(point(px(x), px(y)), None, Modifiers::none());
+    }
+
+    #[gpui::test]
+    fn the_pointer_moves_the_one_highlight_and_keys_continue_from_it(cx: &mut TestAppContext) {
+        let (list, cx) = popup(cx, vec![]);
+        cx.simulate_keystrokes("down");
+        assert_eq!(highlighted(&list, cx), Some(0));
+        draw(cx);
+
+        pointer_at(cx, 2, 100.);
+        assert_eq!(
+            highlighted(&list, cx),
+            Some(2),
+            "the highlight leaves `Apple`"
+        );
+        draw(cx);
+        cx.simulate_keystrokes("up");
+        assert_eq!(
+            highlighted(&list, cx),
+            Some(1),
+            "`up` goes on from `Blueberry`"
+        );
+    }
+
+    #[gpui::test]
+    fn a_pointer_that_has_not_moved_does_not_take_the_highlight(cx: &mut TestAppContext) {
+        let (list, cx) = popup(cx, vec![]);
+        pointer_at(cx, 1, 100.);
+        assert_eq!(highlighted(&list, cx), Some(1));
+        draw(cx);
+        cx.simulate_keystrokes("down");
+        draw(cx);
+
+        // A move to where the pointer already is, as a platform reports when
+        // the items scroll or open under a still pointer.
+        pointer_at(cx, 1, 100.);
+        assert_eq!(highlighted(&list, cx), Some(2));
+        pointer_at(cx, 1, 101.);
+        assert_eq!(highlighted(&list, cx), Some(1), "a real move takes it back");
+    }
+
+    #[gpui::test]
+    fn the_pointer_passes_over_a_disabled_item(cx: &mut TestAppContext) {
+        let (list, cx) = popup(cx, vec![1]);
+        pointer_at(cx, 0, 100.);
+        draw(cx);
+        pointer_at(cx, 1, 100.);
+        assert_eq!(highlighted(&list, cx), Some(0));
+    }
+
+    #[gpui::test]
+    fn arrow_keys_skip_disabled_items(cx: &mut TestAppContext) {
+        let (list, cx) = popup(cx, vec![1, 5]);
+        cx.simulate_keystrokes("down down");
+        assert_eq!(highlighted(&list, cx), Some(2));
+        cx.simulate_keystrokes("up up");
+        assert_eq!(
+            highlighted(&list, cx),
+            Some(4),
+            "`up` wraps past `Cranberry`"
+        );
+    }
+
+    #[gpui::test]
+    fn home_and_end_highlight_the_first_and_last_enabled_items(cx: &mut TestAppContext) {
+        let (list, cx) = popup(cx, vec![0, 5]);
+        cx.simulate_keystrokes("end");
+        assert_eq!(highlighted(&list, cx), Some(4));
+        cx.simulate_keystrokes("home");
+        assert_eq!(highlighted(&list, cx), Some(1));
+    }
+
+    #[gpui::test]
+    fn arrow_keys_scroll_only_as_far_as_the_highlight_needs(cx: &mut TestAppContext) {
+        let (list, cx) = popup(cx, vec![]);
+        let offset = |cx: &mut VisualTestContext| {
+            draw(cx);
+            list.read_with(cx, |list, _| list.scroll_handle().offset().y)
+        };
+        cx.simulate_keystrokes("down down down");
+        assert_eq!(offset(cx), px(0.), "`Blueberry` is already in view");
+        cx.simulate_keystrokes("down");
+        let scrolled = offset(cx);
+        assert!(
+            scrolled < px(0.) && scrolled > px(-ROW * 2.),
+            "`Cherry` is revealed at the bottom, not jumped to the top: {scrolled:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn typing_highlights_the_next_item_that_begins_with_the_typed_text(cx: &mut TestAppContext) {
+        let (list, cx) = popup(cx, vec![]);
+        cx.simulate_keystrokes("b->b");
+        assert_eq!(highlighted(&list, cx), Some(1));
+        cx.simulate_keystrokes("L->L");
+        assert_eq!(highlighted(&list, cx), Some(2), "`bl` begins `Blueberry`");
+        cx.simulate_keystrokes("x->x");
+        assert_eq!(highlighted(&list, cx), Some(2), "`blx` begins nothing");
+    }
+
+    #[gpui::test]
+    fn typeahead_starts_over_half_a_second_after_the_last_key(cx: &mut TestAppContext) {
+        let (list, cx) = popup(cx, vec![]);
+        cx.simulate_keystrokes("c->c");
+        cx.executor().advance_clock(Duration::from_millis(400));
+        cx.simulate_keystrokes("o->o");
+        assert_eq!(highlighted(&list, cx), Some(4), "`co` begins `Coconut`");
+
+        cx.executor().advance_clock(Duration::from_millis(600));
+        cx.simulate_keystrokes("a->a");
+        assert_eq!(
+            highlighted(&list, cx),
+            Some(0),
+            "a fresh `a` begins `Apple`"
+        );
+    }
+
+    #[gpui::test]
+    fn repeating_a_character_cycles_through_the_items_it_begins(cx: &mut TestAppContext) {
+        let (list, cx) = popup(cx, vec![]);
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            cx.simulate_keystrokes("c->c");
+            seen.push(highlighted(&list, cx));
+        }
+        assert_eq!(seen, [Some(3), Some(4), Some(5), Some(3)]);
+    }
+
+    #[gpui::test]
+    fn typeahead_skips_disabled_items(cx: &mut TestAppContext) {
+        let (list, cx) = popup(cx, vec![1]);
+        cx.simulate_keystrokes("b->b");
+        assert_eq!(highlighted(&list, cx), Some(2));
     }
 }

@@ -1232,7 +1232,9 @@ pub(crate) mod tests {
             assert!(state.active_dialogs[0].closing);
             assert!(!state.active_dialogs[1].closing);
             assert!(
-                state.active_dialogs[1].focus_handle().is_focused(window),
+                state.active_dialogs[1]
+                    .focus_handle()
+                    .contains_focused(window, cx),
                 "the reopened dialog owns focus while the old one leaves"
             );
         });
@@ -1246,7 +1248,11 @@ pub(crate) mod tests {
             let state = WindowState::read(window, cx);
             assert_eq!(state.active_dialogs.len(), 1);
             assert!(!state.active_dialogs[0].closing);
-            assert!(state.active_dialogs[0].focus_handle().is_focused(window));
+            assert!(
+                state.active_dialogs[0]
+                    .focus_handle()
+                    .contains_focused(window, cx)
+            );
             assert!(window.has_active_dialog(cx));
         });
         assert_eq!(surface(cx, 0).top(), px(80.));

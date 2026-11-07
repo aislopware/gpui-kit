@@ -1,28 +1,42 @@
 use crate::ThemeStyled as _;
-use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
+use crate::actions::{Cancel, Confirm, SelectDown, SelectFirst, SelectLast, SelectUp};
 use crate::actions::{SelectLeft, SelectRight};
 use crate::menu::menu_item::MenuItemElement;
 use crate::scroll::ScrollableElement;
 use crate::{ActiveTheme, ElementExt, Icon, IconName, Sizable as _, h_flex, v_flex};
 use crate::{Side, Size, kbd::Kbd};
 use gpui::{
-    Action, Anchor, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Edges, Entity,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
+    Action, Anchor, AnyElement, App, AppContext, Bounds, Context, DismissEvent, DispatchPhase,
+    Edges, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    KeyBinding, KeyDownEvent, MouseButton, MouseClickEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement, Pixels, Rems, Render, Role, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, anchored, deferred, div,
-    prelude::FluentBuilder, px, rems,
+    StatefulInteractiveElement, Styled, Task, WeakEntity, Window, anchored, canvas, deferred, div,
+    hover_intent, prelude::FluentBuilder, px, rems,
 };
 use gpui::{ClickEvent, Half, MouseDownEvent, OwnedMenuItem, Point, Subscription};
 use gpui_base::TestSupportExt as _;
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::time::Duration;
 
 const CONTEXT: &str = "PopupMenu";
 
 /// How many frames a newly opened scrollable menu waits for its items to be
 /// measured before it gives up scrolling to the checked item.
 const SCROLL_TO_CHECKED_FRAMES: u8 = 4;
+
+/// How long the pointer rests on a submenu's item before the submenu opens,
+/// Base UI's `delay` for a submenu trigger. It closes with no delay.
+const SUBMENU_OPEN_DELAY: Duration = Duration::from_millis(100);
+
+/// How long the pointer may rest on its way to an open submenu before the
+/// item under it takes the highlight, so a pause on the way never sticks.
+const SUBMENU_REST_DELAY: Duration = Duration::from_millis(100);
+
+/// How long typed characters are remembered for typeahead, Base UI's figure.
+const TYPEAHEAD_RESET_DELAY: Duration = Duration::from_millis(500);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -32,7 +46,24 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("down", SelectDown, Some(CONTEXT)),
         KeyBinding::new("left", SelectLeft, Some(CONTEXT)),
         KeyBinding::new("right", SelectRight, Some(CONTEXT)),
+        KeyBinding::new("home", SelectFirst, Some(CONTEXT)),
+        KeyBinding::new("end", SelectLast, Some(CONTEXT)),
     ]);
+    super::dropdown_menu::init(cx);
+}
+
+/// Which end of a menu a highlight goes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MenuEdge {
+    First,
+    Last,
+}
+
+/// One menu's highlight, kept across a rebuild of its items.
+struct MenuLevel {
+    selected: Option<usize>,
+    submenu: Option<usize>,
+    focused: bool,
 }
 
 /// An menu item in a popup menu.
@@ -253,6 +284,11 @@ impl PopupMenuItem {
         matches!(self, PopupMenuItem::Separator)
     }
 
+    #[inline]
+    fn is_submenu(&self) -> bool {
+        matches!(self, PopupMenuItem::Submenu { .. })
+    }
+
     fn has_left_icon(&self, check_side: Side) -> bool {
         match self {
             PopupMenuItem::Item { icon, checked, .. } => {
@@ -299,7 +335,38 @@ pub struct PopupMenu {
     /// the very frame the menu opens. GPUI looks a handle up in the previously
     /// rendered frame, and the trigger was in it when the menu was not yet.
     pub(crate) trigger_focus_handle: Option<FocusHandle>,
+    /// The highlighted item, by keyboard or pointer.
     selected_index: Option<usize>,
+    /// The item under the pointer, which may differ from the highlighted one
+    /// while the pointer travels to an open submenu.
+    hovered_index: Option<usize>,
+    /// The item whose submenu is open.
+    submenu_index: Option<usize>,
+    /// Opens a hovered submenu item's submenu once the pointer has rested on
+    /// it for [`SUBMENU_OPEN_DELAY`].
+    submenu_open_task: Option<Task<()>>,
+    /// Whether the pointer was over the open submenu's item when last seen.
+    on_submenu_item: bool,
+    /// Where the pointer left the open submenu's item, while it heads for the
+    /// submenu (see [`hover_intent::heading_to`]). Siblings it crosses on the
+    /// way do not take the highlight.
+    submenu_apex: Option<Point<Pixels>>,
+    /// Hands the highlight to the item under a pointer that rested on its way
+    /// to the submenu for [`SUBMENU_REST_DELAY`].
+    submenu_rest_task: Option<Task<()>>,
+    /// Each item's bounds as last laid out, by index.
+    item_bounds: Rc<RefCell<Vec<Bounds<Pixels>>>>,
+    /// Characters typed for typeahead, lowercased, until
+    /// [`TYPEAHEAD_RESET_DELAY`] passes without typing.
+    typeahead: String,
+    typeahead_task: Option<Task<()>>,
+    /// The mouse button still held from the press that opened the menu:
+    /// releasing it over an item activates the item, as a native menu does.
+    release_button: Option<MouseButton>,
+    /// An option was activated and the menu stayed open, so its items no
+    /// longer show the current state. Set on the top-level menu, which its
+    /// owner rebuilds with [`PopupMenu::rebuild_stale`].
+    stale: bool,
     min_width: Option<Pixels>,
     max_width: Option<Pixels>,
     max_height: Option<Pixels>,
@@ -352,6 +419,17 @@ impl PopupMenu {
             parent_menu: None,
             menu_items: Vec::new(),
             selected_index: None,
+            hovered_index: None,
+            submenu_index: None,
+            submenu_open_task: None,
+            on_submenu_item: false,
+            submenu_apex: None,
+            submenu_rest_task: None,
+            item_bounds: Rc::default(),
+            typeahead: String::new(),
+            typeahead_task: None,
+            release_button: None,
+            stale: false,
             min_width: None,
             max_width: None,
             max_height: None,
@@ -778,9 +856,114 @@ impl PopupMenu {
     ) {
         let mut menu = std::mem::replace(self, Self::new(cx));
         menu.menu_items.clear();
+        menu.checkable.clear();
         menu.selected_index = None;
+        menu.hovered_index = None;
+        menu.forget_submenu();
         *self = f(menu, window, cx);
         cx.notify();
+    }
+
+    /// Whether an option was activated with the menu left open, so its items
+    /// must be built again to show the current state.
+    pub(crate) fn is_stale(&self) -> bool {
+        self.stale
+    }
+
+    /// Rebuild a stale menu from its owner's current builder, keeping the
+    /// highlight, the open submenus and the focus where they were.
+    pub(crate) fn rebuild_stale(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(Self, &mut Window, &mut Context<Self>) -> Self,
+    ) {
+        if !self.stale {
+            return;
+        }
+        self.stale = false;
+        let path = self.highlight_path(window, cx);
+        self.rebuild(window, cx, f);
+        // Submenus are built anew, so they learn the focus to restore and the
+        // trigger's key contexts again.
+        self.set_previous_focus(self.previous_focus_handle.clone(), cx);
+        self.set_trigger_focus(self.trigger_focus_handle.clone(), cx);
+        self.restore_highlight_path(&path, window, cx);
+    }
+
+    fn highlight_path(&self, window: &Window, cx: &App) -> Vec<MenuLevel> {
+        let mut path = vec![MenuLevel {
+            selected: self.selected_index,
+            submenu: self.submenu_index,
+            focused: self.focus_handle.is_focused(window),
+        }];
+        if let Some(submenu) = self.active_submenu() {
+            path.extend(submenu.read(cx).highlight_path(window, cx));
+        }
+        path
+    }
+
+    fn restore_highlight_path(
+        &mut self,
+        path: &[MenuLevel],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((level, rest)) = path.split_first() else {
+            return;
+        };
+        self.selected_index = level.selected.filter(|ix| {
+            self.menu_items
+                .get(*ix)
+                .is_some_and(PopupMenuItem::is_clickable)
+        });
+        self.submenu_index = level.submenu.filter(|ix| {
+            self.menu_items
+                .get(*ix)
+                .is_some_and(|item| item.is_submenu() && item.is_clickable())
+        });
+        if level.focused {
+            self.focus_handle.focus(window, cx);
+        }
+        if let Some(submenu) = self.active_submenu() {
+            submenu.update(cx, |submenu, cx| {
+                submenu.restore_highlight_path(rest, window, cx)
+            });
+        }
+    }
+
+    /// Mark the top-level menu stale, for its owner to rebuild.
+    fn mark_stale(&mut self, cx: &mut Context<Self>) {
+        match self
+            .parent_menu
+            .as_ref()
+            .and_then(|parent| parent.upgrade())
+        {
+            Some(parent) => parent.update(cx, |parent, cx| parent.mark_stale(cx)),
+            None => {
+                self.stale = true;
+                cx.notify();
+            }
+        }
+    }
+
+    /// Arm the press that opened the menu: releasing `button` over an item
+    /// activates it, so a press on the trigger can drag to an item and let go.
+    /// Any later press disarms it.
+    pub(crate) fn arm_release(&mut self, button: MouseButton) {
+        self.release_button = Some(button);
+    }
+
+    /// Highlight the first or last enabled item.
+    pub(crate) fn highlight_edge(&mut self, edge: MenuEdge, cx: &mut Context<Self>) {
+        let ix = match edge {
+            MenuEdge::First => self.clickable_menu_items().next(),
+            MenuEdge::Last => self.clickable_menu_items().last(),
+        }
+        .map(|(ix, _)| ix);
+        if let Some(ix) = ix {
+            self.highlight(ix, cx);
+        }
     }
 
     fn add_menu_item(
@@ -847,17 +1030,12 @@ impl PopupMenu {
         self
     }
 
+    /// The open submenu.
     pub(crate) fn active_submenu(&self) -> Option<Entity<PopupMenu>> {
-        if let Some(ix) = self.selected_index {
-            if let Some(item) = self.menu_items.get(ix) {
-                return match item {
-                    PopupMenuItem::Submenu { menu, .. } => Some(menu.clone()),
-                    _ => None,
-                };
-            }
+        match self.menu_items.get(self.submenu_index?) {
+            Some(PopupMenuItem::Submenu { menu, .. }) => Some(menu.clone()),
+            _ => None,
         }
-
-        None
     }
 
     pub fn is_empty(&self) -> bool {
@@ -889,43 +1067,52 @@ impl PopupMenu {
     }
 
     fn activate(&mut self, event: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        match self.selected_index {
-            Some(index) => {
-                let item = self.menu_items.get(index);
-                if !item.is_some_and(PopupMenuItem::is_clickable) {
-                    return;
-                }
-                match item {
-                    Some(PopupMenuItem::Item {
-                        handler, action, ..
-                    }) => {
-                        if let Some(handler) = handler {
-                            handler(event, window, cx);
-                        } else if let Some(action) = action.as_ref() {
-                            self.dispatch_confirm_action(action, window, cx);
-                        }
-
-                        self.dismiss(&Cancel, window, cx)
-                    }
-                    Some(PopupMenuItem::ElementItem {
-                        handler, action, ..
-                    }) => {
-                        if let Some(handler) = handler {
-                            handler(event, window, cx);
-                        } else if let Some(action) = action.as_ref() {
-                            self.dispatch_confirm_action(action, window, cx);
-                        }
-                        self.dismiss(&Cancel, window, cx)
-                    }
-                    Some(PopupMenuItem::Submenu {
-                        disabled: false, ..
-                    }) => {
-                        self._select_submenu(window, cx);
-                    }
-                    _ => {}
-                }
+        let Some(index) = self.selected_index else {
+            return;
+        };
+        let Some(item) = self
+            .menu_items
+            .get(index)
+            .filter(|item| item.is_clickable())
+        else {
+            return;
+        };
+        let (handler, action) = match item {
+            PopupMenuItem::Item {
+                handler, action, ..
             }
-            _ => {}
+            | PopupMenuItem::ElementItem {
+                handler, action, ..
+            } => (
+                handler.clone(),
+                action.as_ref().map(|action| action.boxed_clone()),
+            ),
+            PopupMenuItem::Submenu { .. } => {
+                self.open_selected_submenu(window, cx);
+                return;
+            }
+            PopupMenuItem::Separator | PopupMenuItem::Label(_) => return,
+        };
+
+        let mut dispatched = false;
+        if let Some(handler) = handler {
+            handler(event, window, cx);
+        } else if let Some(action) = action {
+            self.dispatch_confirm_action(&action, window, cx);
+            dispatched = true;
+        }
+
+        if self.checkable.contains(&index) {
+            // An option, like Base UI's checkbox and radio items, leaves the
+            // menu open so several can be set in one visit. Its action was
+            // dispatched from the action context, so the menu takes the focus
+            // back, and its owner rebuilds the items to show the new state.
+            if dispatched {
+                self.focus_handle.focus(window, cx);
+            }
+            self.mark_stale(cx);
+        } else {
+            self.dismiss(&Cancel, window, cx)
         }
     }
 
@@ -998,6 +1185,15 @@ impl PopupMenu {
         }
     }
 
+    /// Highlight item `ix` from the keyboard, closing a submenu opened from
+    /// another item.
+    fn highlight(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if self.submenu_index != Some(ix) {
+            self.close_submenu(cx);
+        }
+        self.set_selected_index(ix, cx);
+    }
+
     fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         let ix = self.selected_index.unwrap_or(0);
@@ -1009,23 +1205,17 @@ impl PopupMenu {
             .rev()
             .find(|(i, item)| *i < ix && item.is_clickable())
         {
-            self.set_selected_index(prev_ix, cx);
+            self.highlight(prev_ix, cx);
             return;
         }
 
-        let last_clickable_ix = self.clickable_menu_items().last().map(|(ix, _)| ix);
-        if let Some(ix) = last_clickable_ix {
-            self.set_selected_index(ix, cx);
-        }
+        self.highlight_edge(MenuEdge::Last, cx);
     }
 
     fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         let Some(ix) = self.selected_index else {
-            let first_clickable_ix = self.clickable_menu_items().next().map(|(ix, _)| ix);
-            if let Some(ix) = first_clickable_ix {
-                self.set_selected_index(ix, cx);
-            }
+            self.highlight_edge(MenuEdge::First, cx);
             return;
         };
 
@@ -1035,21 +1225,89 @@ impl PopupMenu {
             .enumerate()
             .find(|(i, item)| *i > ix && item.is_clickable())
         {
-            self.set_selected_index(next_ix, cx);
+            self.highlight(next_ix, cx);
             return;
         }
 
-        let first_clickable_ix = self.clickable_menu_items().next().map(|(ix, _)| ix);
-        if let Some(ix) = first_clickable_ix {
-            self.set_selected_index(ix, cx);
+        self.highlight_edge(MenuEdge::First, cx);
+    }
+
+    fn select_first(&mut self, _: &SelectFirst, _: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        self.highlight_edge(MenuEdge::First, cx);
+    }
+
+    fn select_last(&mut self, _: &SelectLast, _: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        self.highlight_edge(MenuEdge::Last, cx);
+    }
+
+    /// Typeahead: printable characters highlight the next enabled item whose
+    /// label starts with what was typed in the last
+    /// [`TYPEAHEAD_RESET_DELAY`]; one character typed again and again cycles
+    /// through the items starting with it.
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Only the focused menu itself: not a submenu's keys bubbling up, nor
+        // a control inside an item that takes text.
+        if !self.focus_handle.is_focused(window) {
+            return;
         }
+        let keystroke = &event.keystroke;
+        let modifiers = keystroke.modifiers;
+        if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
+            return;
+        }
+        let Some(typed) = keystroke.key_char.as_deref() else {
+            return;
+        };
+        if typed.is_empty()
+            || typed.chars().any(char::is_control)
+            || (typed == " " && self.typeahead.is_empty())
+        {
+            return;
+        }
+
+        cx.stop_propagation();
+        self.typeahead.push_str(&typed.to_lowercase());
+        self.typeahead_task = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(TYPEAHEAD_RESET_DELAY).await;
+            _ = this.update(cx, |menu, _| menu.typeahead.clear());
+        }));
+        if let Some(ix) = self.typeahead_match() {
+            self.highlight(ix, cx);
+        }
+    }
+
+    fn typeahead_match(&self) -> Option<usize> {
+        let mut chars = self.typeahead.chars();
+        let first = chars.next()?;
+        let (query, start) = if chars.all(|c| c == first) {
+            // The same character again moves on to the next item with it.
+            (
+                first.to_string(),
+                self.selected_index.map_or(0, |ix| ix + 1),
+            )
+        } else {
+            // A longer prefix may still be the highlighted item's.
+            (self.typeahead.clone(), self.selected_index.unwrap_or(0))
+        };
+        let count = self.menu_items.len();
+        (0..count)
+            .map(|offset| (start + offset) % count)
+            .find(|ix| {
+                let item = &self.menu_items[*ix];
+                item.is_clickable()
+                    && item
+                        .a11y_label()
+                        .is_some_and(|label| label.to_lowercase().starts_with(&query))
+            })
     }
 
     fn select_left(&mut self, _: &SelectLeft, window: &mut Window, cx: &mut Context<Self>) {
         let handled = if matches!(self.submenu_anchor.0, Anchor::TopLeft | Anchor::BottomLeft) {
-            self._unselect_submenu(window, cx)
+            self.close_open_submenu(cx)
         } else {
-            self._select_submenu(window, cx)
+            self.open_selected_submenu(window, cx)
         };
 
         if self.parent_side(cx).is_left() {
@@ -1068,9 +1326,9 @@ impl PopupMenu {
 
     fn select_right(&mut self, _: &SelectRight, window: &mut Window, cx: &mut Context<Self>) {
         let handled = if matches!(self.submenu_anchor.0, Anchor::TopLeft | Anchor::BottomLeft) {
-            self._select_submenu(window, cx)
+            self.open_selected_submenu(window, cx)
         } else {
-            self._unselect_submenu(window, cx)
+            self.close_open_submenu(cx)
         };
 
         if self.parent_side(cx).is_right() {
@@ -1087,36 +1345,79 @@ impl PopupMenu {
         }
     }
 
-    fn _select_submenu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if let Some(active_submenu) = self.active_submenu() {
-            // Focus the submenu, so that can be handle the action.
-            active_submenu.update(cx, |view, cx| {
-                let first_clickable_ix = view.clickable_menu_items().next().map(|(ix, _)| ix);
-                if let Some(ix) = first_clickable_ix {
-                    view.set_selected_index(ix, cx);
-                } else {
-                    view.selected_index = None;
-                    cx.notify();
-                }
-                view.focus_handle.focus(window, cx);
-            });
-            cx.notify();
-            return true;
-        }
+    /// Open the highlighted item's submenu at once and move the focus into it,
+    /// with its first item highlighted.
+    fn open_selected_submenu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(ix) = self.selected_index else {
+            return false;
+        };
+        let Some(submenu) = self
+            .menu_items
+            .get(ix)
+            .filter(|item| item.is_clickable())
+            .and_then(|item| match item {
+                PopupMenuItem::Submenu { menu, .. } => Some(menu.clone()),
+                _ => None,
+            })
+        else {
+            return false;
+        };
 
-        return false;
+        if self.submenu_index != Some(ix) {
+            self.close_submenu(cx);
+            self.open_submenu_at(ix, cx);
+        }
+        // Focus the submenu, so that can be handle the action.
+        submenu.update(cx, |view, cx| {
+            view.highlight_edge(MenuEdge::First, cx);
+            view.focus_handle.focus(window, cx);
+            cx.notify();
+        });
+        cx.notify();
+        true
     }
 
-    fn _unselect_submenu(&mut self, _: &mut Window, cx: &mut Context<Self>) -> bool {
-        if let Some(active_submenu) = self.active_submenu() {
-            active_submenu.update(cx, |view, cx| {
-                view.selected_index = None;
-                cx.notify();
-            });
-            return true;
-        }
+    fn open_submenu_at(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.submenu_open_task = None;
+        self.submenu_index = Some(ix);
+        self.submenu_apex = None;
+        self.submenu_rest_task = None;
+        self.on_submenu_item = self.hovered_index == Some(ix);
+        cx.notify();
+    }
 
-        return false;
+    /// Close the open submenu, if any, and say whether there was one.
+    fn close_open_submenu(&mut self, cx: &mut Context<Self>) -> bool {
+        let open = self.submenu_index.is_some();
+        self.close_submenu(cx);
+        open
+    }
+
+    /// Close the open submenu and the ones open from it.
+    ///
+    /// Not for a submenu to call on its parent: the parent would update the
+    /// submenu while it is already being updated. It calls
+    /// [`Self::forget_submenu`] on the parent instead.
+    fn close_submenu(&mut self, cx: &mut Context<Self>) {
+        if let Some(submenu) = self.active_submenu() {
+            submenu.update(cx, |submenu, cx| {
+                submenu.selected_index = None;
+                submenu.hovered_index = None;
+                submenu.close_submenu(cx);
+            });
+            cx.notify();
+        }
+        self.forget_submenu();
+    }
+
+    /// Clear this menu's record of its open submenu, leaving the submenu's
+    /// own state alone.
+    fn forget_submenu(&mut self) {
+        self.submenu_index = None;
+        self.submenu_open_task = None;
+        self.on_submenu_item = false;
+        self.submenu_apex = None;
+        self.submenu_rest_task = None;
     }
 
     fn _focus_parent_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1127,11 +1428,217 @@ impl PopupMenu {
             return;
         };
 
+        // Going back closes this submenu, as Base UI's and native menus do.
         self.selected_index = None;
+        self.hovered_index = None;
+        self.close_submenu(cx);
         parent.update(cx, |view, cx| {
+            view.forget_submenu();
             view.focus_handle.focus(window, cx);
             cx.notify();
         });
+    }
+
+    /// The pointer settled on item `ix`: it takes the highlight, closes a
+    /// submenu open from another item, and a submenu item opens its own after
+    /// [`SUBMENU_OPEN_DELAY`].
+    fn point_at(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.submenu_index != Some(ix) {
+            // Pointing elsewhere closes the open submenu; take back the focus
+            // the keyboard may have moved into it.
+            if self
+                .active_submenu()
+                .is_some_and(|submenu| submenu.focus_handle(cx).contains_focused(window, cx))
+            {
+                self.focus_handle.focus(window, cx);
+            }
+            self.close_submenu(cx);
+            if self
+                .menu_items
+                .get(ix)
+                .is_some_and(|item| item.is_submenu() && item.is_clickable())
+            {
+                self.submenu_open_task = Some(cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor().timer(SUBMENU_OPEN_DELAY).await;
+                    _ = this.update(cx, |menu, cx| {
+                        if menu.selected_index == Some(ix) && menu.hovered_index == Some(ix) {
+                            menu.open_submenu_at(ix, cx);
+                        }
+                    });
+                }));
+            }
+        }
+        self.selected_index = Some(ix);
+        cx.notify();
+    }
+
+    fn on_item_hover(
+        &mut self,
+        ix: usize,
+        hovered: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if hovered {
+            self.hovered_index = Some(ix);
+            // On its way to the open submenu, the pointer crosses siblings
+            // without taking the highlight.
+            if self.submenu_apex.is_none() {
+                self.point_at(ix, window, cx);
+            }
+        } else {
+            if self.hovered_index == Some(ix) {
+                self.hovered_index = None;
+            }
+            // The open submenu's item keeps its highlight; any other loses
+            // it, and a submenu item waiting to open no longer does.
+            if self.submenu_index != Some(ix)
+                && self.selected_index == Some(ix)
+                // A key press ends hover under a still pointer; keep the
+                // highlight so the next arrow key moves on from this item.
+                && !window.last_input_was_keyboard()
+            {
+                self.selected_index = None;
+                self.submenu_open_task = None;
+            }
+        }
+        cx.notify();
+    }
+
+    /// The pointer moved while a submenu is open. Once it leaves the
+    /// submenu's item, it is judged on every move: while it heads for the
+    /// submenu, the submenu stays and siblings wait; once it turns away, the
+    /// item under it takes over. Resting on the way hands over after
+    /// [`SUBMENU_REST_DELAY`].
+    fn on_travel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(ix), Some(submenu)) = (self.submenu_index, self.active_submenu()) else {
+            return;
+        };
+        let pointer = window.mouse_position();
+        let on_item = self
+            .item_bounds
+            .borrow()
+            .get(ix)
+            .is_some_and(|bounds| bounds.contains(&pointer));
+        if on_item {
+            self.on_submenu_item = true;
+            self.submenu_apex = None;
+            self.submenu_rest_task = None;
+            return;
+        }
+        if std::mem::take(&mut self.on_submenu_item) {
+            self.submenu_apex = Some(pointer);
+        }
+        let Some(apex) = self.submenu_apex else {
+            return;
+        };
+
+        let popup = submenu.read(cx).bounds;
+        if popup.contains(&pointer) {
+            // Arrived.
+            self.submenu_apex = None;
+            self.submenu_rest_task = None;
+        } else if hover_intent::heading_to(apex, popup, pointer) {
+            self.submenu_rest_task = Some(cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor().timer(SUBMENU_REST_DELAY).await;
+                _ = this.update_in(cx, |menu, window, cx| {
+                    if menu.submenu_apex.is_some() {
+                        menu.end_travel(window, cx);
+                    }
+                });
+            }));
+        } else {
+            self.submenu_rest_task = None;
+            self.end_travel(window, cx);
+        }
+    }
+
+    /// The pointer is no longer on its way to the submenu: the item under it,
+    /// if any, takes over.
+    fn end_travel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.submenu_apex = None;
+        if let Some(ix) = self
+            .hovered_index
+            .filter(|ix| Some(*ix) != self.submenu_index)
+        {
+            self.point_at(ix, window, cx);
+        }
+    }
+
+    /// Activate the item under the pointer as the press that opened the menu
+    /// is released over it.
+    fn release_on_hovered(
+        &mut self,
+        event: &MouseUpEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ix) = self.hovered_index else {
+            return;
+        };
+        // A submenu's item already opens it under the pointer.
+        if !self
+            .menu_items
+            .get(ix)
+            .is_some_and(|item| item.is_clickable() && !item.is_submenu())
+        {
+            return;
+        }
+        let click = ClickEvent::Mouse(MouseClickEvent {
+            down: MouseDownEvent {
+                button: event.button,
+                position: event.position,
+                modifiers: event.modifiers,
+                click_count: 1,
+                first_mouse: false,
+            },
+            up: event.clone(),
+        });
+        self.selected_index = Some(ix);
+        self.activate(&click, window, cx);
+    }
+
+    /// Follows the pointer for the open submenu and the press that opened
+    /// the menu, in window listeners painted over this menu.
+    fn render_pointer_watcher(&self, cx: &Context<Self>) -> impl IntoElement {
+        let menu = cx.entity().downgrade();
+        let travels = self.submenu_index.is_some();
+        let release = self.release_button;
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                if travels {
+                    let menu = menu.clone();
+                    window.on_mouse_event(move |_: &MouseMoveEvent, phase, window, cx| {
+                        if phase == DispatchPhase::Capture {
+                            menu.update(cx, |menu, cx| menu.on_travel(window, cx)).ok();
+                        }
+                    });
+                }
+                if let Some(button) = release {
+                    let pressed = menu.clone();
+                    window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                        if phase == DispatchPhase::Capture {
+                            pressed
+                                .update(cx, |menu, _| menu.release_button = None)
+                                .ok();
+                        }
+                    });
+                    window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                        if phase == DispatchPhase::Capture
+                            && event.button == button
+                            && let Some(menu) = menu.upgrade()
+                        {
+                            release_press(&menu, event, window, cx);
+                        }
+                    });
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
     }
 
     fn parent_side(&self, cx: &App) -> Side {
@@ -1156,6 +1663,13 @@ impl PopupMenu {
     /// The submenu is closed together with its parent, same as macOS menus.
     fn dismiss(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
         self.selected_index = None;
+        self.hovered_index = None;
+        self.release_button = None;
+        self.typeahead.clear();
+        self.typeahead_task = None;
+        // Not `close_submenu`: the submenu may be the one dismissing, and is
+        // already being updated.
+        self.forget_submenu();
         cx.emit(DismissEvent);
 
         // Focus back to the previous focused handle, unless the item's click
@@ -1282,7 +1796,7 @@ impl PopupMenu {
         // edge, it would run past the window's. Its width is the one it was
         // last drawn at, or this menu's own until it has been drawn.
         let submenu_width = self
-            .selected_index
+            .submenu_index
             .and_then(|ix| match self.menu_items.get(ix) {
                 Some(PopupMenuItem::Submenu { menu, .. }) => Some(menu.read(cx).bounds.size.width),
                 _ => None,
@@ -1324,10 +1838,23 @@ impl PopupMenu {
         };
 
         let selected = self.selected_index == Some(ix);
+        let submenu_open = self.submenu_index == Some(ix);
         const EDGE_PADDING: Pixels = px(4.);
         const INNER_PADDING: Rems = rems(0.5);
 
-        let is_submenu = matches!(item, PopupMenuItem::Submenu { .. });
+        let item_bounds = self.item_bounds.clone();
+        let bounds_recorder = canvas(
+            move |bounds, _, _| {
+                if let Some(slot) = item_bounds.borrow_mut().get_mut(ix) {
+                    *slot = bounds;
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
 
         let (item_height, radius) = match self.size {
             Size::Small => (rems(1.25), options.radius.half()),
@@ -1343,33 +1870,11 @@ impl PopupMenu {
             .items_center()
             .selected(selected)
             .on_hover(cx.listener(move |this, hovered, window, cx| {
-                if *hovered {
-                    // Pointing elsewhere closes the open submenu; take back
-                    // the focus the keyboard may have moved into it.
-                    if this.selected_index != Some(ix)
-                        && this.active_submenu().is_some_and(|submenu| {
-                            submenu.focus_handle(cx).contains_focused(window, cx)
-                        })
-                    {
-                        this.focus_handle.focus(window, cx);
-                    }
-                    this.selected_index = Some(ix);
-                } else if !is_submenu
-                    && this.selected_index == Some(ix)
-                    // A key press ends hover under a still pointer; keep the
-                    // highlight so the next arrow key moves on from this item.
-                    && !window.last_input_was_keyboard()
-                {
-                    // TODO: Better handle the submenu unselection when hover out
-                    this.selected_index = None;
-                }
-
-                cx.notify();
+                this.on_item_hover(ix, *hovered, window, cx)
             }))
             .when_some(item.a11y_label(), |this, label| this.aria_label(label))
-            .checked(
-                (item.is_checked() || self.checkable.contains(&ix)).then(|| item.is_checked()),
-            );
+            .checked((item.is_checked() || self.checkable.contains(&ix)).then(|| item.is_checked()))
+            .child(bounds_recorder);
 
         match item {
             PopupMenuItem::Separator => this
@@ -1479,7 +1984,7 @@ impl PopupMenu {
                         this.on_click(ix, event, window, cx)
                     }))
                 })
-                .selected(selected)
+                .selected(selected || submenu_open)
                 .disabled(*disabled)
                 .items_start()
                 .child(
@@ -1509,7 +2014,7 @@ impl PopupMenu {
                                 ),
                         ),
                 )
-                .when(selected, |this| {
+                .when(submenu_open, |this| {
                     this.child({
                         let (anchor, left) = self.submenu_anchor;
                         let is_bottom_pos =
@@ -1577,6 +2082,10 @@ impl Render for PopupMenu {
 
         let view = cx.entity().clone();
         let items_count = self.menu_items.len();
+        self.item_bounds
+            .borrow_mut()
+            .resize(items_count, Bounds::default());
+        let watches_pointer = self.submenu_index.is_some() || self.release_button.is_some();
 
         let max_height = self.max_height.unwrap_or_else(|| {
             let window_half_height = window.window_bounds().get_bounds().size.height * 0.5;
@@ -1604,8 +2113,11 @@ impl Render for PopupMenu {
             .on_action(cx.listener(Self::select_down))
             .on_action(cx.listener(Self::select_left))
             .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_first))
+            .on_action(cx.listener(Self::select_last))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::dismiss))
+            .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down_out(cx.listener(Self::on_mouse_down_out))
             .popover_style(cx)
             .text_color(cx.theme().popover_foreground)
@@ -1654,18 +2166,147 @@ impl Render for PopupMenu {
             .when(self.scrollable, |this| {
                 this.vertical_scrollbar(&self.scroll_handle)
             })
+            .when(watches_pointer, |this| {
+                this.child(self.render_pointer_watcher(cx))
+            })
+    }
+}
+
+/// The press that opened the menu was released: the item under the pointer,
+/// in this menu or one of its open submenus, is activated. Each menu is
+/// updated on its own, so a submenu dismissing the chain can update its
+/// parents.
+fn release_press(
+    root: &Entity<PopupMenu>,
+    event: &MouseUpEvent,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    // The listener may outlive the press it was painted for, in a frame
+    // replayed from the cache, so the menu says whether it is still armed.
+    if root.read(cx).release_button != Some(event.button) {
+        return;
+    }
+    root.update(cx, |menu, _| menu.release_button = None);
+    let mut menu = Some(root.clone());
+    while let Some(current) = menu {
+        if current.read(cx).hovered_index.is_some() {
+            current.update(cx, |menu, cx| menu.release_on_hovered(event, window, cx));
+            return;
+        }
+        menu = current.read(cx).active_submenu();
+    }
+}
+
+#[cfg(test)]
+impl PopupMenu {
+    /// The highlighted item, for tests outside this module.
+    pub(crate) fn highlighted(&self) -> Option<usize> {
+        self.selected_index
+    }
+
+    /// Whether item `ix` shows a check mark, for tests outside this module.
+    pub(crate) fn is_item_checked(&self, ix: usize) -> bool {
+        self.menu_items
+            .get(ix)
+            .is_some_and(PopupMenuItem::is_checked)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{Modifiers, TestAppContext, VisualTestContext, actions, point};
+    use std::cell::Cell;
+
+    actions!(popup_menu_test, [Noop]);
+
+    /// Lets `ms` of timers run, then draws.
+    fn settle(cx: &mut VisualTestContext, ms: u64) {
+        cx.executor().advance_clock(Duration::from_millis(ms));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    fn item_bounds(
+        menu: &Entity<PopupMenu>,
+        ix: usize,
+        cx: &mut VisualTestContext,
+    ) -> Bounds<Pixels> {
+        menu.read_with(cx, |menu, _| menu.item_bounds.borrow()[ix])
+    }
+
+    /// The highlighted item and the item whose submenu is open.
+    fn highlight_and_submenu(
+        menu: &Entity<PopupMenu>,
+        cx: &mut VisualTestContext,
+    ) -> (Option<usize>, Option<usize>) {
+        menu.read_with(cx, |menu, _| (menu.selected_index, menu.submenu_index))
+    }
+
+    /// A menu whose second item, "More", opens a submenu taller than the
+    /// items below it.
+    fn submenu_harness(cx: &mut TestAppContext) -> (Entity<PopupMenu>, &mut VisualTestContext) {
+        cx.update(crate::init);
+        let (menu, cx) = cx.add_window_view(|window, cx| {
+            PopupMenu::new(cx)
+                .menu("Alpha", Box::new(Noop))
+                .submenu("More", window, cx, |menu, _, _| {
+                    menu.menu("One", Box::new(Noop))
+                        .menu("Two", Box::new(Noop))
+                        .menu("Three", Box::new(Noop))
+                        .menu("Four", Box::new(Noop))
+                        .menu("Five", Box::new(Noop))
+                })
+                .menu("Beta", Box::new(Noop))
+                .menu("Gamma", Box::new(Noop))
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        (menu, cx)
+    }
+
+    /// Hovers "More" until its submenu opens; returns the submenu's bounds.
+    fn open_more(menu: &Entity<PopupMenu>, cx: &mut VisualTestContext) -> Bounds<Pixels> {
+        let more = item_bounds(menu, 1, cx);
+        cx.simulate_mouse_move(more.center(), None, Modifiers::default());
+        settle(cx, 100);
+        assert_eq!(highlight_and_submenu(menu, cx), (Some(1), Some(1)));
+        menu.read_with(cx, |menu, cx| {
+            menu.active_submenu()
+                .expect("the submenu is open")
+                .read(cx)
+                .bounds
+        })
+    }
+
+    /// A menu built by `build`, focused and drawn.
+    fn focused_menu(
+        cx: &mut TestAppContext,
+        build: impl FnOnce(PopupMenu) -> PopupMenu + 'static,
+    ) -> (Entity<PopupMenu>, &mut VisualTestContext) {
+        cx.update(crate::init);
+        let (menu, cx) = cx.add_window_view(move |_, cx| build(PopupMenu::new(cx)));
+        cx.update(|window, cx| {
+            let focus = menu.read(cx).focus_handle.clone();
+            focus.focus(window, cx);
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        (menu, cx)
+    }
+
+    fn highlighted(menu: &Entity<PopupMenu>, cx: &mut VisualTestContext) -> Option<usize> {
+        menu.read_with(cx, |menu, _| menu.selected_index)
+    }
+
+    fn fruit(menu: PopupMenu) -> PopupMenu {
+        menu.menu("Apple", Box::new(Noop))
+            .menu("Banana", Box::new(Noop))
+            .menu("Blueberry", Box::new(Noop))
+            .menu("Cherry", Box::new(Noop))
+    }
 
     #[gpui::test]
     fn custom_menu_item_preserves_mouse_event(cx: &mut gpui::TestAppContext) {
-        use gpui::{Modifiers, MouseButton, MouseUpEvent};
-        use std::cell::RefCell;
-
         cx.update(crate::init);
         let events = Rc::new(RefCell::new(Vec::new()));
         let (_, cx) = cx.add_window_view({
@@ -1726,5 +2367,230 @@ mod tests {
         );
         assert_eq!(PopupMenuItem::separator().a11y_label(), None);
         assert_eq!(PopupMenuItem::element(|_, _| div()).a11y_label(), None);
+    }
+
+    #[gpui::test]
+    fn a_submenu_opens_after_its_item_is_hovered_for_100ms(cx: &mut TestAppContext) {
+        let (menu, cx) = submenu_harness(cx);
+        let more = item_bounds(&menu, 1, cx);
+
+        cx.simulate_mouse_move(more.center(), None, Modifiers::default());
+        settle(cx, 60);
+        assert_eq!(
+            highlight_and_submenu(&menu, cx),
+            (Some(1), None),
+            "the item is highlighted at once, its submenu not yet open"
+        );
+
+        settle(cx, 40);
+        assert_eq!(highlight_and_submenu(&menu, cx), (Some(1), Some(1)));
+    }
+
+    #[gpui::test]
+    fn moving_diagonally_across_a_sibling_toward_the_submenu_keeps_it_open(
+        cx: &mut TestAppContext,
+    ) {
+        let (menu, cx) = submenu_harness(cx);
+        let submenu = open_more(&menu, cx);
+        let more = item_bounds(&menu, 1, cx);
+        let beta = item_bounds(&menu, 2, cx);
+        assert!(
+            submenu.bottom() > beta.bottom(),
+            "the submenu reaches below the sibling"
+        );
+
+        let start = more.center();
+        let end = point(submenu.left(), submenu.bottom() - px(4.));
+        let mut crossed_sibling = false;
+        for step in 1..=6 {
+            let t = step as f32 / 7.;
+            let at = point(
+                start.x + (end.x - start.x) * t,
+                start.y + (end.y - start.y) * t,
+            );
+            crossed_sibling |= beta.contains(&at);
+            cx.simulate_mouse_move(at, None, Modifiers::default());
+            settle(cx, 30);
+            assert_eq!(
+                highlight_and_submenu(&menu, cx),
+                (Some(1), Some(1)),
+                "the sibling took over at step {step}"
+            );
+        }
+        assert!(
+            crossed_sibling,
+            "the way to the submenu crosses the sibling"
+        );
+
+        cx.simulate_mouse_move(
+            point(submenu.left() + px(10.), submenu.bottom() - px(10.)),
+            None,
+            Modifiers::default(),
+        );
+        settle(cx, 300);
+        assert_eq!(highlight_and_submenu(&menu, cx), (Some(1), Some(1)));
+    }
+
+    #[gpui::test]
+    fn resting_on_a_sibling_on_the_way_to_a_submenu_hands_it_the_highlight_after_100ms(
+        cx: &mut TestAppContext,
+    ) {
+        let (menu, cx) = submenu_harness(cx);
+        open_more(&menu, cx);
+        let beta = item_bounds(&menu, 2, cx);
+
+        cx.simulate_mouse_move(beta.center(), None, Modifiers::default());
+        settle(cx, 60);
+        assert_eq!(
+            highlight_and_submenu(&menu, cx),
+            (Some(1), Some(1)),
+            "still on its way"
+        );
+
+        settle(cx, 40);
+        assert_eq!(highlight_and_submenu(&menu, cx), (Some(2), None));
+    }
+
+    #[gpui::test]
+    fn turning_away_from_a_submenu_onto_a_sibling_closes_it_at_once(cx: &mut TestAppContext) {
+        let (menu, cx) = submenu_harness(cx);
+        open_more(&menu, cx);
+        let beta = item_bounds(&menu, 2, cx);
+        let gamma = item_bounds(&menu, 3, cx);
+
+        cx.simulate_mouse_move(
+            point(beta.left() + px(40.), beta.center().y),
+            None,
+            Modifiers::default(),
+        );
+        settle(cx, 0);
+        assert_eq!(highlight_and_submenu(&menu, cx), (Some(1), Some(1)));
+
+        // Down and back, away from the submenu on the right.
+        cx.simulate_mouse_move(
+            point(gamma.left() + px(10.), gamma.center().y),
+            None,
+            Modifiers::default(),
+        );
+        settle(cx, 0);
+        assert_eq!(highlight_and_submenu(&menu, cx), (Some(3), None));
+    }
+
+    #[gpui::test]
+    fn typing_highlights_the_first_item_starting_with_the_typed_text(cx: &mut TestAppContext) {
+        let (menu, cx) = focused_menu(cx, fruit);
+
+        cx.simulate_keystrokes("b l");
+
+        assert_eq!(highlighted(&menu, cx), Some(2), "Blueberry");
+    }
+
+    #[gpui::test]
+    fn typing_one_letter_again_and_again_cycles_through_the_items_starting_with_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (menu, cx) = focused_menu(cx, fruit);
+
+        cx.simulate_keystrokes("b");
+        assert_eq!(highlighted(&menu, cx), Some(1), "Banana");
+        cx.simulate_keystrokes("b");
+        assert_eq!(highlighted(&menu, cx), Some(2), "Blueberry");
+        cx.simulate_keystrokes("b");
+        assert_eq!(highlighted(&menu, cx), Some(1), "back to Banana");
+    }
+
+    #[gpui::test]
+    fn typing_skips_disabled_items_and_separators(cx: &mut TestAppContext) {
+        let (menu, cx) = focused_menu(cx, |menu| {
+            menu.menu("Apple", Box::new(Noop))
+                .menu_with_disabled("Banana", Box::new(Noop), true)
+                .separator()
+                .menu("Blueberry", Box::new(Noop))
+        });
+
+        cx.simulate_keystrokes("b");
+
+        assert_eq!(highlighted(&menu, cx), Some(3), "Blueberry");
+    }
+
+    #[gpui::test]
+    fn typed_text_is_forgotten_after_half_a_second_without_typing(cx: &mut TestAppContext) {
+        let (menu, cx) = focused_menu(cx, fruit);
+
+        cx.simulate_keystrokes("b");
+        assert_eq!(highlighted(&menu, cx), Some(1), "Banana");
+        cx.executor().advance_clock(TYPEAHEAD_RESET_DELAY);
+        cx.run_until_parked();
+        // Typed within the delay, "a" would extend the search and stay on
+        // Banana; after it, a fresh "a" goes to Apple.
+        cx.simulate_keystrokes("a");
+
+        assert_eq!(highlighted(&menu, cx), Some(0), "Apple");
+    }
+
+    #[gpui::test]
+    fn home_and_end_highlight_the_first_and_last_enabled_items(cx: &mut TestAppContext) {
+        let (menu, cx) = focused_menu(cx, |menu| {
+            menu.menu_with_disabled("Zero", Box::new(Noop), true)
+                .menu("One", Box::new(Noop))
+                .menu("Two", Box::new(Noop))
+                .menu_with_disabled("Three", Box::new(Noop), true)
+        });
+
+        cx.simulate_keystrokes("end");
+        assert_eq!(highlighted(&menu, cx), Some(2));
+        cx.simulate_keystrokes("home");
+        assert_eq!(highlighted(&menu, cx), Some(1));
+    }
+
+    /// Counts the menu's dismissals.
+    fn count_dismissals(
+        menu: &Entity<PopupMenu>,
+        cx: &mut VisualTestContext,
+    ) -> (Rc<Cell<usize>>, Subscription) {
+        let dismissed = Rc::new(Cell::new(0));
+        let subscription = cx.update(|_, cx| {
+            let dismissed = dismissed.clone();
+            cx.subscribe(menu, move |_, _: &DismissEvent, _| {
+                dismissed.set(dismissed.get() + 1)
+            })
+        });
+        (dismissed, subscription)
+    }
+
+    #[gpui::test]
+    fn choosing_an_option_leaves_the_menu_open(cx: &mut TestAppContext) {
+        let (menu, cx) = focused_menu(cx, |menu| {
+            menu.menu_with_check("Wrap lines", false, Box::new(Noop))
+                .menu("Close", Box::new(Noop))
+        });
+        let (dismissed, _subscription) = count_dismissals(&menu, cx);
+
+        cx.simulate_keystrokes("down enter");
+
+        assert_eq!(dismissed.get(), 0);
+        assert!(
+            menu.read_with(cx, |menu, _| menu.is_stale()),
+            "its owner is asked to show the new state"
+        );
+        cx.update(|window, cx| {
+            assert!(
+                menu.read(cx).focus_handle.is_focused(window),
+                "it keeps the focus"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn choosing_a_plain_item_closes_the_menu(cx: &mut TestAppContext) {
+        let (menu, cx) = focused_menu(cx, |menu| {
+            menu.menu_with_check("Wrap lines", false, Box::new(Noop))
+                .menu("Close", Box::new(Noop))
+        });
+        let (dismissed, _subscription) = count_dismissals(&menu, cx);
+
+        cx.simulate_keystrokes("down down enter");
+
+        assert_eq!(dismissed.get(), 1);
     }
 }

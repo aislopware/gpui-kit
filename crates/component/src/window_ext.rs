@@ -49,11 +49,14 @@ pub trait WindowExt: Sized {
     /// Creating them with `cx.new(...)` inside the builder replaces them on
     /// each rebuild and loses their editing state.
     ///
-    /// `open_dialog` initially focuses the dialog shell, replacing any focus
-    /// set before the call. To choose initial content focus, set it only on
-    /// the builder's first invocation, with a guard captured separately for
-    /// each opening. Never focus unconditionally on subsequent rebuilds: that
-    /// would steal focus from another control or a nested dialog.
+    /// `open_dialog` focuses the dialog shell, replacing any focus set before
+    /// the call, and once its content is drawn hands the focus to the first
+    /// control that takes Tab, as Base UI does (the shell keeps it when there is
+    /// none). To focus another control first, set it only on the builder's
+    /// first invocation, with a guard captured separately for each opening;
+    /// focus set that way is left where it is. Never focus unconditionally on
+    /// subsequent rebuilds: that would steal focus from another control or a
+    /// nested dialog.
     ///
     /// # Examples
     ///

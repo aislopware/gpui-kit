@@ -1,19 +1,25 @@
 use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
 
 use gpui::{
-    AnyElement, App, ElementId, InteractiveElement as _, IntoElement, ParentElement, RenderOnce,
-    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
-    percentage, prelude::FluentBuilder as _, rems,
+    AnyElement, App, ElementId, FocusHandle, InteractiveElement as _, IntoElement, ParentElement,
+    RenderOnce, SharedString, StyleRefinement, Styled, Window, div, percentage,
+    prelude::FluentBuilder as _, rems,
 };
 
-use crate::{ActiveTheme as _, Icon, IconName, Sizable, Size, StyledExt as _, h_flex};
+use crate::{
+    ActiveTheme as _, Icon, IconName, Sizable, Size, StyledExt as _, ThemeStyled as _, h_flex,
+};
 use gpui_base::{
     Accordion as BaseAccordion, AccordionHeader as BaseAccordionHeader,
     AccordionItem as BaseAccordionItem, AccordionPanel as BaseAccordionPanel, AccordionTrigger,
-    MotionReveal, spring,
+    MotionReveal, RovingFocus, RovingOrientation, spring,
 };
 
 /// Accordion element.
+///
+/// Each enabled item's title row is a stop in the window's Tab order and
+/// toggles with Enter or Space; Up and Down move between the title rows,
+/// wrapping at either end, and Home and End jump to the first and last.
 #[derive(IntoElement)]
 pub struct Accordion {
     id: ElementId,
@@ -95,12 +101,34 @@ impl Styled for Accordion {
 }
 
 impl RenderOnce for Accordion {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let open_indices = Rc::new(RefCell::new(HashSet::new()));
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let open_indices: Rc<RefCell<HashSet<usize>>> = Rc::new(RefCell::new(
+            self.children
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| item.open)
+                .map(|(ix, _)| ix)
+                .collect(),
+        ));
         let multiple = self.multiple;
         let last_ix = self.children.len().saturating_sub(1);
+        let roving = RovingFocus::new(
+            ElementId::NamedChild(Arc::new(self.id.clone()), "roving-focus".into()),
+            self.children.len(),
+            window,
+            cx,
+        )
+        .orientation(RovingOrientation::Vertical)
+        .single_tab_stop(false)
+        .disabled_items(
+            self.children
+                .iter()
+                .map(|item| self.disabled || item.disabled),
+        );
+        let on_toggle = self.on_toggle_click.filter(|_| !self.disabled);
 
         BaseAccordion::new(self.id)
+            .roving_focus(roving.clone())
             .v_flex()
             .size_full()
             // The bordered accordion is a single rounded card, the items are
@@ -117,41 +145,39 @@ impl RenderOnce for Accordion {
                     .into_iter()
                     .enumerate()
                     .map(|(ix, accordion)| {
-                        if accordion.open {
-                            open_indices.borrow_mut().insert(ix);
-                        }
                         let disabled = self.disabled || accordion.disabled;
-
-                        accordion
+                        let mut accordion = accordion
                             .index(ix)
                             .last(ix == last_ix)
                             .with_size(self.size)
                             .disabled(disabled)
                             .on_toggle_click({
                                 let open_indices = open_indices.clone();
-                                move |open, _, _| {
-                                    let mut open_indices = open_indices.borrow_mut();
-                                    if *open {
-                                        if !multiple {
-                                            open_indices.clear();
+                                let on_toggle = on_toggle.clone();
+                                // Called from the trigger itself, so a press
+                                // from the keyboard reports the change just as
+                                // a pointer press does.
+                                move |open, window, cx| {
+                                    let indices = {
+                                        let mut open_indices = open_indices.borrow_mut();
+                                        if *open {
+                                            if !multiple {
+                                                open_indices.clear();
+                                            }
+                                            open_indices.insert(ix);
+                                        } else {
+                                            open_indices.remove(&ix);
                                         }
-                                        open_indices.insert(ix);
-                                    } else {
-                                        open_indices.remove(&ix);
+                                        open_indices.iter().copied().collect::<Vec<_>>()
+                                    };
+                                    if let Some(on_toggle) = &on_toggle {
+                                        on_toggle(&indices, window, cx);
                                     }
                                 }
-                            })
+                            });
+                        accordion.focus_handle = Some(roving.focus_handle(ix));
+                        accordion
                     }),
-            )
-            .when_some(
-                self.on_toggle_click.filter(|_| !self.disabled),
-                |this, on_toggle| {
-                    this.on_click(move |_, window, cx| {
-                        let open_indices =
-                            open_indices.borrow().iter().copied().collect::<Vec<_>>();
-                        on_toggle(&open_indices, window, cx)
-                    })
-                },
             )
     }
 }
@@ -172,6 +198,8 @@ pub struct AccordionItem {
     size: Size,
     disabled: bool,
     on_toggle_click: Option<Arc<dyn Fn(&bool, &mut Window, &mut App)>>,
+    /// The handle the [`Accordion`]'s roving focus gives the title row.
+    focus_handle: Option<FocusHandle>,
 }
 
 impl AccordionItem {
@@ -191,6 +219,7 @@ impl AccordionItem {
             disabled: false,
             on_toggle_click: None,
             size: Size::default(),
+            focus_handle: None,
         }
     }
 
@@ -290,9 +319,16 @@ impl RenderOnce for AccordionItem {
             window,
             cx,
         );
+        let focused = self
+            .focus_handle
+            .as_ref()
+            .is_some_and(|handle| handle.is_focused(window));
         let trigger = AccordionTrigger::new(("trigger", self.index))
             .open(self.open)
             .disabled(self.disabled)
+            .when_some(self.focus_handle.clone(), |this, handle| {
+                this.track_focus(&handle)
+            })
             .h_flex()
             .justify_between()
             .gap_3()
@@ -305,6 +341,9 @@ impl RenderOnce for AccordionItem {
             })
             .when(self.open, |this| this.text_color(cx.theme().foreground))
             .refine_style(&self.title_style)
+            .when(focused && !self.disabled, |this| {
+                this.focus_ring_style(window, cx)
+            })
             .child(
                 h_flex()
                     .flex_1()
@@ -480,6 +519,50 @@ mod tests {
         assert!(
             closing_frames > 1,
             "content unmounted before the reveal ran"
+        );
+    }
+
+    /// Two items that report what the accordion asks to open.
+    struct Keyboard(Rc<RefCell<Vec<Vec<usize>>>>);
+
+    impl Render for Keyboard {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let toggles = self.0.clone();
+            Accordion::new("accordion-keyboard")
+                .w(px(240.))
+                .item(|item| item.title("First"))
+                .item(|item| item.title("Second"))
+                .on_toggle_click(move |open, _, _| toggles.borrow_mut().push(open.to_vec()))
+        }
+    }
+
+    #[gpui::test]
+    fn the_keyboard_moves_between_titles_and_toggles_them(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+        let toggles = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view({
+            let toggles = toggles.clone();
+            move |_, _| Keyboard(toggles)
+        });
+        cx.update(|window, cx| {
+            crate::test_redraw(window, cx);
+            window.focus_next(cx);
+        });
+        cx.simulate_keystrokes("down");
+        cx.update(|window, cx| crate::test_redraw(window, cx));
+
+        let keystroke = gpui::Keystroke::parse("enter").unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+
+        assert_eq!(
+            *toggles.borrow(),
+            vec![vec![1]],
+            "Enter opened the second item"
         );
     }
 }

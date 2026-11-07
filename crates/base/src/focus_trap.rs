@@ -246,6 +246,52 @@ impl<E: InteractiveElement + ParentElement + Styled + Element + 'static> Element
     }
 }
 
+/// Moves the focus from a container that just opened to the first control
+/// inside it that takes Tab, as Base UI does when a dialog or popover opens;
+/// with none, the focus stays on the container.
+///
+/// The first control is known only from the tab order of a frame that drew
+/// the container's content, so [`InitialFocus::render`], called as the
+/// container renders, waits one frame after it is armed and moves the focus in
+/// the next. Focus that moved elsewhere meanwhile (a caller that chose the
+/// first control itself) is left where it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InitialFocus {
+    /// Nothing to do.
+    #[default]
+    Idle,
+    /// Opened: the next render draws the content.
+    Armed,
+    /// The content was drawn: the next render moves the focus.
+    Drawn,
+}
+
+impl InitialFocus {
+    /// Called on every render of the container while it is open.
+    pub fn render(&mut self, container: &FocusHandle, window: &mut Window, cx: &mut App) {
+        match *self {
+            Self::Idle => {}
+            // Content that moved the focus off the container as it was
+            // built chose its own start.
+            Self::Armed if !container.is_focused(window) => *self = Self::Idle,
+            Self::Armed => {
+                *self = Self::Drawn;
+                // Ask for the frame that will see the content's tab stops.
+                cx.notify(window.current_view());
+            }
+            Self::Drawn => {
+                *self = Self::Idle;
+                if container.is_focused(window) {
+                    window.focus_next(cx);
+                    if !container.contains_focused(window, cx) {
+                        container.focus(window, cx);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Returns the focus handle for the active focus trap, if any.
 #[doc(hidden)]
 pub fn active_focus_trap(window: &Window, cx: &App) -> Option<FocusHandle> {

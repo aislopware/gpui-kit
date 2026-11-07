@@ -76,7 +76,21 @@ where
         let focus_handle = cx.focus_handle();
 
         let adapter = SearchableListAdapter::new(delegate, on_confirm, on_cancel, on_render_empty);
-        let list = cx.new(|cx| ListState::new(adapter, window, cx).reset_on_cancel(false));
+        // A select's or combobox's list behaves as Base UI's: the highlight
+        // follows the pointer, typing in an unsearchable list jumps to the item
+        // it begins, and keys and pointer pass over disabled items.
+        let list = cx.new(|cx| {
+            ListState::new(adapter, window, cx)
+                .reset_on_cancel(false)
+                .highlight_on_hover(true)
+                .item_label(|adapter, ix, _| adapter.delegate.item(ix).map(|item| item.title()))
+                .item_enabled(|adapter, ix, cx| {
+                    adapter
+                        .delegate
+                        .item(ix)
+                        .is_some_and(|item| adapter.delegate.is_item_enabled(ix, item, cx))
+                })
+        });
 
         let list_focus_handle = list.read(cx).focus_handle.clone();
         let list_search_focus_handle = list.read(cx).query_input.focus_handle(cx);

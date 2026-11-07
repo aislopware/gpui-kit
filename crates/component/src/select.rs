@@ -457,6 +457,50 @@ where
         });
     }
 
+    /// Typing into a closed select selects the item the typed text begins,
+    /// as a native pop-up button does, without opening the menu.
+    fn typeahead(&mut self, character: char, window: &mut Window, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        let Some(ix) = self
+            .state
+            .list
+            .update(cx, |list, cx| list.typeahead(character, now, cx))
+        else {
+            return;
+        };
+
+        let previous = self.selected_value().cloned();
+        let mut selection = self.state.selection.clone();
+        let changes: Vec<SearchableListChange> = selection
+            .iter()
+            .map(|(ix, _)| SearchableListChange::Deselect { index: *ix })
+            .chain([SearchableListChange::Select { index: ix }])
+            .collect();
+        self.state.list.update(cx, |list, _| {
+            list.delegate_mut()
+                .delegate
+                .on_will_change(&mut selection, &changes)
+        });
+        self.state.selection = selection;
+
+        // A delegate that vetoed the change leaves the cursor on what it kept.
+        let committed_ix = self.state.selection.first().map(|(ix, _)| *ix);
+        let committed = self.state.selection.clone();
+        self.state.list.update(cx, |list, cx| {
+            list.set_selected_index(committed_ix, window, cx);
+            list.delegate_mut()
+                .update_selection_snapshot(committed.clone());
+            list.delegate_mut().delegate.on_confirm(&committed);
+            cx.notify();
+        });
+
+        let value = self.selected_value().cloned();
+        if value != previous {
+            cx.emit(SelectEvent::Confirm(value));
+        }
+        cx.notify();
+    }
+
     fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
         let dismissed = self.state.open && !open;
         self.state.open = open;
@@ -482,27 +526,17 @@ where
                 .unwrap_or_else(|| "Please select".into()),
         );
 
-        let Some(selected_index) = self.selected_index(cx) else {
-            return default_title;
-        };
-
-        let Some(title) = self
-            .state
-            .list
-            .read(cx)
-            .delegate()
-            .delegate
-            .item(selected_index)
-            .map(|item| {
-                if let Some(el) = item.display_title() {
-                    el
-                } else if let Some(prefix) = self.title_prefix.as_ref() {
-                    format!("{}{}", prefix, item.title()).into_any_element()
-                } else {
-                    item.title().into_any_element()
-                }
-            })
-        else {
+        // The committed value, not the highlight, which follows the keys and
+        // the pointer while the menu is open.
+        let Some(title) = self.state.selection.first().map(|(_, item)| {
+            if let Some(el) = item.display_title() {
+                el
+            } else if let Some(prefix) = self.title_prefix.as_ref() {
+                format!("{}{}", prefix, item.title()).into_any_element()
+            } else {
+                item.title().into_any_element()
+            }
+        }) else {
             return default_title;
         };
 
@@ -538,7 +572,7 @@ where
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let searchable = self.searchable;
         let is_focused = self.state.focus_handle.is_focused(window);
-        let show_clean = self.state.cleanable && self.selected_index(cx).is_some();
+        let show_clean = self.state.cleanable && !self.state.selection.is_empty();
         let bounds = self.state.bounds;
         let allow_open = !(self.state.open || self.state.disabled);
         let outline_visible = self.state.open || (is_focused && !self.state.disabled);
@@ -873,7 +907,9 @@ where
         let is_open = self.state.read(cx).state.open;
         let accessibility_value = self.state.read(cx).accessibility_value();
         let content_focus_handle = self.state.read(cx).state.list.focus_handle(cx);
+        let searchable = self.state.read(cx).searchable;
         let open_state = self.state.clone();
+        let typeahead_state = self.state.clone();
 
         BaseSelect::new(self.id)
             .open(is_open)
@@ -891,6 +927,12 @@ where
                     }
                     state.set_open(open, cx);
                 });
+            })
+            // A searchable select types into its search field instead.
+            .when(!searchable, |this| {
+                this.on_typeahead(move |character, window, cx| {
+                    typeahead_state.update(cx, |state, cx| state.typeahead(character, window, cx));
+                })
             })
             .size_full()
             .child(self.state)
@@ -1153,6 +1195,124 @@ mod tests {
             });
             cx.run_until_parked();
             cx.update(|_, cx| assert_eq!(state.read(cx).state.open, unavailable));
+        }
+    }
+
+    /// Typeahead, as a native pop-up button and Base UI's Select have it.
+    mod typeahead {
+        use std::{cell::RefCell, rc::Rc};
+
+        use gpui::{
+            AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+            TestAppContext, VisualTestContext, Window, div, px,
+        };
+
+        use crate::{
+            IndexPath,
+            searchable_list::SearchableVec,
+            select::{Select, SelectEvent, SelectState},
+        };
+
+        type Fruits = SearchableVec<&'static str>;
+        type Confirmed = Rc<RefCell<Vec<Option<&'static str>>>>;
+
+        struct Form {
+            state: Entity<SelectState<Fruits>>,
+        }
+
+        impl Render for Form {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().w(px(240.)).child(Select::new(&self.state))
+            }
+        }
+
+        /// A focused, closed select of fruits with `Apple` selected, and the
+        /// values it confirms.
+        fn form(
+            cx: &mut TestAppContext,
+            searchable: bool,
+        ) -> (
+            Entity<SelectState<Fruits>>,
+            Confirmed,
+            &mut VisualTestContext,
+        ) {
+            cx.update(crate::init);
+            let (form, cx) = cx.add_window_view(|window, cx| {
+                let items = SearchableVec::new(vec!["Apple", "Banana", "Blueberry", "Cherry"]);
+                Form {
+                    state: cx.new(|cx| {
+                        SelectState::new(items, Some(IndexPath::new(0)), window, cx)
+                            .searchable(searchable)
+                    }),
+                }
+            });
+            let state = form.read_with(cx, |form, _| form.state.clone());
+            let confirmed = Confirmed::default();
+            cx.update(|window, cx| {
+                let confirmed = confirmed.clone();
+                cx.subscribe(&state, move |_, event: &SelectEvent<Fruits>, _| {
+                    let SelectEvent::Confirm(value) = event;
+                    confirmed.borrow_mut().push(*value);
+                })
+                .detach();
+                state.update(cx, |state, cx| state.focus(window, cx));
+                window.draw(cx).clear(cx);
+            });
+            (state, confirmed, cx)
+        }
+
+        fn selected(
+            state: &Entity<SelectState<Fruits>>,
+            cx: &mut VisualTestContext,
+        ) -> Option<&'static str> {
+            state.read_with(cx, |state, _| state.selected_value().copied())
+        }
+
+        #[gpui::test]
+        fn typing_into_a_closed_select_selects_the_item_it_begins(cx: &mut TestAppContext) {
+            let (state, confirmed, cx) = form(cx, false);
+            cx.simulate_keystrokes("b->b");
+            assert_eq!(selected(&state, cx), Some("Banana"));
+            cx.simulate_keystrokes("b->b");
+            assert_eq!(
+                selected(&state, cx),
+                Some("Blueberry"),
+                "a repeated `b` moves on"
+            );
+            assert!(
+                !state.read_with(cx, |state, _| state.state.open),
+                "the menu stays closed"
+            );
+            assert_eq!(*confirmed.borrow(), [Some("Banana"), Some("Blueberry")]);
+        }
+
+        #[gpui::test]
+        fn typing_into_an_open_select_highlights_and_enter_commits(cx: &mut TestAppContext) {
+            let (state, confirmed, cx) = form(cx, false);
+            cx.simulate_keystrokes("space");
+            assert!(state.read_with(cx, |state, _| state.state.open));
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+
+            cx.simulate_keystrokes("c->c");
+            assert_eq!(
+                state.read_with(cx, |state, cx| state.selected_index(cx)),
+                Some(IndexPath::new(3)),
+                "`Cherry` is highlighted"
+            );
+            assert_eq!(selected(&state, cx), Some("Apple"), "but not yet selected");
+            assert!(confirmed.borrow().is_empty());
+
+            cx.simulate_keystrokes("enter");
+            assert_eq!(selected(&state, cx), Some("Cherry"));
+            assert!(!state.read_with(cx, |state, _| state.state.open));
+        }
+
+        #[gpui::test]
+        fn a_closed_searchable_select_ignores_typing(cx: &mut TestAppContext) {
+            let (state, confirmed, cx) = form(cx, true);
+            cx.simulate_keystrokes("b->b");
+            assert_eq!(selected(&state, cx), Some("Apple"));
+            assert!(confirmed.borrow().is_empty());
         }
     }
 

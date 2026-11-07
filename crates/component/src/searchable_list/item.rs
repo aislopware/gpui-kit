@@ -109,14 +109,8 @@ impl RenderOnce for SearchableListItemElement {
             .input_text_size(self.size)
             .list_size(self.size)
             .refine_style(&self.style)
-            .when(!self.disabled, |this| {
-                this.when(!self.selected, |this| {
-                    this.hover(|this| {
-                        this.bg(cx.theme().accent.opacity(0.7))
-                            .text_color(cx.theme().accent_foreground)
-                    })
-                })
-            })
+            // No hover paint: the list moves `selected`, the one highlight, to
+            // the item under the pointer.
             .when(self.selected, |this| {
                 this.bg(cx.theme().tokens.accent)
                     .text_color(cx.theme().accent_foreground)

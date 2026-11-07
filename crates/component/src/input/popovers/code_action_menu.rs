@@ -164,7 +164,7 @@ impl CodeActionMenu {
                 selected_ix: 0,
             };
 
-            let list = cx.new(|cx| ListState::new(menu, window, cx));
+            let list = cx.new(|cx| ListState::new(menu, window, cx).highlight_on_hover(true));
 
             let _subscriptions =
                 vec![

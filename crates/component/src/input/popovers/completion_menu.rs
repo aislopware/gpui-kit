@@ -248,7 +248,7 @@ impl CompletionMenu {
                 highlight: Rc::new(gpui_base::input::highlight_prefix),
             };
 
-            let list = cx.new(|cx| ListState::new(menu, window, cx));
+            let list = cx.new(|cx| ListState::new(menu, window, cx).highlight_on_hover(true));
 
             let _subscriptions =
                 vec![

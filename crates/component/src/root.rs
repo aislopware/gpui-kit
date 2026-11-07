@@ -61,6 +61,9 @@ pub(crate) struct ActiveDialog {
     previous_focused_handle: Option<WeakFocusHandle>,
     selection_scope: TextSelectionScopeId,
     builder: Rc<dyn Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static>,
+    /// Hands the focus from the dialog's shell to its first control once its
+    /// content is drawn.
+    initial_focus: Rc<Cell<gpui_base::InitialFocus>>,
     /// Whether closing plays an exit transition, refreshed on every render.
     ///
     /// `DialogEntrance::None`, reduced motion, and a zero theme duration all
@@ -84,6 +87,7 @@ impl ActiveDialog {
             previous_focused_handle,
             selection_scope,
             builder: Rc::new(builder),
+            initial_focus: Rc::new(Cell::new(gpui_base::InitialFocus::Armed)),
             exit_enabled: Rc::new(Cell::new(false)),
             closing: false,
         }
@@ -270,6 +274,11 @@ impl WindowState {
                 visibility: sample.progress,
                 closing: active_dialog.closing,
             });
+            if !active_dialog.closing {
+                let mut initial_focus = active_dialog.initial_focus.get();
+                initial_focus.render(&active_dialog.focus_handle, window, cx);
+                active_dialog.initial_focus.set(initial_focus);
+            }
 
             rendered.push((index, dialog));
         }

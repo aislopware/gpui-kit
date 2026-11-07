@@ -8,7 +8,8 @@ use gpui::{
 };
 
 use crate::{
-    DeferredPopover, GlobalState, Popup, ResolvedPosition, Selectable, StyledExt as _,
+    DeferredPopover, GlobalState, InitialFocus, Popup, ResolvedPosition, Selectable,
+    StyledExt as _,
     actions::{Cancel, Confirm},
 };
 
@@ -43,6 +44,12 @@ pub struct PopoverState {
     open: bool,
     on_open_change: Option<OpenChangeHandler>,
     dismiss_subscription: Option<Subscription>,
+    /// While open: focus leaving the popover closes it, as Base UI's
+    /// non-modal popover does.
+    focus_out_subscription: Option<Subscription>,
+    /// Moves the focus to the content's first control once it is drawn, for
+    /// a popover whose content takes the focus itself.
+    initial_focus: InitialFocus,
     /// Held while open, so that a state collected without being closed — this
     /// lives in element state — takes its registration with it.
     deferred_context: Option<DeferredPopover>,
@@ -57,6 +64,8 @@ impl PopoverState {
             open: default_open,
             on_open_change: None,
             dismiss_subscription: None,
+            focus_out_subscription: None,
+            initial_focus: InitialFocus::Idle,
             deferred_context: None,
         }
     }
@@ -113,10 +122,30 @@ impl PopoverState {
             // handle would keep the state, and its deferred-popover
             // registration, alive after its trigger is gone.
             let state = cx.entity().downgrade();
-            self.tracked_focus_handle
+            let focused = self
+                .tracked_focus_handle
                 .clone()
-                .unwrap_or_else(|| self.focus_handle.clone())
-                .focus(window, cx);
+                .unwrap_or_else(|| self.focus_handle.clone());
+            focused.focus(window, cx);
+            // A caller's own focus target (a menu) keeps the focus; plain
+            // content hands it to its first control.
+            self.initial_focus = if self.tracked_focus_handle.is_none() {
+                InitialFocus::Armed
+            } else {
+                InitialFocus::Idle
+            };
+            let content = self.focus_handle.clone();
+            self.focus_out_subscription =
+                Some(
+                    cx.on_focus_out(&focused, window, move |state, _, window, cx| {
+                        // Within the popover (its content, a popup nested in it)
+                        // is not out of it.
+                        if !content.contains_focused(window, cx) {
+                            state.dismiss(window, cx);
+                            window.refresh();
+                        }
+                    }),
+                );
 
             self.dismiss_subscription =
                 Some(
@@ -127,6 +156,8 @@ impl PopoverState {
                 );
         } else {
             self.dismiss_subscription = None;
+            self.focus_out_subscription = None;
+            self.initial_focus = InitialFocus::Idle;
             let previous = self.previous_focus_handle.take();
             if self.focus_handle.contains_focused(window, cx) {
                 match previous {
@@ -387,6 +418,13 @@ impl RenderOnce for Popover {
                     }
                 })
             });
+        // After the content was built: content that placed the focus itself
+        // (a menu) keeps it.
+        state.update(cx, |state, cx| {
+            let mut initial_focus = state.initial_focus;
+            initial_focus.render(&focus_handle, window, cx);
+            state.initial_focus = initial_focus;
+        });
         popup.content(content).into_any_element()
     }
 }

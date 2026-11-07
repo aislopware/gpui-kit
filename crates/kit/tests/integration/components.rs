@@ -130,7 +130,8 @@ fn popover_content_keeps_keyboard_activation_and_text_input(cx: &mut TestAppCont
             assert_eq!(window.find("keyboard-trigger").focused(), Some(true));
             window.press(activation, cx);
             assert!(window.find("keyboard-content").visible());
-            window.press("tab", cx);
+            // Opening hands the focus to the content's first control.
+            window.render_frame(cx);
             assert_eq!(window.find("keyboard-apply").focused(), Some(true));
             window.press(activation, cx);
             assert_eq!(view.read(cx).applied, 1, "{activation} activates the child");

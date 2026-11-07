@@ -1,13 +1,15 @@
 use std::{rc::Rc, time::Duration};
 
 use crate::animation::{Lerp, ease_in_out_cubic};
-use crate::{ActiveTheme, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
+use crate::{
+    ActiveTheme, Icon, IconName, Selectable, Sizable, Size, StyledExt, ThemeStyled as _, h_flex,
+};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, Background, ClickEvent, Edges, ElementId,
-    FillOptions, Hsla, InteractiveElement, IntoElement, ParentElement, PathBuilder, PathStyle,
-    Pixels, Point, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, canvas,
-    div, point, px, relative,
+    FillOptions, FocusHandle, Hsla, InteractiveElement, IntoElement, ParentElement, PathBuilder,
+    PathStyle, Pixels, Point, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window,
+    canvas, div, point, px, relative,
 };
 
 /// Room between two [`TabVariant::Folder`] tabs, holding their separator.
@@ -560,6 +562,8 @@ pub struct Tab {
     pub(super) hovered: bool,
     pub(super) max_width: Option<Pixels>,
     pub(super) on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
+    /// The handle the [`super::TabBar`]'s roving focus gives the tab.
+    pub(super) focus_handle: Option<FocusHandle>,
 }
 
 impl From<&'static str> for Tab {
@@ -615,6 +619,7 @@ impl Default for Tab {
             size: Size::default(),
             max_width: None,
             on_click: None,
+            focus_handle: None,
         }
     }
 }
@@ -769,7 +774,12 @@ impl Sizable for Tab {
 }
 
 impl RenderOnce for Tab {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let focused = !self.disabled
+            && self
+                .focus_handle
+                .as_ref()
+                .is_some_and(|handle| handle.is_focused(window));
         let mut normal_style = self.variant.normal(cx);
         let mut selected_style = self.variant.selected(cx);
         let mut disabled_style = self.variant.disabled(self.selected, cx);
@@ -923,6 +933,9 @@ impl RenderOnce for Tab {
             .id(self.ix)
             .selected(self.selected)
             .disabled(self.disabled)
+            .when_some(self.focus_handle, |this, focus_handle| {
+                this.track_focus(&focus_handle)
+            })
             .when_some(aria_label, |this, label| this.accessibility_label(label))
             .styles(|styles| {
                 styles
@@ -1068,6 +1081,8 @@ impl RenderOnce for Tab {
             .when_some(self.on_click.clone(), |this, on_click| {
                 this.on_click(move |event, window, cx| on_click(event, window, cx))
             })
+            // Only the keyboard focuses a tab; a pointer press leaves focus.
+            .when(focused, |this| this.focus_ring_style(window, cx))
     }
 }
 

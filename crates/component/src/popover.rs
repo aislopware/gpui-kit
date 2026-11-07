@@ -367,9 +367,12 @@ impl RenderOnce for Popover {
                             canvas(
                                 |_, _, _| {},
                                 move |bounds, _, window, _| {
-                                    let Some((_, trigger)) = arrow_position.get() else {
+                                    let Some((position, trigger)) = arrow_position.get() else {
                                         return;
                                     };
+                                    // A popup that flipped around its trigger
+                                    // points back at it from the other side.
+                                    let anchor = position.anchor.unwrap_or(anchor);
                                     let (side, target) = arrow_anchor(anchor, trigger);
                                     let trigger = Bounds::new(target, gpui::size(px(0.), px(0.)));
                                     let points =
@@ -747,7 +750,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn anchor_does_not_flip_when_offset_or_arrow_is_enabled(cx: &mut gpui::TestAppContext) {
+    fn a_popover_with_no_room_on_its_side_flips_and_keeps_its_gap(cx: &mut gpui::TestAppContext) {
         cx.update(crate::init);
         let (_, window) = cx.add_window_view(|_, _| AnchorHarness {
             anchor: Anchor::BottomCenter,
@@ -757,10 +760,12 @@ mod tests {
         });
         window.update(|window, cx| crate::test_redraw(window, cx));
         window.update(|window, cx| crate::test_redraw(window, cx));
-        // Clamp to the window margin instead of flipping below the trigger.
+        // No room above a trigger at the window's top: it opens below, the
+        // same tip gap (12) and arrow depth (6) off its 48 pt bottom edge,
+        // rather than sliding over the trigger.
         assert_eq!(
             window.debug_bounds("positioned-content").unwrap().top(),
-            px(8.)
+            px(66.)
         );
     }
 

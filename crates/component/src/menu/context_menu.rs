@@ -4,10 +4,10 @@ use std::{
 };
 
 use gpui::{
-    Anchor, AnyElement, App, Bounds, Context, DismissEvent, Element, ElementId, Entity,
+    Anchor, AnyElement, App, Axis, Bounds, Context, DismissEvent, Element, ElementId, Entity,
     FocusHandle, Focusable, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
     InteractiveElement, IntoElement, LayoutId, LongPressEvent, MouseButton, MouseDownEvent,
-    ParentElement, Pixels, Point, Position, Style, StyleRefinement, Styled, Subscription,
+    ParentElement, Pixels, Point, Position, Size, Style, StyleRefinement, Styled, Subscription,
     TouchPhase, Window, anchored, deferred, div, px,
 };
 
@@ -178,6 +178,15 @@ struct DeferredMenu {
 
 impl DeferredMenu {
     fn build_menu(&self, window: &mut Window) -> AnyElement {
+        // Attached to the cursor as to an empty box, so a menu that does not
+        // fit flips around the cursor, up and/or left of it, as Base UI's and
+        // native context menus do, instead of sliding over the point pressed.
+        // Only a menu that fits on neither side is then kept in the window.
+        let cursor = Bounds::new(self.position, Size::default());
+        let corner = self
+            .anchor
+            .other_side_along(Axis::Horizontal)
+            .other_side_along(Axis::Vertical);
         deferred(
             anchored().child(
                 div()
@@ -188,7 +197,7 @@ impl DeferredMenu {
                     })
                     .child(
                         anchored()
-                            .position(self.position)
+                            .attach(cursor, corner)
                             .snap_to_window_with_margin(px(8.))
                             .anchor(self.anchor)
                             .child(self.menu_view.clone()),
@@ -305,6 +314,19 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
                     .trigger_focus_handle
                     .get_or_insert_with(|| cx.focus_handle());
                 let menu_view = state.shared_state.borrow().menu_view.clone();
+                // An option was set with the menu left open: build its items
+                // again from this render's builder, which sees the new state.
+                if open
+                    && let Some(menu) = menu_view.as_ref()
+                    && menu.read(cx).is_stale()
+                    && let Some(builder) = this.menu.clone()
+                {
+                    menu.update(cx, |menu, cx| {
+                        menu.rebuild_stale(window, cx, move |menu, window, cx| {
+                            builder(menu, window, cx)
+                        })
+                    });
+                }
                 let draws_menu = Rc::new(Cell::new(false));
                 let menu_element = menu_view
                     .filter(|menu| open && !menu.read(cx).is_empty())
@@ -391,7 +413,14 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
                     && !gpui_base::TextSelection::is_selectable_at(event.start_position, window, cx)
                 {
                     window.prevent_default();
-                    open_menu(&shared_state, &builder, event.start_position, window, cx);
+                    open_menu(
+                        &shared_state,
+                        &builder,
+                        event.start_position,
+                        None,
+                        window,
+                        cx,
+                    );
                 }
             }
         });
@@ -402,7 +431,14 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if phase.bubble() && event.button == MouseButton::Right && hitbox.is_hovered(window) {
                 cx.stop_propagation();
-                open_menu(&shared_state, &builder, event.position, window, cx);
+                open_menu(
+                    &shared_state,
+                    &builder,
+                    event.position,
+                    Some(MouseButton::Right),
+                    window,
+                    cx,
+                );
             }
         });
 
@@ -414,11 +450,14 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
 
 type MenuBuilder = dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu;
 
-/// Builds the menu and shows it at `position`.
+/// Builds the menu and shows it at `position`. `press` is the mouse button
+/// still held from the press that opened it: releasing it over an item picks
+/// the item, as in a native context menu.
 fn open_menu(
     shared_state: &Rc<RefCell<ContextMenuSharedState>>,
     builder: &Option<Rc<MenuBuilder>>,
     position: Point<Pixels>,
+    press: Option<MouseButton>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -481,6 +520,9 @@ fn open_menu(
             menu.update(cx, |menu, cx| {
                 menu.set_trigger_focus(trigger_focus_handle, cx);
                 menu.set_previous_focus(previous_focus_handle, cx);
+                if let Some(button) = press {
+                    menu.arm_release(button);
+                }
             });
 
             // A menu on another element must not keep the last
@@ -865,6 +907,82 @@ mod tests {
         assert!(
             cx.debug_bounds("kbd:ctrl-c").is_some(),
             "the shortcut hint must be painted on the same frame as its item"
+        );
+    }
+
+    /// As in a native context menu: press the right button, drag onto an
+    /// item, let go.
+    #[gpui::test]
+    fn a_right_press_dragged_onto_an_item_and_released_picks_it(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::init(cx));
+        let clicked = Rc::new(Cell::new(0));
+        let (_, cx) = cx.add_window_view({
+            let clicked = clicked.clone();
+            move |_, _| RowsRoot { clicked }
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+
+        let press = point(px(10.), px(40.));
+        cx.simulate_mouse_down(press, MouseButton::Right, Default::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let item = point(press.x + px(30.), press.y + px(17.));
+        cx.simulate_mouse_move(item, MouseButton::Right, Default::default());
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        cx.simulate_mouse_up(item, MouseButton::Right, Default::default());
+        cx.run_until_parked();
+
+        assert_eq!(clicked.get(), 1);
+    }
+
+    /// The whole window is the trigger; its menu is larger than the room
+    /// left below and right of a press near the bottom-right corner.
+    struct CornerRoot;
+
+    impl Render for CornerRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().id("area").size_full().context_menu(|menu, _, _| {
+                menu.item(PopupMenuItem::element(|_, _| {
+                    div()
+                        .debug_selector(|| "corner-item".into())
+                        .w(px(160.))
+                        .h(px(80.))
+                }))
+            })
+        }
+    }
+
+    #[gpui::test]
+    fn a_menu_near_the_window_corner_opens_up_and_left_of_the_cursor(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::init(cx));
+        let (_, cx) = cx.add_window_view(|_, _| CornerRoot);
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let viewport = cx.update(|window, _| window.viewport_size());
+        let press = point(viewport.width - px(50.), viewport.height - px(50.));
+
+        cx.simulate_mouse_down(press, MouseButton::Right, Default::default());
+        cx.simulate_mouse_up(press, MouseButton::Right, Default::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+
+        let item = cx.debug_bounds("corner-item").expect("the menu opens");
+        assert!(
+            item.right() <= press.x && item.bottom() <= press.y,
+            "the menu flips around the cursor rather than sliding over it: {item:?}, {press:?}"
+        );
+        assert!(
+            item.left() >= press.x - px(200.) && item.top() >= press.y - px(120.),
+            "and stays next to it: {item:?}, {press:?}"
         );
     }
 }

@@ -828,9 +828,9 @@ mod rendering {
         }
     }
 
-    /// The selected row is a list's keyboard cursor. Arrow keys must light
-    /// it, and the hover highlight must yield to it, so the two never read as
-    /// two cursors; hovering alone must not select.
+    /// The selected row is a plain list's one highlight: arrow keys light it,
+    /// and the pointer alone neither selects nor paints a second highlight
+    /// (popup lists opt into the pointer moving it, `highlight_on_hover`).
     fn list_selection_is_the_keyboard_cursor() {
         let mut cx = context(Arc::new(Assets));
         cx.update(|cx| Theme::change(ThemeMode::Light, None, cx));
@@ -857,22 +857,16 @@ mod rendering {
         };
 
         let hovered = step(&mut cx, &|window, cx| window.hover(("row", 1usize), cx));
-        assert_eq!(highlighted_rows(&hovered, &idle, &rows), [1]);
+        assert_eq!(
+            highlighted_rows(&hovered, &idle, &rows),
+            Vec::<usize>::new(),
+            "hovering a plain list's row neither selects nor lights it"
+        );
         let down = step(&mut cx, &|window, cx| window.press("down", cx));
         assert_eq!(
             highlighted_rows(&down, &idle, &rows),
             [0],
-            "`down` must light the first row, and the hovered row must yield to it"
-        );
-        let x = hovered.device(rows[1].left() + px(3.));
-        let y = hovered.device(rows[1].center().y);
-        let hover_fill = hovered.get_pixel(x, y);
-        let x = down.device(rows[0].left() + px(3.));
-        let y = down.device(rows[0].center().y);
-        assert_ne!(
-            down.get_pixel(x, y),
-            hover_fill,
-            "the keyboard cursor must not look like a hovered row"
+            "`down` lights the first row, and only it"
         );
     }
 

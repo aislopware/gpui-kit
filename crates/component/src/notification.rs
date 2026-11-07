@@ -34,7 +34,7 @@ const DEFAULT_NOTIFICATION_WIDTH: Pixels = px(382.);
 const NOTIFICATION_ADVANCE_INTERVAL: Duration = Duration::from_millis(50);
 struct DismissRequest;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NotificationType {
     #[default]
     Info,
@@ -421,6 +421,13 @@ impl Render for Notification {
 
         BaseToast::new("notification")
             .transition_status(transition_status)
+            // An error is announced at once; anything else after what is
+            // being said.
+            .priority(if self.type_ == Some(NotificationType::Error) {
+                gpui_base::ToastPriority::High
+            } else {
+                gpui_base::ToastPriority::Low
+            })
             .h_flex()
             .group("")
             .occlude()

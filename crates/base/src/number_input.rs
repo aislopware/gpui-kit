@@ -1,24 +1,55 @@
-use crate::input::InputState;
-use std::rc::Rc;
+use crate::input::{InputState, MoveEnd, MoveHome};
+use std::{rc::Rc, time::Duration};
 
 use gpui::Focusable;
 use gpui::{
-    AnyElement, App, Entity, EventEmitter, InteractiveElement as _, IntoElement, KeyBinding,
-    ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, Window, actions, div, prelude::FluentBuilder as _,
+    AnyElement, App, ClickEvent, Entity, EventEmitter, InteractiveElement as _, IntoElement,
+    KeyBinding, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement, RenderOnce, Role,
+    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Task, Window, actions,
+    div, prelude::FluentBuilder as _,
 };
 
 use crate::{Button, InputBase, StyledExt as _};
 
-actions!(number_input, [Increment, Decrement]);
+actions!(
+    number_input,
+    [
+        Increment,
+        Decrement,
+        IncrementLarge,
+        DecrementLarge,
+        IncrementSmall,
+        DecrementSmall
+    ]
+);
 
 const CONTEXT: &str = "NumberInput";
 
+/// How long a step button is held before it starts repeating.
+const REPEAT_DELAY: Duration = Duration::from_millis(400);
+/// How often a held step button steps once it repeats.
+const REPEAT_INTERVAL: Duration = Duration::from_millis(60);
+
 pub(crate) fn init(cx: &mut App) {
+    // A single-line editor leaves these keys unhandled, so they reach the
+    // number input around it; Base UI's Number Field takes the same ones.
     cx.bind_keys([
         KeyBinding::new("up", Increment, Some(CONTEXT)),
         KeyBinding::new("down", Decrement, Some(CONTEXT)),
+        KeyBinding::new("shift-up", IncrementLarge, Some(CONTEXT)),
+        KeyBinding::new("shift-down", DecrementLarge, Some(CONTEXT)),
+        KeyBinding::new("alt-up", IncrementSmall, Some(CONTEXT)),
+        KeyBinding::new("alt-down", DecrementSmall, Some(CONTEXT)),
     ]);
+}
+
+/// How far one step moves a number input.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum StepAmount {
+    /// The input state's own step.
+    Step,
+    /// A fixed amount: the large step (Shift) or the small step (Option).
+    By(f64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +95,7 @@ impl InputState {
     fn apply_number_step(
         &mut self,
         action: StepAction,
+        amount: StepAmount,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
@@ -73,7 +105,10 @@ impl InputState {
         if let Some(step) = self.number_step.clone() {
             let value = self.unmask_value();
             let current = value.trim().parse::<f64>().unwrap_or(0.);
-            let step = step.value(current, action, cx);
+            let step = match amount {
+                StepAmount::Step => step.value(current, action, cx),
+                StepAmount::By(amount) => amount,
+            };
             if let Some(new_value) =
                 step_value(&value, action, step, self.number_min, self.number_max)
             {
@@ -88,12 +123,50 @@ impl InputState {
         }
         cx.emit(NumberInputEvent::Step(action));
     }
+
+    /// Sets the value to the minimum (or the maximum), as Home (or End)
+    /// does in a number input. Returns `false`, changing nothing, when that
+    /// bound is not set, so the key keeps moving the caret.
+    fn apply_number_bound(
+        &mut self,
+        max: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let bound = if max {
+            self.number_max
+        } else {
+            self.number_min
+        };
+        let Some(bound) = bound.filter(|_| !self.disabled) else {
+            return false;
+        };
+        let text = bound.to_string();
+        if self.unmask_value().as_ref() != text && self.is_valid_input(&text, cx) {
+            let range = self.range_to_utf16(&(0..self.value().len()));
+            self.replace_text_in_range_silent(Some(range), &text, window, cx);
+        }
+        true
+    }
 }
 
 type StepHandler = Rc<dyn Fn(StepAction, &mut Window, &mut App)>;
+type AmountStepHandler = Rc<dyn Fn(StepAction, StepAmount, &mut Window, &mut App)>;
 type ButtonDecorator = Box<dyn FnOnce(Button) -> Button>;
 
 /// An unstyled spinbutton root composed from the foundational [`InputBase`] frame.
+///
+/// Keyboard contract, from the focused editor (Base UI's Number Field):
+///
+/// - Up and Down step by the input state's step; Shift+Up and Shift+Down by
+///   the large step ([`NumberInput::large_step`], 10 by default); Option+Up
+///   and Option+Down by the small step ([`NumberInput::small_step`], 0.1 by
+///   default).
+/// - Home and End set the minimum and maximum, when the input state has one;
+///   otherwise they move the caret as usual.
+///
+/// Pressing a step button steps once; holding it repeats the step after
+/// 400 ms, then every 60 ms, until the button is released.
 #[derive(IntoElement)]
 pub struct NumberInput {
     style: StyleRefinement,
@@ -101,6 +174,8 @@ pub struct NumberInput {
     disabled: bool,
     state: Entity<InputState>,
     on_step: Option<StepHandler>,
+    large_step: f64,
+    small_step: f64,
     decrement_button: Option<ButtonDecorator>,
     increment_button: Option<ButtonDecorator>,
     input: Option<AnyElement>,
@@ -163,6 +238,8 @@ impl NumberInput {
             disabled: false,
             state: state.clone(),
             on_step: None,
+            large_step: 10.,
+            small_step: 0.1,
             decrement_button: None,
             increment_button: None,
             input: None,
@@ -176,11 +253,26 @@ impl NumberInput {
         self
     }
 
+    /// Takes over stepping: the handler receives every step request, from
+    /// the keys and the buttons. Large and small steps reach it as ordinary
+    /// steps in their direction.
     pub fn on_step(
         mut self,
         handler: impl Fn(StepAction, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_step = Some(Rc::new(handler));
+        self
+    }
+
+    /// The amount Shift+Up and Shift+Down step by. Default: `10`.
+    pub fn large_step(mut self, large_step: f64) -> Self {
+        self.large_step = large_step;
+        self
+    }
+
+    /// The amount Option+Up and Option+Down step by. Default: `0.1`.
+    pub fn small_step(mut self, small_step: f64) -> Self {
+        self.small_step = small_step;
         self
     }
 
@@ -234,17 +326,38 @@ impl RenderOnce for NumberInput {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let disabled = self.disabled;
         let controls_right = self.controls_right;
-        let on_step = self.on_step.unwrap_or_else(|| {
-            let state = self.state.clone();
-            Rc::new(move |action, window, cx| {
-                state.update(cx, |state, cx| {
-                    state.focus(window, cx);
-                    state.apply_number_step(action, window, cx);
-                });
-            })
-        });
+        let large_step = self.large_step;
+        let small_step = self.small_step;
+        let step: AmountStepHandler = match self.on_step {
+            Some(on_step) => Rc::new(
+                move |action: StepAction, _: StepAmount, window: &mut Window, cx: &mut App| {
+                    on_step(action, window, cx)
+                },
+            ),
+            None => {
+                let state = self.state.clone();
+                Rc::new(
+                    move |action: StepAction,
+                          amount: StepAmount,
+                          window: &mut Window,
+                          cx: &mut App| {
+                        state.update(cx, |state, cx| {
+                            state.focus(window, cx);
+                            state.apply_number_step(action, amount, window, cx);
+                        });
+                    },
+                )
+            }
+        };
         self.state.update(cx, |state, _| state.ensure_number_mask());
         let value = self.state.read(cx).value().parse::<f64>().ok();
+        // The step a held button repeats. Replacing it cancels the one
+        // before; dropping it on release stops the repeat.
+        let repeat = window.use_keyed_state(
+            ("number-input-repeat", self.state.entity_id()),
+            cx,
+            |_, _| None::<Task<()>>,
+        );
         let decrement_button = self.decrement_button.map_or_else(
             || Button::new("decrement"),
             |decorate| decorate(Button::new("decrement")),
@@ -257,29 +370,58 @@ impl RenderOnce for NumberInput {
 
         // Stepping is driven from the focused editor, so the buttons never take
         // focus themselves; otherwise every press would pull the focus ring off
-        // the frame and hand it straight back.
-        let decrement_button = decrement_button
-            .when(controls_right, |this| this.flex_1().min_h_0())
-            .when(!controls_right, |this| this.flex_none())
-            .focusable(false)
-            .disabled(disabled)
-            .on_click({
-                let on_step = on_step.clone();
-                move |_, window, cx| {
-                    on_step(StepAction::Decrement, window, cx);
+        // the frame and hand it straight back. A press steps at once and a
+        // held press repeats; the click that ends a mouse press is already
+        // counted, so only clicks from elsewhere (assistive technology) step.
+        let step_button = |button: Button, action: StepAction| {
+            let press = {
+                let step = step.clone();
+                let repeat = repeat.clone();
+                move |_: &MouseDownEvent, window: &mut Window, cx: &mut App| {
+                    step(action, StepAmount::Step, window, cx);
+                    let step = step.clone();
+                    let task = window.spawn(cx, async move |cx| {
+                        cx.background_executor().timer(REPEAT_DELAY).await;
+                        loop {
+                            let stepped =
+                                cx.update(|window, cx| step(action, StepAmount::Step, window, cx));
+                            if stepped.is_err() {
+                                break;
+                            }
+                            cx.background_executor().timer(REPEAT_INTERVAL).await;
+                        }
+                    });
+                    repeat.update(cx, |repeat, _| *repeat = Some(task));
                 }
-            });
-        let increment_button = increment_button
-            .when(controls_right, |this| this.flex_1().min_h_0())
-            .when(!controls_right, |this| this.flex_none())
-            .focusable(false)
-            .disabled(disabled)
-            .on_click({
-                let on_step = on_step.clone();
-                move |_, window, cx| {
-                    on_step(StepAction::Increment, window, cx);
+            };
+            let release = {
+                let repeat = repeat.clone();
+                move |_: &MouseUpEvent, _: &mut Window, cx: &mut App| {
+                    repeat.update(cx, |repeat, _| *repeat = None);
                 }
-            });
+            };
+            let click = {
+                let step = step.clone();
+                move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                    if !matches!(event, ClickEvent::Mouse(_)) {
+                        step(action, StepAmount::Step, window, cx);
+                    }
+                }
+            };
+            button
+                .when(controls_right, |this| this.flex_1().min_h_0())
+                .when(!controls_right, |this| this.flex_none())
+                .focusable(false)
+                .disabled(disabled)
+                .when(!disabled, |this| {
+                    this.on_mouse_down(MouseButton::Left, press)
+                        .on_mouse_up(MouseButton::Left, release.clone())
+                        .on_mouse_up_out(MouseButton::Left, release)
+                })
+                .on_click(click)
+        };
+        let decrement_button = step_button(decrement_button, StepAction::Decrement);
+        let increment_button = step_button(increment_button, StepAction::Increment);
 
         let content = if controls_right {
             div()
@@ -307,6 +449,37 @@ impl RenderOnce for NumberInput {
                 .into_any_element()
         };
 
+        let key_step = |action: StepAction, amount: StepAmount| {
+            let step = step.clone();
+            move |window: &mut Window, cx: &mut App| {
+                if disabled {
+                    cx.propagate();
+                } else {
+                    step(action, amount, window, cx);
+                }
+            }
+        };
+        let increment = key_step(StepAction::Increment, StepAmount::Step);
+        let decrement = key_step(StepAction::Decrement, StepAmount::Step);
+        let increment_large = key_step(StepAction::Increment, StepAmount::By(large_step));
+        let decrement_large = key_step(StepAction::Decrement, StepAmount::By(large_step));
+        let increment_small = key_step(StepAction::Increment, StepAmount::By(small_step));
+        let decrement_small = key_step(StepAction::Decrement, StepAmount::By(small_step));
+        let bound = |max: bool| {
+            let state = self.state.clone();
+            move |window: &mut Window, cx: &mut App| {
+                let applied =
+                    state.update(cx, |state, cx| state.apply_number_bound(max, window, cx));
+                // Home and End reach the editor first; take them only when
+                // there is a bound to go to.
+                if applied {
+                    cx.stop_propagation();
+                }
+            }
+        };
+        let to_min = bound(false);
+        let to_max = bound(true);
+
         InputBase::new(("number-input", self.state.entity_id()))
             .track_focus(&self.state.focus_handle(cx))
             .flex()
@@ -318,23 +491,16 @@ impl RenderOnce for NumberInput {
             })
             .when_some(value, |this, value| this.aria_numeric_value(value))
             .key_context(CONTEXT)
-            .on_action({
-                let on_step = on_step.clone();
-                move |_: &Increment, window, cx| {
-                    if disabled {
-                        cx.propagate();
-                    } else {
-                        on_step(StepAction::Increment, window, cx);
-                    }
-                }
-            })
-            .on_action(move |_: &Decrement, window, cx| {
-                if disabled {
-                    cx.propagate();
-                } else {
-                    on_step(StepAction::Decrement, window, cx);
-                }
-            })
+            .on_action(move |_: &Increment, window, cx| increment(window, cx))
+            .on_action(move |_: &Decrement, window, cx| decrement(window, cx))
+            .on_action(move |_: &IncrementLarge, window, cx| increment_large(window, cx))
+            .on_action(move |_: &DecrementLarge, window, cx| decrement_large(window, cx))
+            .on_action(move |_: &IncrementSmall, window, cx| increment_small(window, cx))
+            .on_action(move |_: &DecrementSmall, window, cx| decrement_small(window, cx))
+            // The editor binds Home and End to caret moves in its own, deeper
+            // key context, so they are caught on the way down to it.
+            .capture_action(move |_: &MoveHome, window, cx| to_min(window, cx))
+            .capture_action(move |_: &MoveEnd, window, cx| to_max(window, cx))
             .child(content)
             .refine_style(&self.style)
             .render(window, cx)
@@ -475,6 +641,121 @@ mod tests {
                 "releasing the step button left focus off the editor"
             );
         });
+    }
+
+    /// A number input around a real editor, so the editor's own key bindings
+    /// sit in front of the number input's, as in an application.
+    struct EditorHarness {
+        state: Entity<InputState>,
+    }
+
+    impl Render for EditorHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            NumberInput::new(&self.state)
+                .w(px(120.))
+                .h(px(20.))
+                .decrement_button(|button| button.w(px(20.)).h_full())
+                .input(crate::Input::new(&self.state))
+                .increment_button(|button| button.w(px(20.)).h_full())
+        }
+    }
+
+    fn editor_harness(
+        cx: &mut TestAppContext,
+        build: impl FnOnce(InputState) -> InputState + 'static,
+    ) -> (Entity<InputState>, &mut VisualTestContext) {
+        cx.update(crate::init);
+        let mut created: Option<Entity<InputState>> = None;
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.set_global(Theme::default());
+                let state = cx.new(|cx| build(InputState::new(window, cx).default_value("50")));
+                created = Some(state.clone());
+                cx.new(|_| EditorHarness { state })
+            })
+            .unwrap()
+        });
+        let state = created.unwrap();
+        let cx = VisualTestContext::from_window(window.into(), cx).into_mut();
+        cx.update(|window, cx| {
+            state.update(cx, |state, cx| state.focus(window, cx));
+            window.draw(cx).clear(cx);
+        });
+        (state, cx)
+    }
+
+    fn value(state: &Entity<InputState>, cx: &mut VisualTestContext) -> String {
+        state.read_with(cx, |state, _| state.value().to_string())
+    }
+
+    #[gpui::test]
+    fn shift_and_option_arrows_take_the_large_and_small_steps(cx: &mut TestAppContext) {
+        let (state, cx) = editor_harness(cx, |state| state.step(1.));
+
+        cx.simulate_keystrokes("up");
+        assert_eq!(value(&state, cx), "51");
+        cx.simulate_keystrokes("shift-up");
+        assert_eq!(value(&state, cx), "61");
+        cx.simulate_keystrokes("alt-down");
+        assert_eq!(value(&state, cx), "60.9");
+        cx.simulate_keystrokes("shift-down");
+        assert_eq!(value(&state, cx), "50.9");
+    }
+
+    #[gpui::test]
+    fn home_and_end_set_the_minimum_and_maximum(cx: &mut TestAppContext) {
+        let (state, cx) = editor_harness(cx, |state| state.step(1.).min(0.).max(100.));
+
+        cx.simulate_keystrokes("home");
+        assert_eq!(value(&state, cx), "0");
+        cx.simulate_keystrokes("end");
+        assert_eq!(value(&state, cx), "100");
+    }
+
+    #[gpui::test]
+    fn home_and_end_leave_the_value_alone_without_bounds(cx: &mut TestAppContext) {
+        let (state, cx) = editor_harness(cx, |state| state.step(1.));
+
+        cx.simulate_keystrokes("home end");
+        assert_eq!(value(&state, cx), "50");
+    }
+
+    #[gpui::test]
+    fn holding_a_step_button_repeats_the_step_until_it_is_released(cx: &mut TestAppContext) {
+        let (state, cx) = editor_harness(cx, |state| state.step(1.));
+        let at = point(px(10.), px(10.));
+        // In ticks of 10 ms, so each repeat's timer starts when the last fired.
+        let advance = |cx: &mut VisualTestContext, ms: u64| {
+            for _ in 0..ms / 10 {
+                cx.executor().advance_clock(Duration::from_millis(10));
+                cx.run_until_parked();
+            }
+        };
+
+        cx.simulate_mouse_move(at, MouseButton::Left, Modifiers::default());
+        cx.simulate_event(gpui::MouseDownEvent {
+            button: MouseButton::Left,
+            position: at,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        });
+        assert_eq!(value(&state, cx), "49", "the press steps at once");
+        advance(cx, 390);
+        assert_eq!(value(&state, cx), "49", "no repeat before the delay");
+        advance(cx, 20);
+        assert_eq!(value(&state, cx), "48", "the first repeat after 400 ms");
+        advance(cx, 120);
+        assert_eq!(value(&state, cx), "46", "then one every 60 ms");
+
+        cx.simulate_event(gpui::MouseUpEvent {
+            button: MouseButton::Left,
+            position: at,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+        });
+        advance(cx, 500);
+        assert_eq!(value(&state, cx), "46", "the release stops the repeat");
     }
 
     #[test]

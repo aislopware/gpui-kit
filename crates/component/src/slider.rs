@@ -5,9 +5,9 @@ pub use gpui_base::slider::{SliderEvent, SliderScale, SliderState, SliderValue};
 use gpui_base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack, spring};
 
 use gpui::{
-    App, Axis, Background, Corners, DefiniteLength, ElementId, Entity, EntityId, Hsla,
+    App, Axis, Background, Corners, DefiniteLength, ElementId, Entity, EntityId, FocusHandle, Hsla,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce,
-    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    Role, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, px, relative,
 };
 
@@ -40,8 +40,16 @@ impl ThumbInteraction {
 }
 
 impl ThumbRing {
-    /// Samples the ring for the `start` or end thumb of the slider `id`.
-    fn new(id: EntityId, start: bool, color: Hsla, window: &mut Window, cx: &mut App) -> Self {
+    /// Samples the ring for the `start` or end thumb of the slider `id`. A
+    /// thumb with keyboard focus shows its ring as a hovered one does.
+    fn new(
+        id: EntityId,
+        start: bool,
+        focused: bool,
+        color: Hsla,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self {
         let channel = if start { "start" } else { "end" };
         let interaction = window.use_keyed_state(
             ElementId::NamedChild(Arc::new(("slider-thumb-ring", id).into()), channel.into()),
@@ -50,7 +58,7 @@ impl ThumbRing {
         );
         let progress = spring(
             (("slider-thumb-ring", id), channel),
-            if interaction.read(cx).is_active() {
+            if focused || interaction.read(cx).is_active() {
                 1.
             } else {
                 0.
@@ -81,7 +89,30 @@ impl ThumbRing {
     }
 }
 
+/// The keyed focus handle of the slider `id`'s root (`"slider"`) or of one of
+/// its range thumbs (`"start"`, `"end"`).
+fn slider_focus(
+    id: EntityId,
+    part: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> FocusHandle {
+    window
+        .use_keyed_state(
+            ElementId::NamedChild(Arc::new(("slider-focus", id).into()), part.into()),
+            cx,
+            |_, cx| cx.focus_handle().tab_stop(true),
+        )
+        .read(cx)
+        .clone()
+}
+
 /// A Slider element.
+///
+/// An enabled slider takes keyboard focus: a single-value slider as a whole,
+/// each thumb of a range on its own. The arrow keys step the focused value,
+/// Shift+arrow and Page Up and Page Down move it by the state's large step,
+/// and Home and End go to the minimum and maximum.
 #[derive(IntoElement)]
 pub struct Slider {
     state: Entity<SliderState>,
@@ -156,6 +187,7 @@ impl RenderOnce for Slider {
         let state = self.state.read(cx);
         let is_range = state.value().is_range();
         let percentage = state.percentage();
+        let (min, max) = (state.min_value(), state.max_value());
         let (bar_start, bar_end) = if self.reverse && !is_range {
             // Fill from the thumb to the max end (remaining side).
             (relative(percentage.end), relative(0.))
@@ -201,74 +233,107 @@ impl RenderOnce for Slider {
 
         let ring_color = cx.theme().ring;
         let entity_id = self.state.entity_id();
-        let start_ring = is_range.then(|| ThumbRing::new(entity_id, true, ring_color, window, cx));
-        let end_ring = ThumbRing::new(entity_id, false, ring_color, window, cx);
+        let disabled = self.disabled;
+        // A single value is focused on the slider itself, the accessibility
+        // node that carries it; a range's thumbs are focused one by one.
+        let root_focus =
+            (!disabled && !is_range).then(|| slider_focus(entity_id, "slider", window, cx));
+        let start_focus =
+            (!disabled && is_range).then(|| slider_focus(entity_id, "start", window, cx));
+        let end_focus = (!disabled && is_range).then(|| slider_focus(entity_id, "end", window, cx));
+        let is_focused =
+            |focus: &Option<FocusHandle>| focus.as_ref().is_some_and(|f| f.is_focused(window));
+        let start_focused = is_focused(&start_focus);
+        let end_focused = is_focused(&root_focus) || is_focused(&end_focus);
+        let start_ring = is_range
+            .then(|| ThumbRing::new(entity_id, true, start_focused, ring_color, window, cx));
+        let end_ring = ThumbRing::new(entity_id, false, end_focused, ring_color, window, cx);
+        let value = self.state.read(cx).value();
+        let accessibility_label = self.accessibility_label.clone();
 
-        let thumb = |position: DefiniteLength, start: bool, ring: ThumbRing| {
-            SliderThumb::new(&self.state)
-                .axis(axis)
-                .start(start)
-                .disabled(self.disabled)
-                .when(!self.disabled, |this| {
-                    this.absolute()
-                        .when(axis.is_horizontal(), |this| {
-                            this.top(px(-5.)).left(position).ml(-px(8.))
-                        })
-                        .when(axis.is_vertical(), |this| {
-                            this.bottom(position).left(px(-5.)).mb(-px(8.))
-                        })
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .flex_shrink_0()
-                        .rounded_full_style(cx)
-                        .bg(bar_color.opacity(0.5))
-                        .size_4()
-                        .p(px(1.))
-                        .on_hover({
-                            let interaction = ring.interaction.clone();
-                            move |entered, _, cx| {
-                                let entered = *entered;
-                                interaction.update(cx, |interaction, cx| {
-                                    if interaction.hovered != entered {
-                                        interaction.hovered = entered;
-                                        cx.notify();
-                                    }
-                                });
-                            }
-                        })
-                        // The base thumb stops propagation on mouse down to own
-                        // the drag, so the press is read in the capture phase.
-                        .capture_any_mouse_down(ring.press_listener(true))
-                        .capture_any_mouse_up(ring.press_listener(false))
-                        .on_mouse_up_out(MouseButton::Left, ring.press_listener(false))
-                        // The ring grows outward from the thumb's edge: inset by
-                        // its own width so its inner edge sits flush against it.
-                        .child(
-                            div()
-                                .flex_none()
-                                .absolute()
-                                .top(-ring.width)
-                                .left(-ring.width)
-                                .right(-ring.width)
-                                .bottom(-ring.width)
-                                .rounded_full_style(cx)
-                                .border(ring.width)
-                                .border_color(ring.color),
-                        )
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .size_full()
-                                .rounded_full_style(cx)
-                                .bg(thumb_bg),
-                        )
-                })
-        };
+        let thumb =
+            |position: DefiniteLength, start: bool, ring: ThumbRing, focus: Option<FocusHandle>| {
+                SliderThumb::new(&self.state)
+                    .axis(axis)
+                    .start(start)
+                    .disabled(self.disabled)
+                    // A range's thumbs are sliders of their own to assistive
+                    // technology, each carrying its own value.
+                    .when_some(focus, |this, focus| {
+                        let thumb_value = if start { value.start() } else { value.end() };
+                        this.track_focus(&focus)
+                            .role(Role::Slider)
+                            .aria_label(SharedString::from(match (&accessibility_label, start) {
+                                (Some(label), true) => format!("{label} start"),
+                                (Some(label), false) => format!("{label} end"),
+                                (None, true) => "Start".to_string(),
+                                (None, false) => "End".to_string(),
+                            }))
+                            .aria_numeric_value(thumb_value as f64)
+                            .aria_min_numeric_value(min as f64)
+                            .aria_max_numeric_value(max as f64)
+                    })
+                    .when(!self.disabled, |this| {
+                        this.absolute()
+                            .when(axis.is_horizontal(), |this| {
+                                this.top(px(-5.)).left(position).ml(-px(8.))
+                            })
+                            .when(axis.is_vertical(), |this| {
+                                this.bottom(position).left(px(-5.)).mb(-px(8.))
+                            })
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .flex_shrink_0()
+                            .rounded_full_style(cx)
+                            .bg(bar_color.opacity(0.5))
+                            .size_4()
+                            .p(px(1.))
+                            .on_hover({
+                                let interaction = ring.interaction.clone();
+                                move |entered, _, cx| {
+                                    let entered = *entered;
+                                    interaction.update(cx, |interaction, cx| {
+                                        if interaction.hovered != entered {
+                                            interaction.hovered = entered;
+                                            cx.notify();
+                                        }
+                                    });
+                                }
+                            })
+                            // The base thumb stops propagation on mouse down to own
+                            // the drag, so the press is read in the capture phase.
+                            .capture_any_mouse_down(ring.press_listener(true))
+                            .capture_any_mouse_up(ring.press_listener(false))
+                            .on_mouse_up_out(MouseButton::Left, ring.press_listener(false))
+                            // The ring grows outward from the thumb's edge: inset by
+                            // its own width so its inner edge sits flush against it.
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .absolute()
+                                    .top(-ring.width)
+                                    .left(-ring.width)
+                                    .right(-ring.width)
+                                    .bottom(-ring.width)
+                                    .rounded_full_style(cx)
+                                    .border(ring.width)
+                                    .border_color(ring.color),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .size_full()
+                                    .rounded_full_style(cx)
+                                    .bg(thumb_bg),
+                            )
+                    })
+            };
 
         BaseSlider::new(&self.state)
             .axis(axis)
             .disabled(self.disabled)
+            .when_some(root_focus, |this, focus| this.track_focus(&focus))
             .when_some(self.accessibility_label, |this, label| {
                 this.accessibility_label(label)
             })
@@ -314,9 +379,14 @@ impl RenderOnce for Slider {
                                     .rounded_full_style(cx),
                             )
                             .when_some(start_ring, |this, ring| {
-                                this.child(thumb(relative(percentage.start), true, ring))
+                                this.child(thumb(
+                                    relative(percentage.start),
+                                    true,
+                                    ring,
+                                    start_focus,
+                                ))
                             })
-                            .child(thumb(relative(percentage.end), false, end_ring)),
+                            .child(thumb(relative(percentage.end), false, end_ring, end_focus)),
                     ),
             )
     }
@@ -366,5 +436,41 @@ mod tests {
         let (cx, state) = harness(cx, true);
         cx.simulate_click(point(px(50.), px(12.)), Modifiers::default());
         cx.update(|_, cx| assert_eq!(state.read(cx).value(), SliderValue::Single(0.)));
+    }
+
+    #[gpui::test]
+    fn tab_focuses_the_slider_and_the_arrow_keys_step_it(cx: &mut TestAppContext) {
+        let (cx, state) = harness(cx, false);
+        cx.update(|window, cx| window.focus_next(cx));
+        cx.simulate_keystrokes("right right shift-right end left");
+        cx.update(|_, cx| assert_eq!(state.read(cx).value(), SliderValue::Single(99.)));
+    }
+
+    #[gpui::test]
+    fn a_disabled_slider_is_not_a_tab_stop(cx: &mut TestAppContext) {
+        let (cx, _) = harness(cx, true);
+        cx.update(|window, cx| {
+            window.focus_next(cx);
+            assert!(window.focused(cx).is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn each_thumb_of_a_range_slider_takes_focus_on_its_own(cx: &mut TestAppContext) {
+        let (cx, state) = harness(cx, false);
+        state.update_in(cx, |state, window, cx| {
+            state.set_value((20., 80.), window, cx)
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            window.focus_next(cx);
+        });
+        cx.simulate_keystrokes("pageup");
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            window.focus_next(cx);
+        });
+        cx.simulate_keystrokes("home");
+        cx.update(|_, cx| assert_eq!(state.read(cx).value(), SliderValue::Range(0., 0.)));
     }
 }

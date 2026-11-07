@@ -1,4 +1,4 @@
-use std::{rc::Rc, time::Duration};
+use std::{rc::Rc, sync::Arc, time::Duration};
 
 use crate::{
     ActiveTheme, AxisExt, Sizable, Size, StyledExt, checkbox::checkbox_check_icon, h_flex,
@@ -6,11 +6,11 @@ use crate::{
 };
 use crate::{StyleSized as _, ThemeStyled as _};
 use gpui::{
-    AnyElement, App, Axis, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
+    AnyElement, App, Axis, ElementId, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder, relative, rems,
 };
-use gpui_base::{Radio as BaseRadio, RadioGroup as BaseRadioGroup};
+use gpui_base::{Radio as BaseRadio, RadioGroup as BaseRadioGroup, RovingFocus, RovingOrientation};
 
 /// A Radio element.
 ///
@@ -34,6 +34,8 @@ pub struct Radio {
     position_in_set: Option<usize>,
     size_of_set: Option<usize>,
     focus_ring_enabled: bool,
+    /// The handle a [`RadioGroup`]'s roving focus gives the radio.
+    focus_handle: Option<FocusHandle>,
 }
 
 impl Radio {
@@ -57,6 +59,7 @@ impl Radio {
             position_in_set: None,
             size_of_set: None,
             focus_ring_enabled: true,
+            focus_handle: None,
         }
     }
 
@@ -179,10 +182,12 @@ impl RenderOnce for Radio {
             Size::Large => 1.125,
             _ => 1.,
         });
-        let focus_handle = window
-            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
-            .read(cx)
-            .clone();
+        let focus_handle = self.focus_handle.clone().unwrap_or_else(|| {
+            window
+                .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+                .read(cx)
+                .clone()
+        });
         let is_focused = focus_handle.is_focused(window);
         let disabled = self.disabled;
         let accessibility_label = self
@@ -281,6 +286,11 @@ impl RenderOnce for Radio {
 }
 
 /// A Radio group element.
+///
+/// The group is one stop in the window's Tab order, landing on the checked
+/// radio, or the first enabled one when none is checked. The arrow keys move
+/// to the previous or next enabled radio, wrapping at either end, and select
+/// it; Home and End jump to the first and last.
 #[derive(IntoElement)]
 pub struct RadioGroup {
     id: ElementId,
@@ -388,10 +398,19 @@ impl From<String> for Radio {
 }
 
 impl RenderOnce for RadioGroup {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let on_click = self.on_click;
         let disabled = self.disabled;
         let selected_ix = self.selected_index;
+        let roving = RovingFocus::new(
+            ElementId::NamedChild(Arc::new(self.id.clone()), "roving-focus".into()),
+            self.radios.len(),
+            window,
+            cx,
+        )
+        .orientation(RovingOrientation::Both)
+        .active(selected_ix)
+        .disabled_items(self.radios.iter().map(|radio| disabled || radio.disabled));
 
         let base = if self.layout.is_vertical() {
             v_flex()
@@ -402,6 +421,10 @@ impl RenderOnce for RadioGroup {
         let total = self.radios.len();
         BaseRadioGroup::new(self.id)
             .axis(self.layout)
+            .roving_focus(roving.clone())
+            .when_some(on_click.clone(), |this, on_click| {
+                this.on_change(move |ix, window, cx| on_click(&ix, window, cx))
+            })
             .refine_style(&self.style)
             .child(
                 base.gap_3()
@@ -411,6 +434,8 @@ impl RenderOnce for RadioGroup {
                         radio.id = ix.into();
                         radio.position_in_set = Some(ix + 1);
                         radio.size_of_set = Some(total);
+                        radio.focus_handle = Some(roving.focus_handle(ix));
+                        radio.tab_stop = roving.is_tab_stop(ix);
                         let item_disabled = radio.disabled;
                         radio
                             .disabled(disabled || item_disabled)
@@ -450,6 +475,45 @@ mod tests {
                 Some(Text::String(label)) if label.as_ref() == "Automatic"
             ),
             "and must not change what is drawn"
+        );
+    }
+
+    /// A vertical group of three, the middle one disabled, owning its value.
+    struct Group {
+        selected: Option<usize>,
+    }
+
+    impl gpui::Render for Group {
+        fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+            RadioGroup::vertical("group")
+                .selected_index(self.selected)
+                .child("One")
+                .child(Radio::new("two").label("Two").disabled(true))
+                .child("Three")
+                .on_change(cx.listener(|group, ix: &usize, _, cx| {
+                    group.selected = Some(*ix);
+                    cx.notify();
+                }))
+        }
+    }
+
+    #[gpui::test]
+    fn the_arrow_keys_select_the_next_enabled_radio(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let (view, cx) = cx.add_window_view(|_, _| Group { selected: Some(0) });
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            window.focus_next(cx);
+        });
+
+        cx.simulate_keystrokes("down");
+        assert_eq!(view.read_with(cx, |group, _| group.selected), Some(2));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_keystrokes("down");
+        assert_eq!(
+            view.read_with(cx, |group, _| group.selected),
+            Some(0),
+            "past the last radio the selection wraps to the first"
         );
     }
 }

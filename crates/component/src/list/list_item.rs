@@ -174,8 +174,9 @@ impl ParentElement for ListItem {
 }
 
 /// Note: Listeners registered via these traits are not gated by
-/// `disabled`/`separator`. The hover style is managed internally, use
-/// `on_hover` instead of `.hover()`.
+/// `disabled`/`separator`. A list item paints no hover of its own: the
+/// `selected` row is the one highlight, and a list built with
+/// `ListState::highlight_on_hover` moves it to the item under the pointer.
 impl InteractiveElement for ListItem {
     fn interactivity(&mut self) -> &mut Interactivity {
         self.base.interactivity()
@@ -187,8 +188,6 @@ impl StatefulInteractiveElement for ListItem {}
 impl RenderOnce for ListItem {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let accessibility_label = self.accessibility_label;
-        let is_active = self.confirmed || self.selected || self.secondary_selected;
-
         let is_selectable = !(self.disabled || self.mode.is_separator());
 
         // The outline is an absolute child, so it has to repeat the item's own radius.
@@ -221,15 +220,6 @@ impl RenderOnce for ListItem {
                                     handler(ev, window, cx)
                                 })
                             })
-                    })
-                    // Register `hover` unconditionally, a conditional registration
-                    // leaves a stale hover style behind when the item turns active.
-                    .hover(|this| {
-                        if is_active {
-                            this
-                        } else {
-                            this.bg(cx.theme().tokens.list_hover)
-                        }
                     })
             })
             .when(!is_selectable, |this| {

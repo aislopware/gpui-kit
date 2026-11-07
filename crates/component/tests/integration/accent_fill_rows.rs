@@ -83,7 +83,9 @@ fn content_color(
 }
 
 #[gpui::test]
-fn searchable_list_cursor_and_hover_rows_use_accent_foreground(cx: &mut TestAppContext) {
+fn searchable_list_cursor_row_uses_accent_foreground_and_hover_paints_nothing(
+    cx: &mut TestAppContext,
+) {
     init_blue_accent_theme(cx);
     let (foreground, accent_foreground) =
         cx.update(|cx| (cx.theme().foreground, cx.theme().accent_foreground));
@@ -98,8 +100,9 @@ fn searchable_list_cursor_and_hover_rows_use_accent_foreground(cx: &mut TestAppC
     };
     assert_eq!(content_color(cx, false, row(true)), accent_foreground);
     assert_eq!(content_color(cx, false, row(false)), foreground);
-    // A hovered row takes a translucent accent fill.
-    assert_eq!(content_color(cx, true, row(false)), accent_foreground);
+    // Hover alone paints nothing: the list moves its one highlight, the
+    // selected row, to the row under the pointer.
+    assert_eq!(content_color(cx, true, row(false)), foreground);
 }
 
 #[gpui::test]

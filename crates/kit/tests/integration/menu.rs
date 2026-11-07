@@ -183,14 +183,13 @@ fn activating_a_submenu_enters_it_without_dismissing_its_parent(cx: &mut TestApp
             assert!(window.try_find("popup-menu").is_none());
             assert_eq!(window.find("workspace").focused(), Some(true));
 
+            // A disabled submenu opens neither under the pointer nor by Enter,
+            // as Base UI's disabled SubmenuTrigger.
             window.click("commands", cx);
             window.within("popup-menu").hover(3usize, cx);
             window.press("enter", cx);
-            assert_eq!(window.find_all("popup-menu").len(), 2);
-            assert_eq!(
-                window.within("submenu").find("popup-menu").focused(),
-                Some(false)
-            );
+            assert_eq!(window.find_all("popup-menu").len(), 1);
+            assert!(window.try_find("submenu").is_none());
         })
         .unwrap();
         press_context_menu_key(handle.into(), "escape", cx);

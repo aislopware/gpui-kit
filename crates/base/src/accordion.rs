@@ -2,22 +2,31 @@ use crate::TestSupportExt as _;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, InteractiveElement, Interactivity, IntoElement,
-    ParentElement, RenderOnce, Role, StatefulInteractiveElement, StyleRefinement, Styled, Window,
-    div, prelude::FluentBuilder as _,
+    AnyElement, App, ClickEvent, Div, ElementId, FocusHandle, InteractiveElement, Interactivity,
+    IntoElement, KeyDownEvent, ParentElement, RenderOnce, Role, StatefulInteractiveElement,
+    StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _,
 };
 use smallvec::SmallVec;
 
-use crate::StyledExt as _;
+use crate::{RovingFocus, StyledExt as _};
 
 type ChangeHandler = Rc<dyn Fn(bool, &ClickEvent, &mut Window, &mut App)>;
 
 /// An unstyled accordion root for application-owned items.
+///
+/// Every enabled [`AccordionTrigger`] is a stop in the window's Tab order and
+/// toggles with Enter or Space. Given the accordion's [`RovingFocus`]
+/// ([`Accordion::roving_focus`]), whose handles its triggers track, Up and
+/// Down also move focus to the previous or next enabled trigger, wrapping at
+/// either end, and Home and End jump to the first and last, as in Base UI's
+/// Accordion. Build that roving focus with a vertical orientation and
+/// [`RovingFocus::single_tab_stop`] off, so Tab still visits each trigger.
 #[derive(IntoElement)]
 pub struct Accordion {
     base: crate::ObservedElement<gpui::Stateful<Div>>,
     style: StyleRefinement,
     children: SmallVec<[AnyElement; 2]>,
+    roving_focus: Option<RovingFocus>,
 }
 
 impl Accordion {
@@ -26,7 +35,15 @@ impl Accordion {
             base: div().id(id).test_support(),
             style: StyleRefinement::default(),
             children: SmallVec::new(),
+            roving_focus: None,
         }
+    }
+
+    /// The roving focus over the accordion's triggers, in order. Each trigger
+    /// tracks the matching [`RovingFocus::focus_handle`].
+    pub fn roving_focus(mut self, roving_focus: RovingFocus) -> Self {
+        self.roving_focus = Some(roving_focus);
+        self
     }
 }
 
@@ -59,6 +76,11 @@ impl RenderOnce for Accordion {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         self.base
             .role(Role::Group)
+            .when_some(self.roving_focus, |this, roving_focus| {
+                this.on_key_down(move |event: &KeyDownEvent, window, cx| {
+                    roving_focus.handle_key_down(event, window, cx);
+                })
+            })
             .children(self.children)
             .refine_style(&self.style)
     }
@@ -273,26 +295,34 @@ impl RenderOnce for AccordionPanel {
 /// An unstyled accordion trigger with controlled expanded state.
 ///
 /// The application owns the title, disclosure icon, content, layout, and
-/// animation. Activating the trigger requests the opposite of `open`.
+/// animation. Activating the trigger requests the opposite of `open`. An
+/// enabled trigger takes keyboard focus and activates with Enter or Space;
+/// without a handle from [`InteractiveElement::track_focus`] it keeps one of
+/// its own in keyed state, a stop in the window's Tab order.
 #[derive(IntoElement)]
 pub struct AccordionTrigger {
+    id: ElementId,
     base: crate::ObservedElement<gpui::Stateful<Div>>,
     style: StyleRefinement,
     children: SmallVec<[AnyElement; 2]>,
     open: bool,
     disabled: bool,
     on_change: Option<ChangeHandler>,
+    focus_handle: Option<FocusHandle>,
 }
 
 impl AccordionTrigger {
     pub fn new(id: impl Into<ElementId>) -> Self {
+        let id = id.into();
         Self {
-            base: div().id(id).test_support(),
+            base: div().id(id.clone()).test_support(),
+            id,
             style: StyleRefinement::default(),
             children: SmallVec::new(),
             open: false,
             disabled: false,
             on_change: None,
+            focus_handle: None,
         }
     }
 
@@ -333,8 +363,10 @@ impl InteractiveElement for AccordionTrigger {
         self.base.interactivity()
     }
 
-    fn track_focus(mut self, handle: &gpui::FocusHandle) -> Self {
-        self.base = self.base.track_focus(handle);
+    /// Uses a caller-owned focus handle, with its own tab stop, instead of
+    /// the trigger's keyed one.
+    fn track_focus(mut self, handle: &FocusHandle) -> Self {
+        self.focus_handle = Some(handle.clone());
         self
     }
 }
@@ -342,12 +374,25 @@ impl InteractiveElement for AccordionTrigger {
 impl StatefulInteractiveElement for AccordionTrigger {}
 
 impl RenderOnce for AccordionTrigger {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let next_open = !self.open;
+        let focus_handle = (!self.disabled).then(|| {
+            self.focus_handle.clone().unwrap_or_else(|| {
+                window
+                    .use_keyed_state(self.id.clone(), cx, |_, cx| {
+                        cx.focus_handle().tab_stop(true)
+                    })
+                    .read(cx)
+                    .clone()
+            })
+        });
 
         self.base
             .role(Role::Button)
             .aria_expanded(self.open)
+            .when_some(focus_handle, |this, focus_handle| {
+                this.track_focus(&focus_handle)
+            })
             .when_some(
                 (!self.disabled).then_some(self.on_change).flatten(),
                 move |this, on_change| {
@@ -503,5 +548,120 @@ mod tests {
         let nodes = captured.borrow();
         assert_eq!(nodes[0].role(), Role::Heading);
         assert_eq!(nodes[1].role(), Role::Region);
+    }
+
+    /// Three triggers, the middle one disabled.
+    struct Triggers {
+        handles: Vec<gpui::FocusHandle>,
+        requested: Rc<RefCell<Vec<(usize, bool)>>>,
+    }
+
+    impl Render for Triggers {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let roving = RovingFocus::new("triggers-roving", 3, window, cx)
+                .orientation(crate::RovingOrientation::Vertical)
+                .single_tab_stop(false)
+                .disabled_items([false, true, false]);
+            self.handles = (0..3).map(|ix| roving.focus_handle(ix)).collect();
+            Accordion::new("triggers")
+                .roving_focus(roving)
+                .children((0..3).map(|ix| {
+                    let requested = self.requested.clone();
+                    AccordionTrigger::new(("trigger", ix))
+                        .size(px(20.))
+                        .disabled(ix == 1)
+                        .track_focus(&self.handles[ix])
+                        .on_change(move |open, _, _, _| requested.borrow_mut().push((ix, open)))
+                }))
+        }
+    }
+
+    fn triggers(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        gpui::Entity<Triggers>,
+        Rc<RefCell<Vec<(usize, bool)>>>,
+        &mut VisualTestContext,
+    ) {
+        let requested = Rc::new(RefCell::new(Vec::new()));
+        let (view, cx) = cx.add_window_view({
+            let requested = requested.clone();
+            move |_, _| Triggers {
+                handles: Vec::new(),
+                requested,
+            }
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            window.focus_next(cx);
+            window.draw(cx).clear(cx);
+        });
+        (view, requested, cx)
+    }
+
+    fn focused_trigger(view: &gpui::Entity<Triggers>, cx: &mut VisualTestContext) -> Option<usize> {
+        cx.update(|window, cx| {
+            view.read(cx)
+                .handles
+                .iter()
+                .position(|handle| handle.is_focused(window))
+        })
+    }
+
+    #[gpui::test]
+    fn tab_visits_every_enabled_trigger(cx: &mut gpui::TestAppContext) {
+        let (view, _, cx) = triggers(cx);
+        assert_eq!(focused_trigger(&view, cx), Some(0));
+        cx.update(|window, cx| window.focus_next(cx));
+        assert_eq!(
+            focused_trigger(&view, cx),
+            Some(2),
+            "Tab passes over the disabled trigger"
+        );
+    }
+
+    #[gpui::test]
+    fn up_down_home_and_end_move_between_triggers(cx: &mut gpui::TestAppContext) {
+        let (view, _, cx) = triggers(cx);
+
+        cx.simulate_keystrokes("down");
+        assert_eq!(focused_trigger(&view, cx), Some(2));
+        cx.simulate_keystrokes("down");
+        assert_eq!(
+            focused_trigger(&view, cx),
+            Some(0),
+            "Down wraps to the first"
+        );
+        cx.simulate_keystrokes("up");
+        assert_eq!(focused_trigger(&view, cx), Some(2), "Up wraps to the last");
+        cx.simulate_keystrokes("home");
+        assert_eq!(focused_trigger(&view, cx), Some(0));
+        cx.simulate_keystrokes("end");
+        assert_eq!(focused_trigger(&view, cx), Some(2));
+    }
+
+    #[gpui::test]
+    fn enter_and_space_toggle_the_focused_trigger(cx: &mut gpui::TestAppContext) {
+        let (_, requested, cx) = triggers(cx);
+
+        for key in ["enter", "space"] {
+            let keystroke = gpui::Keystroke::parse(key).unwrap();
+            cx.simulate_event(KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            });
+            cx.simulate_event(gpui::KeyUpEvent { keystroke });
+        }
+        assert_eq!(*requested.borrow(), vec![(0, true), (0, true)]);
+    }
+
+    #[gpui::test]
+    fn a_trigger_without_a_handle_still_takes_focus(cx: &mut gpui::TestAppContext) {
+        let (cx, _) = harness(cx, false, false);
+        cx.update(|window, cx| {
+            window.focus_next(cx);
+            assert!(window.focused(cx).is_some());
+        });
     }
 }

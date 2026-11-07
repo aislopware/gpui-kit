@@ -56,6 +56,7 @@ mod radio_group;
 mod reduce_motion;
 mod resizable;
 mod root;
+mod roving_focus;
 mod scroll_bounce;
 mod scrollable_mask;
 mod scrollbar;
@@ -113,7 +114,7 @@ pub use element_ext::ElementExt;
 pub use event::InteractiveElementExt;
 pub use focus_trap::FocusTrapElement;
 #[doc(hidden)]
-pub use focus_trap::active_focus_trap;
+pub use focus_trap::{InitialFocus, active_focus_trap};
 pub use geometry::*;
 pub use global_state::{DeferredPopover, GlobalState};
 pub use grid_layout::{
@@ -141,8 +142,8 @@ pub use motion::{
 };
 pub use nav_stack::{NavMotion, NavOperation, NavPage, NavStack, NavStackEvent, NavStackState};
 pub use number_input::{
-    Decrement, Increment, NumberInput, NumberInputEvent, NumberInputText, NumberStep, StepAction,
-    step_value,
+    Decrement, DecrementLarge, DecrementSmall, Increment, IncrementLarge, IncrementSmall,
+    NumberInput, NumberInputEvent, NumberInputText, NumberStep, StepAction, step_value,
 };
 pub use observe::{ObservedElement, ObservedTextElement, TestSupportExt, TestTextExt};
 pub use otp_input::{OtpEvent, OtpInput, OtpState};
@@ -163,6 +164,7 @@ pub use resizable::{
     resizable_panel, resize_handle, v_resizable,
 };
 pub use root::{Root, RootPlugin};
+pub use roving_focus::{RovingFocus, RovingOrientation};
 pub use scroll_bounce::{ScrollBounce, ScrollBounceMotion};
 pub use scrollable_mask::{
     HorizontalScrollClaim, RoundedFrameCover, ScrollableMask, last_horizontal_scroll_claim,
@@ -206,8 +208,8 @@ pub use time_field::{
     TimePrecision, TimeSegment,
 };
 pub use toast::{
-    Toast, ToastAdvance, ToastManager, ToastMotion, ToastOptions, ToastStack, ToastStackState,
-    ToastTransitionStatus,
+    Toast, ToastAdvance, ToastManager, ToastMotion, ToastOptions, ToastPriority, ToastStack,
+    ToastStackState, ToastTransitionStatus,
 };
 pub use toggle::{Toggle, ToggleStyles};
 pub use toggle_group::ToggleGroup;

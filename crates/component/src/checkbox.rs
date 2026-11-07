@@ -10,7 +10,7 @@ use gpui::{
     RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, px, relative, rems, svg,
 };
-use gpui_base::{CheckboxIndicator, spring};
+use gpui_base::{CheckboxIndicator, CheckboxState, spring};
 
 /// A Checkbox element.
 #[derive(IntoElement)]
@@ -24,6 +24,7 @@ pub struct Checkbox {
     accessibility_label: Option<SharedString>,
     children: Vec<AnyElement>,
     checked: bool,
+    indeterminate: bool,
     disabled: bool,
     size: Size,
     tab_stop: bool,
@@ -46,6 +47,7 @@ impl Checkbox {
             accessibility_label: None,
             children: Vec::new(),
             checked: false,
+            indeterminate: false,
             disabled: false,
             size: Size::default(),
             on_click: None,
@@ -95,6 +97,15 @@ impl Checkbox {
     /// Set the checked state for the checkbox.
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = checked;
+        self
+    }
+
+    /// Show the checkbox as indeterminate, default is false: a dash in place
+    /// of the check, announced as mixed, for a parent whose children are
+    /// partly checked. It takes precedence over [`Self::checked`]; activating
+    /// an indeterminate checkbox requests `true`.
+    pub fn indeterminate(mut self, indeterminate: bool) -> Self {
+        self.indeterminate = indeterminate;
         self
     }
 
@@ -223,9 +234,60 @@ pub(crate) fn checkbox_check_icon(
         })
 }
 
+/// The dash an indeterminate checkbox shows in place of the check, faded
+/// in and out like the check.
+fn checkbox_dash_icon(
+    id: ElementId,
+    size: Size,
+    indeterminate: bool,
+    disabled: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> impl IntoElement {
+    let opacity = spring(
+        (id, "dash"),
+        if indeterminate { 1. } else { 0. },
+        cx.theme().motion_tokens().spring_control,
+        window,
+        cx,
+    );
+    let color = if disabled {
+        cx.theme().primary_foreground.opacity(0.5)
+    } else {
+        cx.theme().primary_foreground
+    };
+
+    svg()
+        .absolute()
+        .top_px()
+        .left_px()
+        .map(|this| match size {
+            Size::XSmall => this.size_2(),
+            Size::Small => this.size_2p5(),
+            Size::Medium => this.size_3(),
+            Size::Large => this.size_3p5(),
+            _ => this.size_3(),
+        })
+        .text_color(color)
+        .when(opacity > 0., |this| {
+            this.path(crate::resolve_icon_path(IconName::Minus.path(), cx))
+                .opacity(opacity)
+        })
+}
+
 impl RenderOnce for Checkbox {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let checked = self.checked;
+        let indeterminate = self.indeterminate;
+        // The box fills for an indeterminate checkbox as for a checked one;
+        // only the mark differs.
+        let checked = self.checked || indeterminate;
+        let state = if indeterminate {
+            CheckboxState::Indeterminate
+        } else if self.checked {
+            CheckboxState::Checked
+        } else {
+            CheckboxState::Unchecked
+        };
         let has_content = self.label.is_some() || !self.children.is_empty();
         let indicator_size = rems(match self.size {
             Size::XSmall => 0.75,
@@ -257,7 +319,7 @@ impl RenderOnce for Checkbox {
         let disabled_text_color = cx.theme().muted_foreground;
         let instance_style = self.style.clone();
         base.role(self.role)
-            .checked(checked)
+            .state(state)
             .disabled(self.disabled)
             .styles(|styles| {
                 styles.disabled(|style| {
@@ -273,9 +335,9 @@ impl RenderOnce for Checkbox {
                 this.accessibility_label(label)
             })
             .when_some(on_click, |this, on_click| {
-                this.on_change(move |_, _, window, cx| {
+                this.on_change(move |next, _, window, cx| {
                     window.prevent_default();
-                    on_click(&!checked, window, cx);
+                    on_click(&(next == CheckboxState::Checked), window, cx);
                 })
             })
             .h_flex()
@@ -294,7 +356,7 @@ impl RenderOnce for Checkbox {
             .refine_style(&self.style)
             .child(
                 CheckboxIndicator::new()
-                    .checked(checked)
+                    .state(state)
                     .disabled(self.disabled)
                     .relative()
                     .size(indicator_size)
@@ -314,6 +376,11 @@ impl RenderOnce for Checkbox {
                                     .border_color(checked_color)
                                     .bg(cx.theme().tokens.primary)
                             })
+                            .indeterminate(|style| {
+                                style
+                                    .border_color(checked_color)
+                                    .bg(cx.theme().tokens.primary)
+                            })
                             .disabled(|style| {
                                 style
                                     .border_color(disabled_indicator_color)
@@ -321,9 +388,17 @@ impl RenderOnce for Checkbox {
                             })
                     })
                     .child(checkbox_check_icon(
+                        self.id.clone(),
+                        self.size,
+                        self.checked && !indeterminate,
+                        self.disabled,
+                        window,
+                        cx,
+                    ))
+                    .child(checkbox_dash_icon(
                         self.id,
                         self.size,
-                        checked,
+                        indeterminate,
                         self.disabled,
                         window,
                         cx,
@@ -536,5 +611,73 @@ mod tests {
             asked.borrow().contains(&IconName::Check.path().to_string()),
             "the check mark must be drawn from the resolved path"
         );
+    }
+
+    #[gpui::test]
+    fn an_indeterminate_checkbox_shows_a_dash_instead_of_a_check(cx: &mut TestAppContext) {
+        struct MixedHarness;
+
+        impl Render for MixedHarness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                Checkbox::new("mixed").checked(true).indeterminate(true)
+            }
+        }
+
+        let asked = Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        cx.update(|cx| {
+            crate::init(cx);
+            cx.set_reduce_motion(true);
+            let asked = asked.clone();
+            crate::set_icon_resolver(cx, move |path, _| {
+                asked.borrow_mut().push(path.to_string());
+                None
+            });
+        });
+        let (_, cx) = cx.add_window_view(|_, _| MixedHarness);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let asked = asked.borrow();
+        assert!(
+            asked.contains(&IconName::Minus.path().to_string()),
+            "an indeterminate checkbox must draw a dash"
+        );
+        assert!(
+            !asked.contains(&IconName::Check.path().to_string()),
+            "and no check mark, even when it is also marked checked"
+        );
+    }
+
+    #[gpui::test]
+    fn activating_an_indeterminate_checkbox_asks_to_check_it(cx: &mut TestAppContext) {
+        struct MixedClickHarness {
+            requested: Rc<std::cell::RefCell<Vec<bool>>>,
+        }
+
+        impl Render for MixedClickHarness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let requested = self.requested.clone();
+                div().size(px(100.)).child(
+                    Checkbox::new("mixed")
+                        .indeterminate(true)
+                        .size_full()
+                        .on_click(move |checked, _, _| requested.borrow_mut().push(*checked)),
+                )
+            }
+        }
+
+        cx.update(crate::init);
+        let requested = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view({
+            let requested = requested.clone();
+            move |_, _| MixedClickHarness { requested }
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|window, cx| window.focus_next(cx));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        activate_key(cx, "space");
+        cx.simulate_click(point(px(10.), px(10.)), Modifiers::default());
+
+        assert_eq!(*requested.borrow(), [true, true]);
     }
 }

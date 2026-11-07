@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use gpui::{
     AccessibleAction, AnyElement, App, ElementId, FocusHandle, InteractiveElement as _,
-    IntoElement, KeyBinding, ParentElement, RenderOnce, Role, SharedString,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    IntoElement, KeyBinding, KeyDownEvent, Keystroke, ParentElement, RenderOnce, Role,
+    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _,
 };
 
@@ -38,6 +38,7 @@ pub fn init(cx: &mut App) {
 
 type OpenChangeHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 type ActionHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+type TypeaheadHandler = Rc<dyn Fn(char, &mut Window, &mut App)>;
 
 /// An unstyled controlled select root.
 ///
@@ -64,6 +65,7 @@ pub struct Select {
     key_context: &'static str,
     on_dismiss: Option<ActionHandler>,
     on_confirm: Option<ActionHandler>,
+    on_typeahead: Option<TypeaheadHandler>,
 }
 
 impl Select {
@@ -82,7 +84,21 @@ impl Select {
             key_context: CONTEXT,
             on_dismiss: None,
             on_confirm: None,
+            on_typeahead: None,
         }
+    }
+
+    /// The character a key press types into a select's typeahead, or `None`
+    /// for a key that types nothing, such as an arrow, or that is a shortcut,
+    /// such as one held with Command or Control.
+    pub fn typeahead_character(keystroke: &Keystroke) -> Option<char> {
+        let modifiers = &keystroke.modifiers;
+        if modifiers.control || modifiers.platform || modifiers.function {
+            return None;
+        }
+        let mut typed = keystroke.key_char.as_deref()?.chars();
+        let character = typed.next()?;
+        (typed.next().is_none() && !character.is_control()).then_some(character)
     }
 
     /// Sets the application-controlled open state.
@@ -157,6 +173,19 @@ impl Select {
         self.on_confirm = Some(Rc::new(handler));
         self
     }
+
+    /// Handles each character typed while the select is closed and focused,
+    /// as a native pop-up button lets typing pick its value without opening
+    /// it.
+    ///
+    /// Only keys that type a character arrive here (see
+    /// [`Self::typeahead_character`]); keys bound to the select's actions,
+    /// such as Space, keep their action. The open popup's content handles its
+    /// own typing.
+    pub fn on_typeahead(mut self, handler: impl Fn(char, &mut Window, &mut App) + 'static) -> Self {
+        self.on_typeahead = Some(Rc::new(handler));
+        self
+    }
 }
 
 impl Styled for Select {
@@ -180,6 +209,7 @@ impl RenderOnce for Select {
         let on_open_change = self.on_open_change;
         let on_dismiss = self.on_dismiss;
         let on_confirm = self.on_confirm;
+        let on_typeahead = self.on_typeahead.filter(|_| !open && !disabled);
 
         // Every way of closing runs the same steps. A caller that tracks
         // dismissal has to see one however the popup was closed, and the
@@ -308,6 +338,15 @@ impl RenderOnce for Select {
                 cx.stop_propagation();
                 close(window, cx);
             })
+            .when_some(on_typeahead, |this, handler| {
+                this.on_key_down(move |event: &KeyDownEvent, window, cx| {
+                    let Some(character) = Select::typeahead_character(&event.keystroke) else {
+                        return;
+                    };
+                    cx.stop_propagation();
+                    handler(character, window, cx);
+                })
+            })
             .children(self.children)
             .refine_style(&self.style)
             .a11y_disabled(disabled)
@@ -335,6 +374,8 @@ mod tests {
         confirmations: Arc<Mutex<usize>>,
         /// Every step of a close, in the order it ran.
         closing: Arc<Mutex<Vec<&'static str>>>,
+        /// Every character the typeahead received.
+        typed: Arc<Mutex<Vec<char>>>,
     }
 
     impl SelectHarness {
@@ -349,6 +390,7 @@ mod tests {
                 closing: Arc::new(Mutex::new(Vec::new())),
                 parent_confirms: Arc::new(Mutex::new(0)),
                 confirmations: Arc::new(Mutex::new(0)),
+                typed: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
@@ -369,6 +411,7 @@ mod tests {
 
             let parent_confirms = self.parent_confirms.clone();
             let confirmations = self.confirmations.clone();
+            let typed = self.typed.clone();
             div()
                 .on_action(move |_: &Confirm, _, _| *parent_confirms.lock().unwrap() += 1)
                 .child(
@@ -393,6 +436,7 @@ mod tests {
                             confirmed.lock().unwrap().push("confirm");
                             *confirmations.lock().unwrap() += 1;
                         })
+                        .on_typeahead(move |character, _, _| typed.lock().unwrap().push(character))
                         .when_some(self.search_input.clone(), |this, input| {
                             this.child(crate::Input::new(&input))
                         })
@@ -586,6 +630,36 @@ mod tests {
             assert!(enabled.supports_action(accesskit::Action::Click));
             assert!(!disabled.supports_action(accesskit::Action::Click));
         });
+    }
+
+    /// Typing into a closed, focused select hands each character to its
+    /// typeahead, as a native pop-up button picks a value without opening;
+    /// shortcuts and keys bound to the select's actions are not typing, and
+    /// an open select leaves typing to its popup.
+    #[gpui::test]
+    fn typing_into_a_closed_select_reaches_its_typeahead(cx: &mut TestAppContext) {
+        let (cx, state) = harness(cx, false);
+        let typed = state.read_with(cx, |state, _| state.typed.clone());
+
+        cx.simulate_keystrokes("b->b G->G cmd-c->c");
+        assert_eq!(&*typed.lock().unwrap(), &['b', 'G']);
+        assert!(!state.read_with(cx, |state, _| state.open));
+
+        cx.simulate_keystrokes("space");
+        assert!(
+            state.read_with(cx, |state, _| state.open),
+            "space still opens"
+        );
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_keystrokes("a->a");
+        assert_eq!(&*typed.lock().unwrap(), &['b', 'G']);
+    }
+
+    #[gpui::test]
+    fn a_disabled_select_ignores_typing(cx: &mut TestAppContext) {
+        let (cx, state) = harness(cx, true);
+        cx.simulate_keystrokes("b->b");
+        assert!(state.read_with(cx, |state, _| state.typed.lock().unwrap().is_empty()));
     }
 
     #[gpui::test]

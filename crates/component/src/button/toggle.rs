@@ -1,11 +1,11 @@
-use std::{cell::Cell, rc::Rc, time::Duration};
+use std::{rc::Rc, sync::Arc, time::Duration};
 
 use gpui::{
-    AnyElement, App, Axis, Corners, Edges, ElementId, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
-    Window, prelude::FluentBuilder as _, relative,
+    AnyElement, App, Axis, Corners, Edges, ElementId, FocusHandle, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, SharedString, StyleRefinement, Styled, Window,
+    prelude::FluentBuilder as _, relative,
 };
-use gpui_base::{Toggle as BaseToggle, ToggleGroup as BaseToggleGroup};
+use gpui_base::{RovingFocus, Toggle as BaseToggle, ToggleGroup as BaseToggleGroup};
 use smallvec::{SmallVec, smallvec};
 
 use crate::{ActiveTheme, Disableable, Icon, Sizable, Size, StyledExt, tooltip::ComponentTooltip};
@@ -43,6 +43,9 @@ pub struct Toggle {
     children: SmallVec<[AnyElement; 1]>,
     on_click: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
     tooltip: ComponentTooltip,
+    /// The handle a [`ToggleGroup`]'s roving focus gives the toggle.
+    focus_handle: Option<FocusHandle>,
+    tab_stop: bool,
 }
 
 impl Toggle {
@@ -65,6 +68,8 @@ impl Toggle {
             children: smallvec![],
             on_click: None,
             tooltip: ComponentTooltip::default(),
+            focus_handle: None,
+            tab_stop: true,
         }
     }
 
@@ -178,6 +183,10 @@ impl RenderOnce for Toggle {
         BaseToggle::new(self.id)
             .pressed(checked)
             .disabled(disabled)
+            .when_some(self.focus_handle, |this, focus_handle| {
+                this.track_focus(&focus_handle)
+            })
+            .tab_stop(self.tab_stop)
             .when_some(
                 self.tooltip.text.as_ref().map(|(text, _)| text.clone()),
                 |this, label| this.accessibility_label(label),
@@ -356,102 +365,102 @@ impl Styled for ToggleGroup {
 }
 
 impl RenderOnce for ToggleGroup {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let disabled = self.disabled;
         let single = self.single;
         let items_len = self.items.len();
-        let checks = self
-            .items
-            .iter()
-            .map(|item| item.checked)
-            .collect::<Vec<bool>>();
-        let clicked_index = Rc::new(Cell::new(None));
+        let checks: Rc<[bool]> = self.items.iter().map(|item| item.checked).collect();
+        // One tab stop for the group; the arrow keys move between the items.
+        let roving = RovingFocus::new(
+            ElementId::NamedChild(Arc::new(self.id.clone()), "roving-focus".into()),
+            items_len,
+            window,
+            cx,
+        )
+        .orientation(Axis::Horizontal)
+        .disabled_items(self.items.iter().map(|item| disabled || item.disabled));
+        let on_click = (!disabled).then_some(self.on_click).flatten();
 
         BaseToggleGroup::new(self.id)
             .axis(Axis::Horizontal)
+            .roving_focus(roving.clone())
             .child(
                 crate::h_flex()
                     .items_center()
                     .when(!self.segmented, |this| this.gap_2())
                     .refine_style(&self.style)
-                    .children(self.items.into_iter().enumerate().map({
-                        {
-                            let clicked_index = clicked_index.clone();
-                            move |(ix, item)| {
-                                let item = if !self.segmented || items_len == 1 {
-                                    item
-                                } else if ix == 0 {
-                                    item.border_corners(Corners {
-                                        top_left: true,
-                                        top_right: false,
-                                        bottom_left: true,
-                                        bottom_right: false,
-                                    })
-                                    .border_edges(Edges {
-                                        left: true,
-                                        top: true,
-                                        right: true,
-                                        bottom: true,
-                                    })
-                                } else if ix == items_len - 1 {
-                                    item.border_corners(Corners {
-                                        top_left: false,
-                                        top_right: true,
-                                        bottom_left: false,
-                                        bottom_right: true,
-                                    })
-                                    .border_edges(Edges {
-                                        left: false,
-                                        top: true,
-                                        right: true,
-                                        bottom: true,
-                                    })
-                                } else {
-                                    item.border_corners(Corners {
-                                        top_left: false,
-                                        top_right: false,
-                                        bottom_left: false,
-                                        bottom_right: false,
-                                    })
-                                    .border_edges(Edges {
-                                        left: false,
-                                        top: true,
-                                        right: true,
-                                        bottom: true,
-                                    })
-                                };
-
-                                let effective_disabled = disabled || item.disabled;
-                                let clicked_index = clicked_index.clone();
-                                item.disabled(effective_disabled)
-                                    .with_size(self.size)
-                                    .with_variant(self.variant)
-                                    .on_click(move |_, _, cx| {
-                                        clicked_index.set(Some(ix));
-                                        cx.propagate();
-                                    })
-                            }
-                        }
-                    })),
-            )
-            .when_some(
-                (!disabled).then_some(self.on_click).flatten(),
-                |this, on_click| {
-                    this.on_click(move |_, window, cx| {
-                        let Some(ix) = clicked_index.take() else {
-                            return;
-                        };
-                        // A single group clears every other item; clicking its
-                        // checked item still flips that one off.
-                        let mut next = if single {
-                            vec![false; checks.len()]
+                    .children(self.items.into_iter().enumerate().map(|(ix, item)| {
+                        let item = if !self.segmented || items_len == 1 {
+                            item
+                        } else if ix == 0 {
+                            item.border_corners(Corners {
+                                top_left: true,
+                                top_right: false,
+                                bottom_left: true,
+                                bottom_right: false,
+                            })
+                            .border_edges(Edges {
+                                left: true,
+                                top: true,
+                                right: true,
+                                bottom: true,
+                            })
+                        } else if ix == items_len - 1 {
+                            item.border_corners(Corners {
+                                top_left: false,
+                                top_right: true,
+                                bottom_left: false,
+                                bottom_right: true,
+                            })
+                            .border_edges(Edges {
+                                left: false,
+                                top: true,
+                                right: true,
+                                bottom: true,
+                            })
                         } else {
-                            checks.clone()
+                            item.border_corners(Corners {
+                                top_left: false,
+                                top_right: false,
+                                bottom_left: false,
+                                bottom_right: false,
+                            })
+                            .border_edges(Edges {
+                                left: false,
+                                top: true,
+                                right: true,
+                                bottom: true,
+                            })
                         };
-                        next[ix] = !checks[ix];
-                        on_click(&next, window, cx);
-                    })
-                },
+
+                        let effective_disabled = disabled || item.disabled;
+                        let on_click = on_click.clone();
+                        let checks = checks.clone();
+                        let mut item = item
+                            .disabled(effective_disabled)
+                            .with_size(self.size)
+                            .with_variant(self.variant)
+                            // The group's callback replaces the item's own, for
+                            // a press from the pointer or the keyboard alike.
+                            .on_click(move |_, window, cx| {
+                                let Some(on_click) = &on_click else {
+                                    return;
+                                };
+                                // A single group clears every other item;
+                                // pressing its checked item still flips that
+                                // one off.
+                                let mut next = if single {
+                                    vec![false; checks.len()]
+                                } else {
+                                    checks.to_vec()
+                                };
+                                next[ix] = !checks[ix];
+                                on_click(&next, window, cx);
+                            });
+                        item.focus_handle = Some(roving.focus_handle(ix));
+                        item.tab_stop = roving.is_tab_stop(ix);
+                        item
+                    })),
             )
     }
 }
@@ -632,14 +641,38 @@ mod tests {
     }
 
     #[gpui::test]
-    fn legacy_toggle_group_keyboard_click_does_not_reach_the_group_callback(
-        cx: &mut TestAppContext,
-    ) {
+    fn enter_presses_the_focused_toggle_of_a_group(cx: &mut TestAppContext) {
         let (cx, child_clicks, changes) = toggle_group_harness(cx, true);
-        cx.update(|window, cx| window.focus_next(cx));
+        cx.update(|window, cx| {
+            window.focus_next(cx);
+            window.draw(cx).clear(cx);
+        });
         activate_key(cx, "enter");
         assert_eq!(child_clicks.get(), 0);
-        assert!(changes.borrow().is_empty());
+        assert_eq!(changes.borrow().as_slice(), &[vec![false, false]]);
+    }
+
+    #[gpui::test]
+    fn a_toggle_group_is_one_tab_stop_and_the_arrows_move_inside_it(cx: &mut TestAppContext) {
+        let (cx, _, changes) = toggle_group_harness(cx, true);
+        cx.update(|window, cx| {
+            window.focus_next(cx);
+            window.draw(cx).clear(cx);
+        });
+        cx.simulate_keystrokes("right");
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        activate_key(cx, "space");
+        assert_eq!(
+            changes.borrow().as_slice(),
+            &[vec![true, true]],
+            "Space pressed the second toggle, which the arrow moved to"
+        );
+
+        // Tab from the second toggle leaves the group: the window holds no
+        // other stop, so focus comes back to the same toggle, not the first.
+        let focused = cx.update(|window, cx| window.focused(cx));
+        cx.update(|window, cx| window.focus_next(cx));
+        assert_eq!(cx.update(|window, cx| window.focused(cx)), focused);
     }
 
     /// Three 60 px items with no gap, so the pointer reaches each of them at

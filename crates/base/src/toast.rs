@@ -4,8 +4,8 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use gpui::{
     Anchor, AnyElement, App, Div, ElementId, FocusHandle, InteractiveElement, Interactivity,
-    IntoElement, MouseMoveEvent, ParentElement, Pixels, RenderOnce, Role, Stateful,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window, canvas, div,
+    IntoElement, LiveRegion as _, MouseMoveEvent, ParentElement, Pixels, RenderOnce, Role,
+    Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, canvas, div,
     prelude::FluentBuilder as _, px,
 };
 
@@ -590,12 +590,24 @@ pub enum ToastTransitionStatus {
     Ending,
 }
 
+/// How urgently assistive technology announces a toast, as Base UI's
+/// `priority`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToastPriority {
+    /// A status, announced after what is being said.
+    #[default]
+    Low,
+    /// An alert, announced at once: errors and what needs action now.
+    High,
+}
+
 /// An unstyled semantic toast root. Applications own all presentation and motion.
 #[derive(IntoElement)]
 pub struct Toast {
     base: crate::ObservedElement<Stateful<Div>>,
     style: StyleRefinement,
     transition_status: ToastTransitionStatus,
+    priority: ToastPriority,
     children: Vec<AnyElement>,
 }
 
@@ -606,8 +618,16 @@ impl Toast {
             base: div().id(id).test_support(),
             style: StyleRefinement::default(),
             transition_status: ToastTransitionStatus::Starting,
+            priority: ToastPriority::Low,
             children: Vec::new(),
         }
+    }
+
+    /// Set how urgently the toast is announced; [`ToastPriority::Low`] by
+    /// default.
+    pub fn priority(mut self, priority: ToastPriority) -> Self {
+        self.priority = priority;
+        self
     }
 
     /// Set the lifecycle phase used by application-owned toast presentation.
@@ -649,8 +669,13 @@ impl StatefulInteractiveElement for Toast {}
 
 impl RenderOnce for Toast {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let (role, live) = match self.priority {
+            ToastPriority::Low => (Role::Status, gpui::accesskit::Live::Polite),
+            ToastPriority::High => (Role::Alert, gpui::accesskit::Live::Assertive),
+        };
         self.base
-            .role(Role::Alert)
+            .role(role)
+            .aria_live(live)
             .children(self.children)
             .refine_style(&self.style)
     }
@@ -789,15 +814,25 @@ mod tests {
     }
 
     #[gpui::test]
-    fn toast_exposes_alert_semantics(cx: &mut gpui::TestAppContext) {
+    fn a_toast_is_a_polite_status_and_a_high_priority_one_an_assertive_alert(
+        cx: &mut gpui::TestAppContext,
+    ) {
         let window = cx.add_empty_window();
         window.update(|window, cx| {
-            let mut node = accesskit::Node::new(Role::Alert);
+            let mut node = accesskit::Node::new(Role::Unknown);
             Toast::new("toast")
                 .render(window, cx)
                 .into_element()
                 .write_a11y_info(&mut node);
-            assert_eq!(node.role(), Role::Alert);
+            assert_eq!(node.live(), Some(accesskit::Live::Polite));
+
+            let mut node = accesskit::Node::new(Role::Unknown);
+            Toast::new("alert")
+                .priority(ToastPriority::High)
+                .render(window, cx)
+                .into_element()
+                .write_a11y_info(&mut node);
+            assert_eq!(node.live(), Some(accesskit::Live::Assertive));
         });
     }
 

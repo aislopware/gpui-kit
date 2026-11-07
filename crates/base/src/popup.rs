@@ -182,8 +182,11 @@ impl RenderOnce for Popup {
             return root;
         }
 
-        let positioner =
-            Positioner::corner(anchor, position.get()).tracked_corner_position(position);
+        // A popup that does not fit on its side of the trigger opens on the
+        // other, as Base UI's does, rather than sliding over its trigger.
+        let positioner = Positioner::corner(anchor, position.get())
+            .tracked_flip_around(trigger_bounds.clone())
+            .tracked_corner_position(position);
         let positioner = if let Some(callback) = self.on_position {
             positioner.on_position(move |position| callback(position, trigger_bounds.get()))
         } else {

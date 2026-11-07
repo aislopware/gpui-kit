@@ -4,10 +4,10 @@ use std::ops::Range;
 use gpui::{
     AccessibleAction, Along, AnyElement, App, AppContext as _, Axis, Bounds, Context, Div,
     DragMoveEvent, Empty, Entity, EntityId, EventEmitter, FocusHandle, HitboxBehavior,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, Orientation, ParentElement,
-    Pixels, Point, Render, RenderOnce, Role, SharedString, StatefulInteractiveElement,
-    StyleRefinement, Styled, TouchDragEvent, TouchPhase, Window, div, prelude::FluentBuilder as _,
-    px,
+    InteractiveElement, IntoElement, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent,
+    Orientation, ParentElement, Pixels, Point, Render, RenderOnce, Role, SharedString,
+    StatefulInteractiveElement, StyleRefinement, Styled, TouchDragEvent, TouchPhase, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::{a11y_disabled::A11yDisabledExt as _, element_ext::ElementExt, geometry::AxisExt};
@@ -104,17 +104,21 @@ impl SliderValue {
         }
     }
 
+    /// Moves the range start to `value`. The thumbs never cross: a start
+    /// moved past the end pushes the end along with it (Base UI's `push`).
     fn set_start(&mut self, value: f32) {
         if let SliderValue::Range(_, end) = self {
-            *self = SliderValue::Range(value.min(*end), *end);
+            *self = SliderValue::Range(value, end.max(value));
         } else {
             *self = SliderValue::Single(value);
         }
     }
 
+    /// Moves the range end (or the single value) to `value`, pushing the
+    /// start back when the end is moved below it.
     fn set_end(&mut self, value: f32) {
         if let SliderValue::Range(start, _) = self {
-            *self = SliderValue::Range(*start, value.max(*start));
+            *self = SliderValue::Range(start.min(value), value);
         } else {
             *self = SliderValue::Single(value);
         }
@@ -172,6 +176,8 @@ pub struct SliderState {
     min: f32,
     max: f32,
     step: f32,
+    /// The step of Shift+arrow, Page Up and Page Down; ten steps when unset.
+    large_step: Option<f32>,
     value: SliderValue,
     /// When is single value mode, only `end` is used, the start is always 0.0.
     percentage: Range<f32>,
@@ -201,6 +207,7 @@ impl SliderState {
             min: 0.0,
             max: 100.0,
             step: 1.0,
+            large_step: None,
             value: SliderValue::default(),
             percentage: (0.0..0.0),
             bounds: Bounds::default(),
@@ -243,6 +250,13 @@ impl SliderState {
     /// Set the step value of the slider, default: 1.0
     pub fn step(mut self, step: f32) -> Self {
         self.step = step;
+        self
+    }
+
+    /// Set the step of Shift+arrow, Page Up and Page Down, default: ten
+    /// steps.
+    pub fn large_step(mut self, large_step: f32) -> Self {
+        self.large_step = Some(large_step);
         self
     }
 
@@ -300,6 +314,85 @@ impl SliderState {
     /// Get the step value.
     pub fn step_value(&self) -> f32 {
         self.step
+    }
+
+    /// Get the large step: Shift+arrow, Page Up and Page Down move this far.
+    pub fn large_step_value(&self) -> f32 {
+        self.large_step.unwrap_or(self.step * 10.)
+    }
+
+    /// The value a key moves the start (or end) thumb to, or `None` when the
+    /// key does not move a slider thumb.
+    ///
+    /// Right and Up step up, Left and Down step down, whatever the slider's
+    /// orientation; with Shift, and for Page Up and Page Down, by the large
+    /// step. Home and End go to the minimum and maximum. The result sits on a
+    /// step counted from `min`, inside the range.
+    fn keyboard_value(&self, start: bool, keystroke: &Keystroke) -> Option<f32> {
+        let modifiers = &keystroke.modifiers;
+        if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
+            return None;
+        }
+        // A slider without a usable step still moves by a hundredth of its range.
+        let step = if self.step > 0. && self.step.is_finite() {
+            self.step
+        } else {
+            (self.max - self.min) / 100.
+        };
+        let large_step = match self.large_step {
+            Some(large_step) if large_step > 0. && large_step.is_finite() => large_step,
+            _ => step * 10.,
+        };
+        let arrow = if modifiers.shift { large_step } else { step };
+        let current = if start {
+            self.value.start()
+        } else {
+            self.value.end()
+        };
+        let value = match keystroke.key.as_str() {
+            "right" | "up" => current + arrow,
+            "left" | "down" => current - arrow,
+            "pageup" => current + large_step,
+            "pagedown" => current - large_step,
+            "home" => self.min,
+            "end" => self.max,
+            _ => return None,
+        };
+        Some(
+            snap_to_step(value, self.min, self.max, self.step)
+                .min(self.max)
+                .max(self.min),
+        )
+    }
+
+    /// Moves the start (or end) thumb for a key pressed while it has focus.
+    ///
+    /// Returns whether the key is a slider key, so the caller consumes it
+    /// even at either end of the range. A move emits [`SliderEvent::Change`]
+    /// and then [`SliderEvent::Release`], as a press-and-release would.
+    #[doc(hidden)]
+    pub fn handle_keystroke(
+        &mut self,
+        start: bool,
+        keystroke: &Keystroke,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(value) = self.keyboard_value(start, keystroke) else {
+            return false;
+        };
+        let before = self.value;
+        if start {
+            self.value.set_start(value);
+        } else {
+            self.value.set_end(value);
+        }
+        if self.value != before {
+            self.update_thumb_pos();
+            cx.emit(SliderEvent::Change(self.value));
+            cx.emit(SliderEvent::Release(self.value));
+            cx.notify();
+        }
+        true
     }
 
     /// Converts a value between 0.0 and 1.0 to a value between the minimum and maximum value,
@@ -375,12 +468,7 @@ impl SliderState {
         let total_size = bounds.size.along(axis);
         let percentage = inner_pos.clamp(px(0.), total_size) / total_size;
 
-        let percentage = if is_start {
-            percentage.clamp(0.0, self.percentage.end)
-        } else {
-            percentage.clamp(self.percentage.start, 1.0)
-        };
-
+        // The thumbs never cross: a thumb dragged past the other pushes it.
         let value = self.percentage_to_value(percentage);
         let value = snap_to_step(value, self.min, self.max, step);
 
@@ -504,6 +592,13 @@ impl Slider {
 
     /// Makes the slider's accessibility node itself focusable with `focus`,
     /// so keyboard focus and assistive technology land on the slider.
+    ///
+    /// The focused slider takes the keyboard for its single value (a range's
+    /// thumbs take focus themselves, see [`SliderThumb::track_focus`]): Right
+    /// and Up step up, Left and Down step down, Shift+arrow and Page Up and
+    /// Page Down move by [`SliderState::large_step`], and Home and End go to
+    /// the minimum and maximum. Pressing anywhere on the slider, its thumb
+    /// included, focuses it.
     pub fn track_focus(mut self, focus: &FocusHandle) -> Self {
         self.focus = Some(focus.clone());
         self
@@ -528,11 +623,27 @@ impl RenderOnce for Slider {
         let entity_id = self.state.entity_id();
         let state = self.state.read(cx);
         let slider_state = self.state.clone();
+        let keyboard_focus = self.focus.clone().filter(|_| !self.disabled);
 
         self.base
             .id(("slider", entity_id))
             .test_support()
             .when_some(self.focus, |this, focus| this.track_focus(&focus))
+            .when_some(keyboard_focus, |this, focus| {
+                this.on_key_down(window.listener_for(&self.state, {
+                    let focus = focus.clone();
+                    move |state, event: &KeyDownEvent, window, cx| {
+                        if focus.is_focused(window)
+                            && state.handle_keystroke(false, &event.keystroke, cx)
+                        {
+                            cx.stop_propagation();
+                        }
+                    }
+                }))
+                // The thumb stops its press to own the drag, so the slider is
+                // focused in the capture phase, before the thumb sees it.
+                .capture_any_mouse_down(move |_, window, cx| window.focus(&focus, cx))
+            })
             .role(Role::Slider)
             .when_some(self.accessibility_label, |this, label| {
                 this.aria_label(label)
@@ -825,6 +936,7 @@ pub struct SliderThumb {
     axis: Axis,
     start: bool,
     disabled: bool,
+    focus: Option<FocusHandle>,
     base: Div,
     children: Vec<AnyElement>,
 }
@@ -836,9 +948,19 @@ impl SliderThumb {
             axis: Axis::Horizontal,
             start: false,
             disabled: false,
+            focus: None,
             base: div(),
             children: Vec::new(),
         }
+    }
+
+    /// Makes the thumb a focus target of its own, as each thumb of a range
+    /// slider is. The focused thumb moves its own value with the keys listed
+    /// on [`Slider::track_focus`], pushing the other thumb rather than
+    /// crossing it, and pressing the thumb focuses it.
+    pub fn track_focus(mut self, focus: &FocusHandle) -> Self {
+        self.focus = Some(focus.clone());
+        self
     }
 
     pub fn axis(mut self, axis: Axis) -> Self {
@@ -880,31 +1002,47 @@ impl RenderOnce for SliderThumb {
         let entity_id = self.state.entity_id();
         let axis = self.axis;
         let start = self.start;
+        let focus = self.focus.filter(|_| !self.disabled);
         self.base
             .id(("slider-thumb", start as u32))
             .test_support()
             .children(self.children)
+            .when_some(focus.clone(), |this, focus| {
+                this.track_focus(&focus).on_key_down(window.listener_for(
+                    &self.state,
+                    move |state, event: &KeyDownEvent, _, cx| {
+                        if state.handle_keystroke(start, &event.keystroke, cx) {
+                            cx.stop_propagation();
+                        }
+                    },
+                ))
+            })
             .when(!self.disabled, |this| {
-                this.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_drag(DragThumb((entity_id, start)), |drag, _, _, cx| {
-                        cx.stop_propagation();
-                        cx.new(|_| drag.clone())
-                    })
-                    .on_drag_move(window.listener_for(
-                        &self.state,
-                        move |state, event: &DragMoveEvent<DragThumb>, window, cx| {
-                            let DragThumb((id, start)) = event.drag(cx);
-                            if *id == entity_id {
-                                state.update_value_by_position(
-                                    axis,
-                                    event.event.position,
-                                    *start,
-                                    window,
-                                    cx,
-                                );
-                            }
-                        },
-                    ))
+                this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    cx.stop_propagation();
+                    if let Some(focus) = &focus {
+                        window.focus(focus, cx);
+                    }
+                })
+                .on_drag(DragThumb((entity_id, start)), |drag, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| drag.clone())
+                })
+                .on_drag_move(window.listener_for(
+                    &self.state,
+                    move |state, event: &DragMoveEvent<DragThumb>, window, cx| {
+                        let DragThumb((id, start)) = event.drag(cx);
+                        if *id == entity_id {
+                            state.update_value_by_position(
+                                axis,
+                                event.event.position,
+                                *start,
+                                window,
+                                cx,
+                            );
+                        }
+                    },
+                ))
             })
             // A caller can give a thumb a role of its own, as for a range's thumbs.
             .a11y_disabled(self.disabled)
@@ -1127,6 +1265,163 @@ mod tests {
                 assert!((state.percentage().end - 0.3).abs() < 1e-5, "step {step}");
             });
         }
+    }
+
+    fn press(
+        state: &Entity<SliderState>,
+        start: bool,
+        key: &'static str,
+        cx: &mut gpui::VisualTestContext,
+    ) -> SliderValue {
+        let keystroke = Keystroke::parse(key).unwrap();
+        state.update(cx, |state, cx| {
+            assert!(
+                state.handle_keystroke(start, &keystroke, cx),
+                "{key} is a slider key"
+            );
+            state.value()
+        })
+    }
+
+    #[gpui::test]
+    fn arrow_keys_step_and_shift_or_page_keys_take_ten_steps(cx: &mut gpui::TestAppContext) {
+        let (state, cx) = sized(SliderState::new().step(2.).default_value(50.), cx);
+
+        assert_eq!(press(&state, false, "right", cx), SliderValue::Single(52.));
+        assert_eq!(press(&state, false, "down", cx), SliderValue::Single(50.));
+        assert_eq!(
+            press(&state, false, "shift-up", cx),
+            SliderValue::Single(70.)
+        );
+        assert_eq!(
+            press(&state, false, "pagedown", cx),
+            SliderValue::Single(50.)
+        );
+    }
+
+    #[gpui::test]
+    fn the_large_step_is_configurable(cx: &mut gpui::TestAppContext) {
+        let (state, cx) = sized(SliderState::new().large_step(5.).default_value(50.), cx);
+        assert_eq!(press(&state, false, "pageup", cx), SliderValue::Single(55.));
+    }
+
+    #[gpui::test]
+    fn home_and_end_move_a_thumb_to_the_ends_of_the_range(cx: &mut gpui::TestAppContext) {
+        let (state, cx) = sized(SliderState::new().min(10.).max(90.).default_value(50.), cx);
+
+        assert_eq!(press(&state, false, "home", cx), SliderValue::Single(10.));
+        assert_eq!(press(&state, false, "left", cx), SliderValue::Single(10.));
+        assert_eq!(press(&state, false, "end", cx), SliderValue::Single(90.));
+        assert_eq!(press(&state, false, "right", cx), SliderValue::Single(90.));
+    }
+
+    #[gpui::test]
+    fn a_range_thumb_pushes_the_other_instead_of_crossing_it(cx: &mut gpui::TestAppContext) {
+        let (state, cx) = sized(SliderState::new().default_value((40., 45.)), cx);
+
+        assert_eq!(
+            press(&state, true, "pageup", cx),
+            SliderValue::Range(50., 50.)
+        );
+        assert_eq!(press(&state, false, "home", cx), SliderValue::Range(0., 0.));
+
+        // A drag past the other thumb pushes it too.
+        state.update_in(cx, |state, window, cx| {
+            state.set_value((20., 30.), window, cx)
+        });
+        drag(&state, 60., true, cx);
+        assert_eq!(
+            state.read_with(cx, |state, _| state.value()),
+            SliderValue::Range(60., 60.)
+        );
+    }
+
+    #[gpui::test]
+    fn keys_with_command_or_option_leave_the_slider_alone(cx: &mut gpui::TestAppContext) {
+        let (state, cx) = sized(SliderState::new().default_value(50.), cx);
+        state.update(cx, |state, cx| {
+            assert!(!state.handle_keystroke(false, &Keystroke::parse("cmd-right").unwrap(), cx));
+            assert!(!state.handle_keystroke(false, &Keystroke::parse("alt-left").unwrap(), cx));
+            assert_eq!(state.value(), SliderValue::Single(50.));
+        });
+    }
+
+    /// A slider whose root takes focus for a single value, or whose two
+    /// thumbs take focus for a range.
+    struct Keyboard {
+        state: Entity<SliderState>,
+        focus: [FocusHandle; 3],
+    }
+
+    impl Render for Keyboard {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let [root, start, end] = &self.focus;
+            let is_range = self.state.read(cx).value().is_range();
+            Slider::new(&self.state)
+                .w(px(100.))
+                .h(px(10.))
+                .when(!is_range, |this| this.track_focus(root))
+                .child(
+                    SliderTrack::new(&self.state).size_full().child(
+                        SliderIndicator::new(&self.state)
+                            .size_full()
+                            .when(is_range, |this| {
+                                this.child(
+                                    SliderThumb::new(&self.state)
+                                        .start(true)
+                                        .size(px(4.))
+                                        .track_focus(start),
+                                )
+                            })
+                            .child(
+                                SliderThumb::new(&self.state)
+                                    .size(px(4.))
+                                    .when(is_range, |this| this.track_focus(end)),
+                            ),
+                    ),
+                )
+        }
+    }
+
+    fn keyboard(
+        value: impl Into<SliderValue>,
+        cx: &mut gpui::TestAppContext,
+    ) -> (Entity<Keyboard>, &mut gpui::VisualTestContext) {
+        let value = value.into();
+        let (view, cx) = cx.add_window_view(move |_, cx| Keyboard {
+            state: cx.new(|_| SliderState::new().default_value(value)),
+            focus: [(); 3].map(|_| cx.focus_handle().tab_stop(true)),
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        (view, cx)
+    }
+
+    fn value_of(view: &Entity<Keyboard>, cx: &mut gpui::VisualTestContext) -> SliderValue {
+        view.read_with(cx, |view, cx| view.state.read(cx).value())
+    }
+
+    #[gpui::test]
+    fn a_focused_slider_steps_with_the_arrow_keys(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = keyboard(50., cx);
+        cx.update(|window, cx| window.focus_next(cx));
+
+        cx.simulate_keystrokes("right right left shift-right");
+        assert_eq!(value_of(&view, cx), SliderValue::Single(61.));
+        cx.simulate_keystrokes("home");
+        assert_eq!(value_of(&view, cx), SliderValue::Single(0.));
+    }
+
+    #[gpui::test]
+    fn the_two_thumbs_of_a_range_are_separate_focus_targets(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = keyboard((20., 80.), cx);
+
+        cx.update(|window, cx| window.focus_next(cx));
+        cx.simulate_keystrokes("right");
+        assert_eq!(value_of(&view, cx), SliderValue::Range(21., 80.));
+
+        cx.update(|window, cx| window.focus_next(cx));
+        cx.simulate_keystrokes("left");
+        assert_eq!(value_of(&view, cx), SliderValue::Range(21., 79.));
     }
 
     #[test]

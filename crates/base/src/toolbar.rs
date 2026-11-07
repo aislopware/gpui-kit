@@ -6,7 +6,12 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-use crate::{StyledExt as _, TestSupportExt as _};
+use crate::{
+    StyledExt as _, TestSupportExt as _,
+    roving_focus::{
+        RovingMove, RovingOrientation, focus_edge_within, leave_container, move_focus_within,
+    },
+};
 
 /// An unstyled container that groups a set of controls and owns roving
 /// keyboard focus among them.
@@ -26,13 +31,17 @@ use crate::{StyledExt as _, TestSupportExt as _};
 ///   wrapping around at either end (the same default as Base UI's `loopFocus`).
 ///   A vertical toolbar ([`Toolbar::axis`]) uses Up and Down instead and
 ///   reports a vertical orientation.
-/// - When `disabled`, the arrow keys do nothing. Hosted controls must be
-///   disabled by their owner; the flag only suppresses the toolbar's own
-///   navigation.
+/// - Home and End move focus to the first and last focusable descendant.
+/// - The toolbar is one stop in the window's Tab order: Tab and Shift-Tab from
+///   any item leave the toolbar instead of visiting its other items. Tab from
+///   before the toolbar enters it at its first item, Shift-Tab from after it
+///   at its last.
+/// - When `disabled`, none of these keys do anything special. Hosted
+///   controls must be disabled by their owner; the flag only suppresses the
+///   toolbar's own navigation.
 ///
-/// The container is not itself a tab stop, so ordinary `Tab` traversal enters
-/// and leaves the toolbar through its items, matching the ARIA toolbar
-/// pattern.
+/// The container itself never takes focus. Disabled controls do not track
+/// focus, so the walk passes over them.
 ///
 /// An input hosted inside the toolbar keeps its own arrow-key behavior: text
 /// inputs consume the arrow keys for caret movement before the toolbar sees
@@ -76,46 +85,6 @@ impl Toolbar {
     }
 }
 
-fn step_focus(window: &mut Window, cx: &mut App, forward: bool) {
-    if forward {
-        window.focus_next(cx);
-    } else {
-        window.focus_prev(cx);
-    }
-}
-
-/// Move focus to the next (or previous) focusable element inside `container`.
-///
-/// Walk the window's tab order in the asked direction, passing over stops
-/// outside the container, and land on the first stop inside it. The tab order
-/// wraps around the window, so past the container's last stop the walk comes
-/// back in at its first however many stops the rest of the window holds, and a
-/// stop that a tab index places between two of the container's own is passed
-/// over like any other. GPUI's tab order can cycle short of the whole window,
-/// so the walk ends at the first repeated stop and focus goes back where it
-/// started: a container with no other reachable stop keeps focus where it is.
-fn move_focus(container: &FocusHandle, forward: bool, window: &mut Window, cx: &mut App) {
-    let Some(start) = window.focused(cx) else {
-        return;
-    };
-
-    let mut visited = vec![start.clone()];
-    loop {
-        step_focus(window, cx, forward);
-        let Some(focused) = window.focused(cx) else {
-            break;
-        };
-        if visited.contains(&focused) {
-            break;
-        }
-        if container.contains_focused(window, cx) {
-            return;
-        }
-        visited.push(focused);
-    }
-    window.focus(&start, cx);
-}
-
 fn handle_key_down(
     disabled: bool,
     axis: Axis,
@@ -128,15 +97,28 @@ fn handle_key_down(
         return;
     }
 
-    let forward = match (axis, event.keystroke.key.as_str()) {
-        (Axis::Horizontal, "left") | (Axis::Vertical, "up") => Some(false),
-        (Axis::Horizontal, "right") | (Axis::Vertical, "down") => Some(true),
-        _ => None,
-    };
+    let orientation = RovingOrientation::from(axis);
+    match RovingMove::from_keystroke(orientation, &event.keystroke) {
+        Some(RovingMove::Previous) => move_focus_within(container, false, window, cx),
+        Some(RovingMove::Next) => move_focus_within(container, true, window, cx),
+        Some(RovingMove::First) => focus_edge_within(container, false, window, cx),
+        Some(RovingMove::Last) => focus_edge_within(container, true, window, cx),
+        None => return,
+    }
+    cx.stop_propagation();
+}
 
-    if let Some(forward) = forward {
-        move_focus(container, forward, window, cx);
-        cx.stop_propagation();
+/// Tab (or Shift-Tab) from inside the toolbar skips its remaining items: the
+/// whole toolbar is one stop in the window's Tab order.
+fn handle_tab(
+    disabled: bool,
+    container: &FocusHandle,
+    forward: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if disabled || !leave_container(container, forward, window, cx) {
+        cx.propagate();
     }
 }
 
@@ -186,6 +168,18 @@ impl RenderOnce for Toolbar {
                 handle_key_down(disabled, axis, &focus_handle, event, window, cx);
             }
         };
+        let tab_handler = {
+            let focus_handle = focus_handle.clone();
+            move |_: &crate::root::Tab, window: &mut Window, cx: &mut App| {
+                handle_tab(disabled, &focus_handle, true, window, cx);
+            }
+        };
+        let tab_prev_handler = {
+            let focus_handle = focus_handle.clone();
+            move |_: &crate::root::TabPrev, window: &mut Window, cx: &mut App| {
+                handle_tab(disabled, &focus_handle, false, window, cx);
+            }
+        };
 
         base.track_focus(&focus_handle)
             .role(Role::Toolbar)
@@ -194,6 +188,8 @@ impl RenderOnce for Toolbar {
                 Axis::Vertical => accesskit::Orientation::Vertical,
             })
             .on_key_down(key_handler)
+            .on_action(tab_handler)
+            .on_action(tab_prev_handler)
             // The handle exists for containment checks only. Without this, a
             // press on blank space or non-focusable content would focus the
             // toolbar itself and take focus away from the rest of the window.
@@ -412,6 +408,83 @@ mod tests {
             assert_focused(cx, &first, "first (wrapped)");
             cx.simulate_keystrokes("up");
             assert_focused(cx, &third, "third (wrapped back)");
+        }
+
+        #[gpui::test]
+        fn home_and_end_jump_to_the_first_and_last_item(cx: &mut TestAppContext) {
+            let ([first, _, third], cx) = harness(cx);
+
+            cx.simulate_keystrokes("end");
+            assert_focused(cx, &third, "third (End)");
+            cx.simulate_keystrokes("home");
+            assert_focused(cx, &first, "first (Home)");
+            cx.simulate_keystrokes("right end");
+            assert_focused(cx, &third, "third (End from the second)");
+        }
+
+        /// A toolbar between two page stops.
+        struct Framed {
+            before: FocusHandle,
+            items: [FocusHandle; 3],
+            after: FocusHandle,
+        }
+
+        impl Render for Framed {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let [first, second, third] = &self.items;
+                div()
+                    .flex()
+                    .child(div().id("before").size(px(20.)).track_focus(&self.before))
+                    .child(
+                        Toolbar::new("framed-toolbar")
+                            .child(div().id("first").size(px(20.)).track_focus(first))
+                            .child(div().id("second").size(px(20.)).track_focus(second))
+                            .child(div().id("third").size(px(20.)).track_focus(third)),
+                    )
+                    .child(div().id("after").size(px(20.)).track_focus(&self.after))
+            }
+        }
+
+        fn framed(cx: &mut TestAppContext) -> (Framed, &mut VisualTestContext) {
+            // Tab looks for an enclosing focus trap, as it does in an app.
+            cx.update(crate::init);
+            let (state, cx) = cx.add_window_view(|window, cx| {
+                let stop = |cx: &mut Context<Framed>| cx.focus_handle().tab_stop(true);
+                let page = Framed {
+                    before: stop(cx),
+                    items: [stop(cx), stop(cx), stop(cx)],
+                    after: stop(cx),
+                };
+                page.items[1].focus(window, cx);
+                page
+            });
+            let page = state.read_with(cx, |page, _| Framed {
+                before: page.before.clone(),
+                items: page.items.clone(),
+                after: page.after.clone(),
+            });
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            (page, cx)
+        }
+
+        #[gpui::test]
+        fn tab_from_any_item_leaves_the_toolbar_in_one_press(cx: &mut TestAppContext) {
+            let (page, cx) = framed(cx);
+
+            cx.dispatch_action(crate::root::Tab);
+            assert_focused(cx, &page.after, "the stop after the toolbar (Tab)");
+
+            cx.update(|window, cx| page.items[1].focus(window, cx));
+            cx.dispatch_action(crate::root::TabPrev);
+            assert_focused(cx, &page.before, "the stop before the toolbar (Shift-Tab)");
+        }
+
+        #[gpui::test]
+        fn modified_arrows_leave_focus_where_it_is(cx: &mut TestAppContext) {
+            let (page, cx) = framed(cx);
+
+            cx.simulate_keystrokes("shift-right cmd-left");
+            assert_focused(cx, &page.items[1], "the second item");
         }
 
         #[gpui::test]

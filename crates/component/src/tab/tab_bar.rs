@@ -1,12 +1,12 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use gpui::{
     Anchor, AnyElement, App, Background, Bounds, ClickEvent, Edges, ElementId, Entity, EntityId,
-    InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div, point,
-    prelude::FluentBuilder as _, px,
+    InteractiveElement, IntoElement, KeyboardButton, KeyboardClickEvent, ParentElement, Pixels,
+    RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement as _, StyleRefinement,
+    Styled, Window, div, point, prelude::FluentBuilder as _, px,
 };
-use gpui_base::spring;
+use gpui_base::{RovingFocus, spring};
 use smallvec::SmallVec;
 
 use super::{
@@ -51,6 +51,12 @@ impl TabIndicatorBounds {
 }
 
 /// A TabBar element that contains multiple [`Tab`] items.
+///
+/// The tabs are one stop in the window's Tab order, landing on the selected
+/// tab. Left and Right move focus between the enabled tabs, wrapping at
+/// either end, Home and End jump to the first and last, and Enter or Space
+/// activates the focused tab. Moving focus does not activate a tab unless
+/// [`TabBar::activate_on_focus`] is set.
 #[derive(IntoElement)]
 pub struct TabBar {
     id: ElementId,
@@ -66,6 +72,7 @@ pub struct TabBar {
     size: Size,
     menu: bool,
     max_width: Option<Pixels>,
+    activate_on_focus: bool,
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
 }
 
@@ -88,6 +95,7 @@ impl TabBar {
             on_click: None,
             menu: false,
             max_width: None,
+            activate_on_focus: false,
         }
     }
 
@@ -178,6 +186,14 @@ impl TabBar {
     /// Set the selected index of the TabBar.
     pub fn selected_index(mut self, index: usize) -> Self {
         self.selected_index = Some(index);
+        self
+    }
+
+    /// Set whether a tab is activated as soon as the arrow keys, Home or End
+    /// move focus onto it, default is false: the focused tab waits for Enter
+    /// or Space.
+    pub fn activate_on_focus(mut self, activate_on_focus: bool) -> Self {
+        self.activate_on_focus = activate_on_focus;
         self
     }
 
@@ -501,6 +517,15 @@ impl RenderOnce for TabBar {
         )> = Vec::new();
         let selected_index = self.selected_index;
         let tabs = self.base;
+        let roving = RovingFocus::new(
+            ElementId::NamedChild(Arc::new(self.id.clone()), "roving-focus".into()),
+            num_tabs,
+            window,
+            cx,
+        )
+        .active(selected_index)
+        .disabled_items(self.children.iter().map(|tab| tab.disabled));
+        let mut activate_handlers: Vec<Option<TabClickHandler>> = Vec::with_capacity(num_tabs);
         let mut rendered_tabs = Vec::with_capacity(self.children.len());
         let max_width = self.max_width;
         // A hovered folder tab shows its fill and hides the separators beside
@@ -562,6 +587,8 @@ impl RenderOnce for TabBar {
             if let Some(meta) = item_metas.last_mut() {
                 meta.3 = tab.on_click.clone();
             }
+            activate_handlers.push(tab.on_click.clone());
+            tab.focus_handle = Some(roving.focus_handle(ix));
             // The wrapper below is the flex item the bar lays out, so a tab's
             // own `flex_grow` / `flex_basis` (e.g. `flex_1()`) must size it.
             let flex_grow = tab.style().flex_grow;
@@ -641,7 +668,19 @@ impl RenderOnce for TabBar {
             });
         }
 
-        tabs.group("tab-bar")
+        tabs.roving_focus(roving)
+            .activate_on_focus(self.activate_on_focus)
+            .on_activate(move |ix, window, cx| {
+                // Activating on focus runs the same handler a press would.
+                if let Some(Some(on_click)) = activate_handlers.get(ix) {
+                    let event = ClickEvent::Keyboard(KeyboardClickEvent {
+                        button: KeyboardButton::Enter,
+                        bounds: Bounds::default(),
+                    });
+                    on_click(&event, window, cx);
+                }
+            })
+            .group("tab-bar")
             .relative()
             .flex()
             .items_center()
@@ -2154,5 +2193,82 @@ mod tests {
         let cx = show_late_bar(cx, px(0.));
         next_frame(cx);
         assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
+    }
+
+    /// Three tabs, the second selected; the bar reports each activation.
+    struct KeyboardTabs {
+        activate_on_focus: bool,
+        selected: usize,
+        activations: Rc<RefCell<Vec<usize>>>,
+    }
+
+    impl Render for KeyboardTabs {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let activations = self.activations.clone();
+            TabBar::new("keyboard-tabs")
+                .w(px(320.))
+                .activate_on_focus(self.activate_on_focus)
+                .selected_index(self.selected)
+                .child(Tab::new().label("First"))
+                .child(Tab::new().label("Second"))
+                .child(Tab::new().label("Third"))
+                .on_click(cx.listener(move |tabs, ix: &usize, _, cx| {
+                    activations.borrow_mut().push(*ix);
+                    tabs.selected = *ix;
+                    cx.notify();
+                }))
+        }
+    }
+
+    fn keyboard_tabs(
+        cx: &mut TestAppContext,
+        activate_on_focus: bool,
+    ) -> (&mut gpui::VisualTestContext, Rc<RefCell<Vec<usize>>>) {
+        cx.update(crate::theme::init);
+        let activations = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view({
+            let activations = activations.clone();
+            move |_, _| KeyboardTabs {
+                activate_on_focus,
+                selected: 1,
+                activations,
+            }
+        });
+        cx.update(|window, cx| {
+            crate::test_redraw(window, cx);
+            window.focus_next(cx);
+            crate::test_redraw(window, cx);
+        });
+        (cx, activations)
+    }
+
+    #[gpui::test]
+    fn arrows_move_between_tabs_and_enter_activates_the_focused_one(cx: &mut TestAppContext) {
+        let (cx, activations) = keyboard_tabs(cx, false);
+
+        cx.simulate_keystrokes("left");
+        assert!(
+            activations.borrow().is_empty(),
+            "moving focus activates nothing"
+        );
+        cx.update(|window, cx| crate::test_redraw(window, cx));
+        let keystroke = gpui::Keystroke::parse("enter").unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+        assert_eq!(*activations.borrow(), vec![0]);
+    }
+
+    #[gpui::test]
+    fn a_tab_bar_that_activates_on_focus_follows_the_arrows(cx: &mut TestAppContext) {
+        let (cx, activations) = keyboard_tabs(cx, true);
+
+        cx.simulate_keystrokes("right");
+        cx.update(|window, cx| crate::test_redraw(window, cx));
+        cx.simulate_keystrokes("end home");
+        assert_eq!(*activations.borrow(), vec![2, 0]);
     }
 }

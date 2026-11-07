@@ -8,7 +8,7 @@ use gpui::{
     FocusHandle, Focusable, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
     InteractiveElement, IntoElement, LayoutId, LongPressEvent, MouseButton, MouseDownEvent,
     ParentElement, Pixels, Point, Position, Size, Style, StyleRefinement, Styled, Subscription,
-    TouchPhase, Window, anchored, deferred, div, px,
+    TouchPhase, Window, anchored, deferred, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::{input::AnyInputState, menu::PopupMenu, root::WindowState};
@@ -173,6 +173,10 @@ struct DeferredMenu {
     menu_view: Entity<PopupMenu>,
     position: Point<Pixels>,
     anchor: Anchor,
+    /// Where the menu is in its motion, 0 hidden to 1 settled.
+    progress: f32,
+    /// Closed and drawn for its exit: the pointer passes through it.
+    exiting: bool,
     menu: Option<AnyElement>,
 }
 
@@ -200,7 +204,12 @@ impl DeferredMenu {
                             .attach(cursor, corner)
                             .snap_to_window_with_margin(px(8.))
                             .anchor(self.anchor)
-                            .child(self.menu_view.clone()),
+                            .child(gpui::inert(
+                                div()
+                                    .when(self.progress < 1., |this| this.opacity(self.progress))
+                                    .child(self.menu_view.clone()),
+                                self.exiting,
+                            )),
                     ),
             ),
         )
@@ -328,15 +337,37 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
                     });
                 }
                 let draws_menu = Rc::new(Cell::new(false));
-                let menu_element = menu_view
-                    .filter(|menu| open && !menu.read(cx).is_empty())
-                    .map(|menu_view| DeferredMenu {
-                        draws: draws_menu.clone(),
-                        menu_view,
-                        position,
-                        anchor,
-                        menu: None,
-                    });
+                // Each menu fades in as it opens and out once dismissed, as
+                // Base UI's context menu plays its starting and ending styles;
+                // a menu opened in its place starts over. It is attached to the
+                // cursor, not to a side, so it only fades.
+                let menu_element =
+                    menu_view
+                        .filter(|menu| !menu.read(cx).is_empty())
+                        .and_then(|menu_view| {
+                            let presence = gpui_base::Presence::new(
+                                ElementId::NamedInteger(
+                                    "context-menu".into(),
+                                    menu_view.entity_id().as_u64(),
+                                ),
+                                open,
+                            )
+                            .transition(crate::popover::popup_motion())
+                            .sample(window, cx);
+                            let exiting = presence.phase == gpui_base::PresencePhase::Exiting;
+                            menu_view.update(cx, |menu, cx| {
+                                menu.set_motion(presence.progress, exiting, cx)
+                            });
+                            presence.should_render().then(|| DeferredMenu {
+                                draws: draws_menu.clone(),
+                                menu_view,
+                                position,
+                                anchor,
+                                progress: presence.progress,
+                                exiting,
+                                menu: None,
+                            })
+                        });
 
                 let mut element = this
                     .element
@@ -585,7 +616,7 @@ mod tests {
         Context, FocusHandle, IntoElement, KeyBinding, Render, TestAppContext, VisualTestContext,
         actions, point, px,
     };
-    use std::cell::Cell;
+    use std::{cell::Cell, time::Duration};
 
     actions!(context_menu_test, [RemoveTab, CopyText]);
 
@@ -983,6 +1014,39 @@ mod tests {
         assert!(
             item.left() >= press.x - px(200.) && item.top() >= press.y - px(120.),
             "and stays next to it: {item:?}, {press:?}"
+        );
+    }
+
+    /// A dismissed menu fades out, still drawn but letting the pointer
+    /// through, and is gone once its exit ends.
+    #[gpui::test]
+    fn a_dismissed_menu_fades_out(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::init(cx));
+        let (_, cx) = cx.add_window_view(|_, _| CornerRoot);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let press = point(px(20.), px(20.));
+        cx.simulate_mouse_down(press, MouseButton::Right, Default::default());
+        cx.simulate_mouse_up(press, MouseButton::Right, Default::default());
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(600));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(cx.debug_bounds("corner-item").is_some(), "the menu opens");
+
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("corner-item").is_some(),
+            "a dismissed menu is drawn through its exit"
+        );
+
+        cx.executor().advance_clock(Duration::from_millis(600));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("corner-item").is_none(),
+            "gone once it ends"
         );
     }
 }

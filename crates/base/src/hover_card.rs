@@ -8,7 +8,7 @@ use gpui::{
 use std::time::Duration;
 
 use crate::{
-    Popup, StyledExt as _,
+    Popup, Presence, PresencePhase, StyledExt as _, Transition,
     hover_open::{self, HoverHost, HoverOpen},
 };
 
@@ -34,6 +34,8 @@ pub struct HoverCard {
     open_delay: Duration,
     close_delay: Duration,
     on_open_change: Option<OpenChangeHandler>,
+    motion: Transition,
+    approach: gpui::Pixels,
 }
 
 impl HoverCard {
@@ -48,7 +50,26 @@ impl HoverCard {
             open_delay: Duration::from_secs_f64(0.6),
             close_delay: Duration::from_secs_f64(0.3),
             on_open_change: None,
+            motion: Transition::new(Duration::ZERO),
+            approach: gpui::px(0.),
         }
+    }
+
+    /// The timing of the card's entry and exit, as Base UI's preview card
+    /// plays its starting and ending styles: closing keeps the card drawn,
+    /// taking no pointer, until the exit ends; reopening on the way out turns
+    /// the motion around. The content draws its look from
+    /// [`HoverCardState::motion_progress`]. None by default.
+    pub fn motion(mut self, motion: Transition) -> Self {
+        self.motion = motion;
+        self
+    }
+
+    /// How far back toward the trigger the card is drawn at the start of its
+    /// [`Self::motion`], closing to nothing as it settles.
+    pub fn approach(mut self, distance: gpui::Pixels) -> Self {
+        self.approach = distance;
+        self
     }
 
     pub fn anchor(mut self, anchor: impl Into<Anchor>) -> Self {
@@ -108,6 +129,8 @@ pub struct HoverCardState {
     on_open_change: Option<OpenChangeHandler>,
     /// While open: Escape, from any focus in its window, puts it away.
     escape: Option<Subscription>,
+    motion_progress: f32,
+    exiting: bool,
 }
 
 impl HoverCardState {
@@ -117,11 +140,24 @@ impl HoverCardState {
             hover: HoverOpen::new(open_delay, close_delay),
             on_open_change: None,
             escape: None,
+            motion_progress: 0.,
+            exiting: false,
         }
     }
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// How far the card is through its [`HoverCard::motion`]: 0 hidden, 1
+    /// settled, on the way in or out.
+    pub fn motion_progress(&self) -> f32 {
+        self.motion_progress
+    }
+
+    /// Whether the card is closed and still drawn for its exit.
+    pub fn is_exiting(&self) -> bool {
+        self.exiting
     }
 
     fn sync(
@@ -196,6 +232,14 @@ impl RenderOnce for HoverCard {
             state.sync(self.open_delay, self.close_delay, self.on_open_change)
         });
         let open = state.read(cx).is_open();
+        let presence = Presence::new(self.id.clone(), open)
+            .transition(self.motion)
+            .sample(window, cx);
+        let exiting = presence.phase == PresencePhase::Exiting;
+        state.update(cx, |state, _| {
+            state.motion_progress = presence.progress;
+            state.exiting = exiting;
+        });
 
         let trigger = self.trigger.unwrap_or_else(|| div().into_any_element());
         let popup = Popup::new(
@@ -219,9 +263,10 @@ impl RenderOnce for HoverCard {
                 }),
         )
         .refine_style(&self.style)
-        .anchor(self.anchor);
+        .anchor(self.anchor)
+        .approach(self.approach * (1. - presence.progress));
 
-        if !open {
+        if !presence.should_render() {
             return popup;
         }
 
@@ -236,15 +281,18 @@ impl RenderOnce for HoverCard {
             // Over the card's bounds: follows the pointer on its way from the
             // trigger.
             let watcher = hover_open::travel_watcher(state.downgrade());
-            popup.content(state.update(cx, |state, cx| {
+            let content = state.update(cx, |state, cx| {
                 content(state, window, cx)
-                    .when(self.tap_to_open, |content| {
+                    .when(self.tap_to_open && !exiting, |content| {
                         content.on_mouse_up_out(gpui::MouseButton::Left, dismiss)
                     })
-                    .when(!self.tap_to_open, |content| {
+                    .when(!self.tap_to_open && !exiting, |content| {
                         content.on_hover(hover).relative().child(watcher)
                     })
-            }))
+            });
+            // Closing, it takes no pointer: the pointer passing over it on its
+            // way out neither holds it open nor is stopped by it.
+            popup.inert(exiting).content(content)
         })
     }
 }
@@ -261,6 +309,7 @@ mod tests {
     struct Harness {
         open_changes: Rc<RefCell<Vec<bool>>>,
         tap_to_open: bool,
+        motion: Duration,
     }
 
     impl Render for Harness {
@@ -274,6 +323,7 @@ mod tests {
                 })
                 .open_delay(delay)
                 .close_delay(delay)
+                .motion(Transition::new(self.motion))
                 .on_open_change(move |open, _, _| open_changes.borrow_mut().push(*open))
                 .trigger(
                     div()
@@ -309,6 +359,33 @@ mod tests {
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear(cx));
         assert!(cx.debug_bounds("hover-card-content").is_none());
+    }
+
+    /// A card put away stays drawn, exiting, through its motion, and the
+    /// pointer crossing it on the way out does not hold it open.
+    #[gpui::test]
+    fn a_closing_card_stays_drawn_through_its_exit(cx: &mut TestAppContext) {
+        let delay = Duration::from_millis(100);
+        let (_, cx) = cx.add_window_view(|_, _| Harness {
+            motion: Duration::from_millis(100),
+            ..Harness::default()
+        });
+        let (_, card) = open_card(cx);
+        cx.executor().advance_clock(delay);
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        cx.simulate_mouse_move(point(px(100.), px(100.)), None, gpui::Modifiers::default());
+        cx.executor().advance_clock(delay);
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(cx.debug_bounds("hover-card-content").is_some(), "exiting");
+
+        cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::default());
+        cx.executor().advance_clock(delay * 2);
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(cx.debug_bounds("hover-card-content").is_none(), "gone");
     }
 
     /// Opens the harness's card by hovering its trigger, and returns the
@@ -435,6 +512,7 @@ mod tests {
             move |_, _| Harness {
                 tap_to_open: true,
                 open_changes: changes,
+                ..Harness::default()
             }
         });
         cx.update(|window, cx| window.draw(cx).clear(cx));

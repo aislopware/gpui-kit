@@ -258,8 +258,12 @@ where
                         menu.clone()
                     }
                 };
+                // The popover fades the menu; the menu ramps its own shadow
+                // with it, and takes no part in dismissal while it exits.
+                let progress = popover.motion_progress();
+                menu.update(cx, |menu, cx| menu.set_motion(progress, exiting, cx));
 
-                menu.clone()
+                menu
             })
     }
 }

@@ -149,9 +149,14 @@ impl RenderOnce for HoverCard {
             .anchor(anchor)
             .open_delay(self.open_delay)
             .close_delay(self.close_delay)
+            // In and out of the trigger, as every popup of the kit.
+            .motion(crate::popover::popup_motion())
+            .approach(crate::popover::POPUP_APPROACH)
             .trigger((trigger)(window, cx))
             .content(move |state, window, cx| {
+                let progress = state.motion_progress();
                 Popover::render_popover_content(anchor, appearance, window, cx)
+                    .map(|this| crate::popover::popup_surface_at(this, progress, appearance, cx))
                     .overflow_hidden()
                     .when_some(content, |this, content| {
                         this.child((content)(state, window, cx))
@@ -211,7 +216,11 @@ mod tests {
     /// resolve against a container that only wraps its content.
     #[gpui::test]
     fn trigger_style_is_applied_to_the_trigger_container(cx: &mut gpui::TestAppContext) {
-        cx.update(crate::init);
+        cx.update(|cx| {
+            crate::init(cx);
+            // Where the card settles, not where its motion starts.
+            cx.set_reduce_motion(true);
+        });
         let (view, cx) = cx.add_window_view(|_, _| TriggerStyleHarness { styled: false });
         cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.simulate_mouse_move(point(px(110.), px(110.)), None, Default::default());

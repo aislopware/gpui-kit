@@ -624,7 +624,9 @@ impl RenderOnce for Popover {
             initial_focus.render(&focus_handle, window, cx);
             state.initial_focus = initial_focus;
         });
-        popup.content(content).into_any_element()
+        // Closing, it takes no pointer (Base UI's `pointer-events: none`):
+        // a press during the fade reaches what lies beneath.
+        popup.inert(exiting).content(content).into_any_element()
     }
 }
 
@@ -1000,11 +1002,28 @@ mod tests {
     /// A popover with a 100 ms motion whose content reports its progress.
     struct MotionHarness {
         progress: Rc<std::cell::Cell<Option<(f32, bool)>>>,
+        beneath: Rc<std::cell::Cell<usize>>,
     }
 
     impl Render for MotionHarness {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             let progress = self.progress.clone();
+            let beneath = self.beneath.clone();
+            div()
+                .size_full()
+                .child(
+                    div()
+                        .id("beneath")
+                        .absolute()
+                        .size_full()
+                        .on_click(move |_, _, _| beneath.set(beneath.get() + 1)),
+                )
+                .child(self.popover(progress))
+        }
+    }
+
+    impl MotionHarness {
+        fn popover(&self, progress: Rc<std::cell::Cell<Option<(f32, bool)>>>) -> Popover {
             Popover::new("motion-popover")
                 .motion(Transition::new(Duration::from_millis(100)))
                 .trigger_with(|_, _, _| div().size(px(40.)).into_any_element())
@@ -1017,17 +1036,30 @@ mod tests {
         }
     }
 
+    fn motion_harness(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        Rc<std::cell::Cell<Option<(f32, bool)>>>,
+        Rc<std::cell::Cell<usize>>,
+        &mut gpui::VisualTestContext,
+    ) {
+        cx.update(crate::init);
+        let progress = Rc::new(std::cell::Cell::new(None));
+        let beneath = Rc::new(std::cell::Cell::new(0));
+        let (_, cx) = cx.add_window_view({
+            let progress = progress.clone();
+            let beneath = beneath.clone();
+            move |_, _| MotionHarness { progress, beneath }
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        (progress, beneath, cx)
+    }
+
     /// Closing keeps the content drawn, exiting, until its motion ends;
     /// reopening on the way out turns it around without a frame of absence.
     #[gpui::test]
     fn a_closing_popover_stays_drawn_through_its_exit(cx: &mut gpui::TestAppContext) {
-        cx.update(crate::init);
-        let progress = Rc::new(std::cell::Cell::new(None));
-        let (_, cx) = cx.add_window_view({
-            let progress = progress.clone();
-            move |_, _| MotionHarness { progress }
-        });
-        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let (progress, _, cx) = motion_harness(cx);
         assert_eq!(progress.get(), None, "a closed popover draws no content");
 
         cx.simulate_click(point(px(20.), px(20.)), Default::default());
@@ -1048,5 +1080,28 @@ mod tests {
         cx.simulate_click(point(px(300.), px(300.)), Default::default());
         settle(cx, Duration::from_millis(200));
         assert!(cx.debug_bounds("motion-popover-content").is_none());
+    }
+
+    /// An open popover takes a press on its content; closing, it lets the
+    /// press through to what lies beneath, as Base UI's positioner does with
+    /// `pointer-events: none`, and goes on closing.
+    #[gpui::test]
+    fn a_closing_popover_lets_presses_through(cx: &mut gpui::TestAppContext) {
+        let (progress, beneath, cx) = motion_harness(cx);
+        cx.simulate_click(point(px(20.), px(20.)), Default::default());
+        settle(cx, Duration::from_millis(100));
+        let content = cx.debug_bounds("motion-popover-content").unwrap().center();
+        cx.simulate_click(content, Default::default());
+        settle(cx, Duration::ZERO);
+        assert_eq!(beneath.get(), 0, "the open content takes the press");
+        assert_eq!(progress.get(), Some((1., false)));
+
+        cx.simulate_click(point(px(300.), px(300.)), Default::default());
+        settle(cx, Duration::from_millis(30));
+        assert_eq!(beneath.get(), 1);
+        cx.simulate_click(content, Default::default());
+        settle(cx, Duration::from_millis(30));
+        assert_eq!(beneath.get(), 2, "the closing content lets it through");
+        assert!(progress.get().unwrap().1, "and goes on closing");
     }
 }

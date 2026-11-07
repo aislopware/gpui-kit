@@ -1043,6 +1043,19 @@ where
 
         let dismiss_handler: Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static> =
             Box::new(cx.listener(Self::dismiss));
+        let popup = render_popup_shell(
+            ("combobox-popup", cx.entity_id()),
+            self.state.open,
+            &self.state.list,
+            self.state.menu_width,
+            self.state.size,
+            self.state.menu_max_h,
+            bounds,
+            footer_el,
+            dismiss_handler,
+            window,
+            cx,
+        );
 
         div().size_full().relative().child(
             div()
@@ -1052,22 +1065,9 @@ where
                     move |bounds, _, cx| state.update(cx, |r, _| r.state.bounds = bounds)
                 })
                 .child(field)
-                .when(self.state.open, |this| {
-                    this.child(
-                        deferred(render_popup_shell(
-                            ("combobox-popup", cx.entity_id()),
-                            &self.state.list,
-                            self.state.menu_width,
-                            self.state.size,
-                            self.state.menu_max_h,
-                            bounds,
-                            footer_el,
-                            dismiss_handler,
-                            cx,
-                        ))
-                        .with_priority(gpui_base::POPUP_PRIORITY),
-                    )
-                }),
+                .children(
+                    popup.map(|popup| deferred(popup).with_priority(gpui_base::POPUP_PRIORITY)),
+                ),
         )
     }
 }
@@ -1326,10 +1326,13 @@ where
 
 // MARK: Rendering helpers
 
-/// Renders the deferred anchored popup shell containing the list and optional footer.
+/// The popup under the field holding the list and optional footer, drawn
+/// through the dropdown's motion in and out (see
+/// [`crate::popover::dropdown_popup`]); nothing once closed and settled.
 #[allow(clippy::too_many_arguments)]
 fn render_popup_shell<D: SearchableListDelegate + 'static>(
     id: impl Into<ElementId>,
+    open: bool,
     list: &Entity<ListState<SearchableListAdapter<D>>>,
     menu_width: Length,
     size: Size,
@@ -1337,39 +1340,42 @@ fn render_popup_shell<D: SearchableListDelegate + 'static>(
     bounds: Bounds<Pixels>,
     footer_el: Option<AnyElement>,
     dismiss_handler: Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>,
+    window: &mut Window,
     cx: &mut App,
-) -> AnyElement {
+) -> Option<AnyElement> {
     let has_footer = footer_el.is_some();
 
+    let surface = v_flex()
+        .occlude()
+        .map(|this| match menu_width {
+            Length::Auto => this.w(bounds.size.width),
+            Length::Definite(w) => this.w(w),
+        })
+        .popover_style(cx)
+        .child(
+            List::new(list)
+                .with_size(size)
+                .max_h(menu_max_h)
+                .paddings(Edges::all(DROPDOWN_LIST_PADDING)),
+        )
+        .when(has_footer, |this| {
+            this.child(
+                div()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .p_1()
+                    .when_some(footer_el, |this, el| this.child(el)),
+            )
+        })
+        .when(open, |this| this.on_mouse_down_out(dismiss_handler));
     crate::popover::dropdown_popup(
         id,
-        bounds,
-        v_flex()
-            .occlude()
-            .map(|this| match menu_width {
-                Length::Auto => this.w(bounds.size.width),
-                Length::Definite(w) => this.w(w),
-            })
-            .popover_style(cx)
-            .child(
-                List::new(list)
-                    .with_size(size)
-                    .max_h(menu_max_h)
-                    .paddings(Edges::all(DROPDOWN_LIST_PADDING)),
-            )
-            .when(has_footer, |this| {
-                this.child(
-                    div()
-                        .border_t_1()
-                        .border_color(cx.theme().border)
-                        .p_1()
-                        .when_some(footer_el, |this, el| this.child(el)),
-                )
-            })
-            .on_mouse_down_out(dismiss_handler),
+        open,
+        crate::popover::dropdown_positioner(bounds),
+        surface,
+        window,
         cx,
     )
-    .into_any_element()
 }
 
 // MARK: Tests

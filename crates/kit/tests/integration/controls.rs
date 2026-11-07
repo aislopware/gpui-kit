@@ -312,7 +312,9 @@ async fn real_hover_card_opens_and_closes_after_pointer_delays(cx: &mut TestAppC
         window.hover("away", cx);
     })
     .unwrap();
-    cx.wait_for(handle.into(), Duration::from_millis(100), |window, _| {
+    // The close delay, then the card's 150 ms exit, through which it is
+    // still drawn.
+    cx.wait_for(handle.into(), Duration::from_millis(300), |window, _| {
         window.try_find("help-content").is_none()
     })
     .await;

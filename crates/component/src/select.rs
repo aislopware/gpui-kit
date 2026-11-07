@@ -1,11 +1,10 @@
-use std::{cell::Cell, rc::Rc, time::Duration};
+use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, Bounds, ClickEvent, Context, DismissEvent,
-    Edges, ElementId, Entity, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement,
-    IntoElement, Length, ParentElement, Pixels, Render, RenderOnce, SharedString,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window, deferred, div, point,
-    prelude::FluentBuilder, px, rems,
+    AnyElement, App, Bounds, ClickEvent, Context, DismissEvent, Edges, ElementId, Entity,
+    EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, Length,
+    ParentElement, Pixels, Render, RenderOnce, SharedString, StatefulInteractiveElement,
+    StyleRefinement, Styled, Window, deferred, div, point, prelude::FluentBuilder, px, rems,
 };
 use gpui_base::{AlignedItem, TestSupportExt as _};
 
@@ -14,7 +13,6 @@ use crate::{
     ActiveTheme, Disableable, ElementExt as _, Icon, IconName, IndexPath, Sizable, Size,
     StyleSized, StyledExt,
     actions::Cancel,
-    animation::ease_out_cubic,
     h_flex,
     input::{clear_button, input_style},
     list::List,
@@ -22,7 +20,6 @@ use crate::{
         SearchableListChange, SearchableListDelegate, SearchableListItem, SearchableListState,
     },
     sizing::DROPDOWN_LIST_PADDING,
-    styled::{popover_ring, popover_shadow},
     v_flex,
 };
 use gpui_base::{GlobalState, Select as BaseSelect};
@@ -623,6 +620,7 @@ where
             list.set_searchable(searchable, cx);
             list.delegate_mut().size = self.state.size;
         });
+        let popup = self.render_popup(bounds, window, cx);
 
         div().size_full().relative().child(
             div()
@@ -705,83 +703,83 @@ where
                                 }),
                         ),
                 )
-                .when(self.state.open, |this| {
-                    let id = ("select-popup", cx.entity_id());
-                    let surface = v_flex()
-                        .occlude()
-                        .map(|this| match self.state.menu_width {
-                            Length::Auto => this.w(bounds.size.width),
-                            Length::Definite(w) => this.w(w),
-                        })
-                        .popover_style(cx)
-                        .child(
-                            List::new(&self.state.list)
-                                .when_some(
-                                    self.state.search_placeholder.clone(),
-                                    |this, placeholder| this.search_placeholder(placeholder),
-                                )
-                                .with_size(self.state.size)
-                                .max_h(self.state.menu_max_h)
-                                .when_some(self.state.scroll_bounce, |list, on| {
-                                    list.scroll_bounce(on)
-                                })
-                                .paddings(Edges::all(DROPDOWN_LIST_PADDING)),
-                        )
-                        .on_mouse_down_out(cx.listener(|this, _, window, cx| {
-                            this.escape(&Cancel, window, cx);
-                        }));
-                    let popup = if self.item_aligned {
-                        self.item_aligned_popup(id, bounds, surface, cx)
-                            .into_any_element()
-                    } else {
-                        crate::popover::dropdown_popup(id, bounds, surface, cx).into_any_element()
-                    };
-                    this.child(deferred(popup).with_priority(gpui_base::POPUP_PRIORITY))
-                }),
+                .children(popup),
         )
     }
 }
-
-/// How long an item-aligned popup takes to fade in: the dropdown's 150ms.
-const ALIGNED_POPUP_ENTER_DURATION: Duration = Duration::from_millis(150);
-
-/// How far short of its place a popup that could not lie over its trigger
-/// starts out, as the dropdown's does.
-const ALIGNED_POPUP_FALLBACK_OFFSET: Pixels = px(8.);
 
 impl<D> SelectState<D>
 where
     D: SearchableListDelegate + 'static,
     <D::Item as SearchableListItem>::Value: PartialEq + Clone,
 {
-    /// Places the popup so its selected item lies over the trigger, as Base
-    /// UI's `alignItemWithTrigger` does, and fades it in.
-    ///
-    /// This is the dropdown's open motion on a positioner that tries to align
-    /// the item first. An aligned popup has no side to slide out of, so it
-    /// only fades, as Base UI's does; with no item selected, or no room to
-    /// align it, the popup falls back to the dropdown's place below or above
-    /// the trigger and slides out of that edge as the dropdown does.
-    fn item_aligned_popup(
+    /// The list under the trigger, drawn through the dropdown's motion in
+    /// and out (see [`crate::popover::dropdown_popup`]); nothing once it is
+    /// closed and settled.
+    fn render_popup(
         &self,
-        id: impl Into<ElementId>,
         bounds: Bounds<Pixels>,
-        surface: impl IntoElement + Styled + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<D>> {
+        let open = self.state.open;
+        let surface = v_flex()
+            .occlude()
+            .map(|this| match self.state.menu_width {
+                Length::Auto => this.w(bounds.size.width),
+                Length::Definite(w) => this.w(w),
+            })
+            .popover_style(cx)
+            .child(
+                List::new(&self.state.list)
+                    .when_some(
+                        self.state.search_placeholder.clone(),
+                        |this, placeholder| this.search_placeholder(placeholder),
+                    )
+                    .with_size(self.state.size)
+                    .max_h(self.state.menu_max_h)
+                    .when_some(self.state.scroll_bounce, |list, on| list.scroll_bounce(on))
+                    .paddings(Edges::all(DROPDOWN_LIST_PADDING)),
+            )
+            .when(open, |this| {
+                this.on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                    this.escape(&Cancel, window, cx);
+                }))
+            });
+        let positioner = crate::popover::dropdown_positioner(bounds);
+        let positioner = if self.item_aligned {
+            self.align_item_with_trigger(positioner, cx)
+        } else {
+            positioner
+        };
+        crate::popover::dropdown_popup(
+            ("select-popup", cx.entity_id()),
+            open,
+            positioner,
+            surface,
+            window,
+            cx,
+        )
+        .map(|popup| deferred(popup).with_priority(gpui_base::POPUP_PRIORITY))
+    }
+
+    /// Places the popup so its selected item lies over the trigger, as Base
+    /// UI's `alignItemWithTrigger` does. An aligned popup has no side to
+    /// slide out of, so it only fades, as Base UI's does; with no item
+    /// selected, or no room to align it, the popup falls back to the
+    /// dropdown's place below or above the trigger and slides out of that
+    /// edge as the dropdown does.
+    fn align_item_with_trigger(
+        &self,
+        positioner: gpui_base::Positioner,
         cx: &App,
-    ) -> impl IntoElement {
-        let id = id.into();
-        let enter = || Animation::new(ALIGNED_POPUP_ENTER_DURATION).with_easing(ease_out_cubic);
-        let ring = popover_ring(cx);
+    ) -> gpui_base::Positioner {
         let list = self.state.list.clone();
         let selected = self.state.selection.first().map(|(ix, _)| *ix);
         let scroll_handle = list.read(cx).scroll_handle().clone();
         let scroll_pending = self.aligned_scroll_pending.clone();
 
-        gpui_base::Positioner::side(bounds)
-            .placement(gpui_base::Placement::Bottom)
-            .align(gpui_base::Align::Start)
-            .offset(px(6.))
-            .margin(px(8.))
+        positioner
             .align_item_with_trigger(move |cx| {
                 // The row's place among the rows, inside the list's padding;
                 // the popup draws no border, so its edge is the list's.
@@ -797,16 +795,6 @@ where
                 {
                     scroll_handle.set_offset(point(scroll_handle.offset().x, -scroll));
                 }
-            })
-            .child(
-                surface.with_animation(id.clone(), enter(), move |surface, delta| {
-                    surface
-                        .opacity(delta)
-                        .shadow(popover_shadow(ring, delta * delta * delta))
-                }),
-            )
-            .with_animation(id, enter(), |positioner, delta| {
-                positioner.approach(ALIGNED_POPUP_FALLBACK_OFFSET * (1. - delta))
             })
     }
 }

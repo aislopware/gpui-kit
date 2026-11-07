@@ -33,6 +33,7 @@ pub struct Popup {
     anchor: Anchor,
     offset: Pixels,
     approach: Pixels,
+    inert: bool,
     on_position: Option<Box<dyn Fn(ResolvedPosition, Bounds<Pixels>)>>,
     trigger: AnyElement,
     content: Option<AnyElement>,
@@ -48,6 +49,7 @@ impl Popup {
             anchor: Anchor::TopLeft,
             offset: px(0.),
             approach: px(0.),
+            inert: false,
             on_position: None,
             trigger: trigger.into_any_element(),
             content: None,
@@ -69,6 +71,14 @@ impl Popup {
     /// brings it out of the trigger (see [`Positioner::approach`]).
     pub fn approach(mut self, distance: Pixels) -> Self {
         self.approach = distance;
+        self
+    }
+
+    /// Draws the content inert ([`gpui::inert`]): the pointer passes through
+    /// it and the surface that holds it, as Base UI's positioner takes
+    /// `pointer-events: none` while its popup closes.
+    pub fn inert(mut self, inert: bool) -> Self {
+        self.inert = inert;
         self
     }
 
@@ -203,14 +213,15 @@ impl RenderOnce for Popup {
             positioner
         };
         root.child(
-            deferred(
+            deferred(gpui::inert(
                 positioner
                     .margin(WINDOW_MARGIN)
                     // The host blocks the mouse, so no caller has to remember:
                     // what a popup covers belongs to the popup.
                     .occlude()
                     .child(content),
-            )
+                self.inert,
+            ))
             .with_priority(POPUP_PRIORITY),
         )
     }

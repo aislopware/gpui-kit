@@ -642,7 +642,84 @@ impl DatePicker {
         self
     }
 
-    fn render_time_field(size: Size, state: &DatePickerState, cx: &App) -> impl IntoElement {
+    /// The calendar under the field, drawn through the dropdown's motion in
+    /// and out (see [`crate::popover::dropdown_popup`]); nothing once closed
+    /// and settled.
+    fn render_popup(&self, window: &mut Window, cx: &mut App) -> Option<gpui::AnyElement> {
+        let month_count = self.number_of_months.max(1) as f32;
+        let state = self.state.read(cx);
+        let open = state.open;
+        let bounds = state.bounds;
+        let surface = div()
+            .occlude()
+            .p_3()
+            .popover_style(cx)
+            .when(open, |this| {
+                this.on_mouse_up_out(
+                    MouseButton::Left,
+                    window.listener_for(&self.state, |view, _, window, cx| {
+                        view.on_escape(&Cancel, window, cx);
+                    }),
+                )
+            })
+            .child(
+                h_flex()
+                    .gap_3()
+                    .h_full()
+                    .items_start()
+                    .when_some(self.presets.clone(), |this, presets| {
+                        this.child(v_flex().my_1().gap_2().justify_end().children(
+                            presets.into_iter().enumerate().map(|(i, preset)| {
+                                Button::new(("preset", i))
+                                    .small()
+                                    .ghost()
+                                    .tab_stop(false)
+                                    .label(preset.label.clone())
+                                    .on_click(window.listener_for(
+                                        &self.state,
+                                        move |this, _, window, cx| {
+                                            this.select_preset(&preset, window, cx);
+                                        },
+                                    ))
+                            }),
+                        ))
+                    })
+                    .child(
+                        v_flex()
+                            .child(
+                                Calendar::new(&state.calendar)
+                                    .number_of_months(self.number_of_months)
+                                    .first_day_of_week(state.first_day_of_week)
+                                    .border_0()
+                                    .rounded_none()
+                                    .p_0()
+                                    .map(|this| match self.size {
+                                        Size::Small => this.w(px(196.) * month_count),
+                                        Size::Large => this.w(px(280.) * month_count),
+                                        _ => this.w(px(224.) * month_count),
+                                    })
+                                    .with_size(self.size),
+                            )
+                            .when_some(state.edited_time_precision(), |this, _| {
+                                this.child(Self::render_time_field(self.size, state, cx))
+                            }),
+                    ),
+            );
+        crate::popover::dropdown_popup(
+            ("date-picker-popup", self.state.entity_id()),
+            open,
+            crate::popover::dropdown_positioner(bounds),
+            surface,
+            window,
+            cx,
+        )
+    }
+
+    fn render_time_field(
+        size: Size,
+        state: &DatePickerState,
+        cx: &App,
+    ) -> impl IntoElement + use<> {
         h_flex()
             .map(|this| match size {
                 Size::Small => this.mt_2().pt_2(),
@@ -674,7 +751,7 @@ impl RenderOnce for DatePicker {
         self.state.update(cx, |state, cx| {
             state.sync_children(window, cx);
         });
-        let month_count = self.number_of_months.max(1) as f32;
+        let popup = self.render_popup(window, cx);
 
         // This for keep focus border style, when click on the popup.
         let is_focused = self.focus_handle(cx).contains_focused(window, cx);
@@ -783,74 +860,6 @@ impl RenderOnce for DatePicker {
                             }),
                     ),
             )
-            .when(state.open, |this| {
-                this.child(
-                    deferred(crate::popover::dropdown_popup(
-                        ("date-picker-popup", self.state.entity_id()),
-                        state.bounds,
-                        div()
-                            .occlude()
-                            .p_3()
-                            .popover_style(cx)
-                            .on_mouse_up_out(
-                                MouseButton::Left,
-                                window.listener_for(&self.state, |view, _, window, cx| {
-                                    view.on_escape(&Cancel, window, cx);
-                                }),
-                            )
-                            .child(
-                                h_flex()
-                                    .gap_3()
-                                    .h_full()
-                                    .items_start()
-                                    .when_some(self.presets.clone(), |this, presets| {
-                                        this.child(v_flex().my_1().gap_2().justify_end().children(
-                                            presets.into_iter().enumerate().map(|(i, preset)| {
-                                                Button::new(("preset", i))
-                                                    .small()
-                                                    .ghost()
-                                                    .tab_stop(false)
-                                                    .label(preset.label.clone())
-                                                    .on_click(window.listener_for(
-                                                        &self.state,
-                                                        move |this, _, window, cx| {
-                                                            this.select_preset(&preset, window, cx);
-                                                        },
-                                                    ))
-                                            }),
-                                        ))
-                                    })
-                                    .child(
-                                        v_flex()
-                                            .child(
-                                                Calendar::new(&state.calendar)
-                                                    .number_of_months(self.number_of_months)
-                                                    .first_day_of_week(state.first_day_of_week)
-                                                    .border_0()
-                                                    .rounded_none()
-                                                    .p_0()
-                                                    .map(|this| match self.size {
-                                                        Size::Small => {
-                                                            this.w(px(196.) * month_count)
-                                                        }
-                                                        Size::Large => {
-                                                            this.w(px(280.) * month_count)
-                                                        }
-                                                        _ => this.w(px(224.) * month_count),
-                                                    })
-                                                    .with_size(self.size),
-                                            )
-                                            .when_some(state.edited_time_precision(), |this, _| {
-                                                this.child(Self::render_time_field(
-                                                    self.size, state, cx,
-                                                ))
-                                            }),
-                                    ),
-                            ),
-                        cx,
-                    ))
-                    .with_priority(gpui_base::POPUP_PRIORITY),
-                )
-            })
+            .children(popup.map(|popup| deferred(popup).with_priority(gpui_base::POPUP_PRIORITY)))
     }
 }

@@ -3,6 +3,7 @@ use crate::actions::{Cancel, Confirm, SelectDown, SelectFirst, SelectLast, Selec
 use crate::actions::{SelectLeft, SelectRight};
 use crate::menu::menu_item::MenuItemElement;
 use crate::scroll::ScrollableElement;
+use crate::styled::{popover_ring, popover_shadow};
 use crate::{ActiveTheme, ElementExt, Icon, IconName, Sizable as _, h_flex, v_flex};
 use crate::{Side, Size, kbd::Kbd};
 use gpui::{
@@ -405,6 +406,13 @@ pub struct PopupMenu {
     /// content mask, so the items container's `overflow_y_scroll` clip never
     /// reaches it, while the scroll offset is still baked into its anchor.
     priority: usize,
+    /// How far the popup holding the menu is through its motion (see
+    /// [`crate::popover::popup_motion`]): its shadow ramps with it, so the
+    /// shadow does not show through the fading panel. 1 when settled.
+    motion_progress: f32,
+    /// The popup holding the menu is closed and drawn for its exit: the
+    /// menu takes no part in dismissal any more.
+    exiting: bool,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -443,7 +451,20 @@ impl PopupMenu {
             size: Size::default(),
             submenu_anchor: (Anchor::TopLeft, Pixels::ZERO),
             priority: gpui_base::POPUP_PRIORITY,
+            motion_progress: 1.,
+            exiting: false,
             _subscriptions: vec![],
+        }
+    }
+
+    /// Tells the menu where the popup holding it is in its motion: `progress`
+    /// from 0 hidden to 1 settled, and whether it is closing. The popup sets
+    /// its own opacity; the menu ramps its shadow.
+    pub(crate) fn set_motion(&mut self, progress: f32, exiting: bool, cx: &mut Context<Self>) {
+        if self.motion_progress.to_bits() != progress.to_bits() || self.exiting != exiting {
+            self.motion_progress = progress;
+            self.exiting = exiting;
+            cx.notify();
         }
     }
 
@@ -2118,8 +2139,19 @@ impl Render for PopupMenu {
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::dismiss))
             .on_key_down(cx.listener(Self::on_key_down))
-            .on_mouse_down_out(cx.listener(Self::on_mouse_down_out))
+            .when(!self.exiting, |this| {
+                this.on_mouse_down_out(cx.listener(Self::on_mouse_down_out))
+            })
             .popover_style(cx)
+            // The shadow's ink follows the cube of the popup's fade (see
+            // `popup_surface_at`); the popup fades the whole menu.
+            .when(self.motion_progress < 1., |this| {
+                let progress = self.motion_progress;
+                this.shadow(popover_shadow(
+                    popover_ring(cx),
+                    progress * progress * progress,
+                ))
+            })
             .text_color(cx.theme().popover_foreground)
             .relative()
             .occlude()

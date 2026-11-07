@@ -69,8 +69,7 @@ See the [executable application recipe and AI-assisted development acceptance ch
 - **Dock Layout**: Resizable panels, draggable tabs, nested splits, and edge docks — all serializable.
 - **Rich Content**: Native Markdown and HTML rendering, syntax highlighting, and built-in charts.
 - **Design Freedom**: Use the complete visual system or build your own on the behavior and infrastructure in `gpui-base`.
-- **JavaScript Extensions**: `gpui-shell` lets a shipped Rust host load panels and business logic as scripts, with every capability granted explicitly.
-- **Cross Platform**: Ship one Rust codebase to macOS, Windows, and Linux.
+- **Apple Platforms**: Ship one Rust codebase to macOS and iOS 27.2 and up on Apple silicon.
 
 ## Framework Architecture
 

@@ -19,7 +19,9 @@ env:
   CARGO_PROFILE_DEV_DEBUG: 0
 
 # The fork builds for Apple targets only (macOS on Apple silicon and iOS, 27.2
-# and up), so every job that compiles runs on macOS. Every job that compiles
+# and up), so every job that compiles runs on GitHub's xcode-27 image with
+# Xcode 27.2 selected (.github/actions/xcode): a binary built for 27.2 does not
+# load on an older system, and gpui-fast needs the 27.2 SDKs. Every job that compiles
 # Rust relies on the dependency cache that
 # `actions-rust-lang/setup-rust-toolchain` installs (Swatinem/rust-cache).
 # Only `main` saves caches; pull requests restore the closest `main` cache
@@ -41,23 +43,28 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/xcode
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          components: clippy
+          components: clippy, rustfmt
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Lints every member and, as a side effect, type-checks the example
-      # crates that the `test` job leaves out.
+      - name: Format
+        run: cargo fmt --all --check
+      # Lints every target of every member (tests, benches and examples too)
+      # and, as a side effect, type-checks the example crates that the `test`
+      # job leaves out.
       - name: Lint
-        run: cargo clippy --workspace --locked -- --deny warnings
+        run: cargo clippy --workspace --all-targets --locked -- --deny warnings
 
   ios:
     name: iOS
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/xcode
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: aarch64-apple-ios,aarch64-apple-ios-sim
@@ -70,9 +77,10 @@ jobs:
 
   no-default-features:
     name: No default features
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/xcode
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -88,9 +96,10 @@ jobs:
 
   test:
     name: Test
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/xcode
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}

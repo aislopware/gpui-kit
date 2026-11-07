@@ -13,7 +13,7 @@ Use English with clear and concise description of the bug, if you just have a qu
 
 - GPUI: [e.g., v0.2.2]
 - GPUI Component: [e.g., v0.4.0]
-- Platform: [e.g., macOS 26, Windows 11, Ubuntu 20.04]
+- Platform: [e.g., macOS 27.2, iOS 27.2]
 
 ## Steps to Reproduce
 

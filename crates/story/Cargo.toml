@@ -44,7 +44,6 @@ unindent = "0.2.3"
 rust-i18n.workspace = true
 dirs = "6.0.0"
 reqwest_client.workspace = true
-smol.workspace = true
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }

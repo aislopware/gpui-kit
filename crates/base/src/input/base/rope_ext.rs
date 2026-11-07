@@ -27,7 +27,7 @@ pub struct InputEdit {
     pub new_end_position: Point,
 }
 
-use lsp_types::Position;
+use ls_types::Position;
 
 /// The byte lengths of `count` lines from `first_row`, without their `\n`: 0 for rows past
 /// the end. One scan of the bytes, where looking each row up costs a tree descent per row.

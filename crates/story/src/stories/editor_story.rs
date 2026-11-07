@@ -76,14 +76,14 @@ fn starts_with_ignore_case(label: &str, query: &str) -> bool {
     })
 }
 
-fn completion_item(label: &str) -> lsp_types::CompletionItem {
-    lsp_types::CompletionItem {
+fn completion_item(label: &str) -> ls_types::CompletionItem {
+    ls_types::CompletionItem {
         label: label.to_string(),
         ..Default::default()
     }
 }
 
-fn completion_items(mode: StoryCompletionHighlight, query: &str) -> Vec<lsp_types::CompletionItem> {
+fn completion_items(mode: StoryCompletionHighlight, query: &str) -> Vec<ls_types::CompletionItem> {
     COMPLETION_WORDS
         .into_iter()
         .filter(|label| mode.matches(query, label))
@@ -452,13 +452,13 @@ impl CompletionProvider for StoryCompletions {
         &self,
         _text: &Rope,
         _offset: usize,
-        trigger: lsp_types::CompletionContext,
+        trigger: ls_types::CompletionContext,
         _window: &mut Window,
         _cx: &mut App,
-    ) -> Task<anyhow::Result<lsp_types::CompletionResponse>> {
+    ) -> Task<anyhow::Result<ls_types::CompletionResponse>> {
         let query = trigger.trigger_character.unwrap_or_default();
         let items = completion_items(self.highlight.get(), &query);
-        Task::ready(Ok(lsp_types::CompletionResponse::Array(items)))
+        Task::ready(Ok(ls_types::CompletionResponse::Array(items)))
     }
 
     fn is_completion_trigger(&self, _offset: usize, _new_text: &str, _cx: &mut App) -> bool {

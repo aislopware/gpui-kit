@@ -6,7 +6,6 @@ use gpui::{
     prelude::FluentBuilder as _,
 };
 use gpui_base::RadioGroup;
-use rust_i18n::t;
 
 use crate::{
     ActiveTheme as _, Icon, IconName, Sizable, Size, StyledExt as _, ThemeStyled as _,
@@ -423,8 +422,12 @@ impl RenderOnce for QuestionnaireProgress {
         let progress = self.state.read(cx).progress();
         let current = progress.current();
         let total = progress.total();
-        let label: SharedString =
-            t!("Questionnaire.progress", current = current, total = total).into();
+        let label: SharedString = format!(
+            "Question {current} of {total}",
+            current = current,
+            total = total
+        )
+        .into();
         let colors = cx.theme().semantic_tokens().colors;
         let has_children = !self.children.is_empty();
 
@@ -1215,8 +1218,10 @@ fn questionnaire_error_root(id: ElementId) -> gpui::Stateful<gpui::Div> {
 /// Base reports why an item failed; the skin owns the sentence a person reads.
 fn error_text(error: &QuestionnaireValidationError) -> SharedString {
     match error {
-        QuestionnaireValidationError::Required => t!("Questionnaire.error.required").into(),
-        QuestionnaireValidationError::Unanswered => t!("Questionnaire.error.optional").into(),
+        QuestionnaireValidationError::Required => "Choose an answer to continue.".into(),
+        QuestionnaireValidationError::Unanswered => {
+            "Choose an answer or skip this question.".into()
+        }
         QuestionnaireValidationError::Message(message) => message.clone(),
         _ => SharedString::default(),
     }
@@ -1320,7 +1325,7 @@ enum QuestionnaireAction {
 }
 
 macro_rules! questionnaire_action_part {
-    ($name:ident, $action:ident, $translation:literal, $outline:expr, $primary:expr) => {
+    ($name:ident, $action:ident, $label:literal, $outline:expr, $primary:expr) => {
         #[derive(IntoElement)]
         pub struct $name {
             state: Entity<QuestionnaireState>,
@@ -1402,7 +1407,7 @@ macro_rules! questionnaire_action_part {
                         });
                     })
                     .refine_style(&self.style)
-                    .when(!has_children, |this| this.label(t!($translation)))
+                    .when(!has_children, |this| this.label($label))
                     .children(self.children)
                     .into_any_element()
             }
@@ -1410,22 +1415,10 @@ macro_rules! questionnaire_action_part {
     };
 }
 
-questionnaire_action_part!(
-    QuestionnairePrevious,
-    Previous,
-    "Questionnaire.previous",
-    true,
-    false
-);
-questionnaire_action_part!(QuestionnaireSkip, Skip, "Questionnaire.skip", true, false);
-questionnaire_action_part!(QuestionnaireNext, Next, "Questionnaire.next", false, true);
-questionnaire_action_part!(
-    QuestionnaireSubmit,
-    Submit,
-    "Questionnaire.submit",
-    false,
-    true
-);
+questionnaire_action_part!(QuestionnairePrevious, Previous, "Previous", true, false);
+questionnaire_action_part!(QuestionnaireSkip, Skip, "Skip", true, false);
+questionnaire_action_part!(QuestionnaireNext, Next, "Next", false, true);
+questionnaire_action_part!(QuestionnaireSubmit, Submit, "Submit", false, true);
 
 #[cfg(test)]
 mod tests {

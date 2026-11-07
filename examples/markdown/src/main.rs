@@ -31,7 +31,7 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
-use lsp_types::{SemanticToken, SemanticTokenType, SemanticTokens, SemanticTokensLegend};
+use ls_types::{SemanticToken, SemanticTokenType, SemanticTokens, SemanticTokensLegend};
 use regex::{Captures, Regex};
 
 mod mention;

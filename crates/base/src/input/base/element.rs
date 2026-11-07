@@ -4986,8 +4986,8 @@ mod tests {
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         cx.update(|window, cx| {
             editor.update(cx, |state, cx| {
-                state.set_cursor_position(lsp_types::Position::new(9, 6), window, cx);
-                state.extras.inline_completion.item = Some(lsp_types::InlineCompletionItem {
+                state.set_cursor_position(ls_types::Position::new(9, 6), window, cx);
+                state.extras.inline_completion.item = Some(ls_types::InlineCompletionItem {
                     insert_text: format!("()\n{}", ["ghost"; 30].join("\n")),
                     filter_text: None,
                     range: None,

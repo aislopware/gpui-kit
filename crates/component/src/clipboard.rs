@@ -4,7 +4,6 @@ use gpui::{
     App, ClipboardItem, ElementId, IntoElement, RenderOnce, SharedString, Window,
     prelude::FluentBuilder,
 };
-use rust_i18n::t;
 
 use crate::{
     IconName, Sizable, Size,
@@ -117,10 +116,7 @@ impl RenderOnce for Clipboard {
             .when_some(self.tooltip_show_delay, |this, delay| {
                 this.tooltip_show_delay(delay)
             })
-            .accessibility_label(
-                self.accessibility_label
-                    .unwrap_or_else(|| t!("Copy").into()),
-            )
+            .accessibility_label(self.accessibility_label.unwrap_or_else(|| "Copy".into()))
             .when(!copied, |this| {
                 this.on_click({
                     let state = state.clone();

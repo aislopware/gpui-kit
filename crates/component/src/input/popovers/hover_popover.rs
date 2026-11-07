@@ -16,14 +16,14 @@ pub struct HoverPopover {
     editor: Entity<EditorState>,
     /// The symbol range byte of the hover trigger.
     pub(crate) symbol_range: Range<usize>,
-    pub(crate) hover: Rc<lsp_types::Hover>,
+    pub(crate) hover: Rc<ls_types::Hover>,
 }
 
 impl HoverPopover {
     pub fn new(
         editor: Entity<EditorState>,
         symbol_range: Range<usize>,
-        hover: &lsp_types::Hover,
+        hover: &ls_types::Hover,
         cx: &mut App,
     ) -> Entity<Self> {
         let hover = Rc::new(hover.clone());
@@ -39,19 +39,19 @@ impl HoverPopover {
 impl Render for HoverPopover {
     fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
         let contents = match self.hover.contents.clone() {
-            lsp_types::HoverContents::Scalar(scalar) => match scalar {
-                lsp_types::MarkedString::String(s) => s,
-                lsp_types::MarkedString::LanguageString(ls) => ls.value,
+            ls_types::HoverContents::Scalar(scalar) => match scalar {
+                ls_types::MarkedString::String(s) => s,
+                ls_types::MarkedString::LanguageString(ls) => ls.value,
             },
-            lsp_types::HoverContents::Array(arr) => arr
+            ls_types::HoverContents::Array(arr) => arr
                 .into_iter()
                 .map(|item| match item {
-                    lsp_types::MarkedString::String(s) => s,
-                    lsp_types::MarkedString::LanguageString(ls) => ls.value,
+                    ls_types::MarkedString::String(s) => s,
+                    ls_types::MarkedString::LanguageString(ls) => ls.value,
                 })
                 .collect::<Vec<_>>()
                 .join("\n\n"),
-            lsp_types::HoverContents::Markup(markup) => markup.value,
+            ls_types::HoverContents::Markup(markup) => markup.value,
         };
 
         Popover::new(

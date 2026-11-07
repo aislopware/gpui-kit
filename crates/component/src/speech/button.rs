@@ -4,7 +4,6 @@ use gpui::{
     App, ElementId, Entity, IntoElement, ParentElement as _, RenderOnce, StyleRefinement, Styled,
     Window, div, prelude::FluentBuilder as _, px,
 };
-use rust_i18n::t;
 
 use crate::{
     Disableable, IconName, Selectable as _, Sizable, Size, StyledExt as _,
@@ -103,11 +102,11 @@ impl RenderOnce for SpeechButton {
         let available = status.is_active() || state.is_available(cx);
         let capturing = status.is_capturing();
         let label = if !available {
-            t!("Speech.Unavailable")
+            "Dictation unavailable"
         } else if capturing {
-            t!("Speech.Stop")
+            "Stop dictation"
         } else {
-            t!("Speech.Start")
+            "Dictate"
         };
 
         let stopping = status == SpeechStatus::Stopping;
@@ -141,7 +140,7 @@ impl RenderOnce for SpeechButton {
             .selected(capturing)
             .loading(stopping)
             .disabled(self.disabled || !available)
-            .tooltip(label.clone())
+            .tooltip(label)
             .accessibility_label(label)
             .refine_style(&self.style)
             .on_click({

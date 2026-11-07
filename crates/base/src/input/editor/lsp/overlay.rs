@@ -2,7 +2,7 @@ use super::*;
 use crate::input::EditorMode;
 use std::ops::Range;
 
-use lsp_types::{CompletionItem, Hover};
+use ls_types::{CompletionItem, Hover};
 
 #[derive(Clone, Debug, Default)]
 pub struct CompletionMenuState {
@@ -174,12 +174,12 @@ impl InputBaseState<EditorMode> {
         let mut new_text = item.label.clone();
         if let Some(edit) = item.text_edit.as_ref() {
             match edit {
-                lsp_types::CompletionTextEdit::Edit(edit) => {
+                ls_types::CompletionTextEdit::Edit(edit) => {
                     new_text.clone_from(&edit.new_text);
                     range = self.text.position_to_offset(&edit.range.start)
                         ..self.text.position_to_offset(&edit.range.end);
                 }
-                lsp_types::CompletionTextEdit::InsertAndReplace(edit) => {
+                ls_types::CompletionTextEdit::InsertAndReplace(edit) => {
                     new_text.clone_from(&edit.new_text);
                     range = self.text.position_to_offset(&edit.replace.start)
                         ..self.text.position_to_offset(&edit.replace.end);

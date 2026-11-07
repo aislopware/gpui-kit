@@ -303,7 +303,7 @@ impl crate::input::InputExtras for super::EditorExtras {
             .map(|session| session.symbol_range.clone())
     }
 
-    fn inline_completion_item(&self) -> Option<&lsp_types::InlineCompletionItem> {
+    fn inline_completion_item(&self) -> Option<&ls_types::InlineCompletionItem> {
         self.inline_completion.item.as_ref()
     }
 

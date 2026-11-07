@@ -322,7 +322,7 @@ The `Icon` element does not include SVG files by default. You need to:
 - Markdown rendering: `markdown` crate
 - HTML rendering: `html5ever` (basic support)
 - Charts: Built-in chart components
-- LSP: `lsp-types` crate
+- LSP: `ls-types` crate
 
 ## Release Requirements
 
@@ -331,15 +331,10 @@ moving GPUI means bumping the gpui-fast rev in the workspace `Cargo.toml` to
 the one onicode pins, refreshing Cargo.lock, and adapting the kit to any API
 change in the same commit.
 
-## Internationalization
+## Text
 
-Uses `rust-i18n` crate.
-
-- Localization files are located in `crates/component/locales/`.
-- Only add `en`, `zh-CN`, `zh-HK` by default.
-- Accessibility (A11y) names and labels may remain in English; localization is
-  not required for these strings. Keep the item's own label when naming a
-  control that acts on it. This exception does not apply to visible UI copy.
+The kit's visible copy and accessibility labels are English, written inline where they are shown;
+there is no localization layer. Keep the item's own label when naming a control that acts on it.
 
 ## Documentation
 

@@ -7,7 +7,6 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_base::spring;
-use rust_i18n::t;
 use smallvec::SmallVec;
 
 use super::{
@@ -724,7 +723,7 @@ impl RenderOnce for TabBar {
                                 } else if let Some(icon) = icon.clone() {
                                     PopupMenuItem::element(move |_, _| icon.clone())
                                 } else {
-                                    PopupMenuItem::new(t!("Dock.Unnamed"))
+                                    PopupMenuItem::new("Unnamed")
                                 };
                                 this = this.item(
                                     base.checked(selected_index == Some(ix))

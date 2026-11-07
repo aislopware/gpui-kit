@@ -83,7 +83,7 @@ gpui-kit-assets = { workspace = true, optional = true }
 [dev-dependencies]
 chrono = "0.4.38"
 gpui = { workspace = true, features = ["test-support"] }
-lsp-types.workspace = true
+ls-types.workspace = true
 
 [[test]]
 name = "ui"

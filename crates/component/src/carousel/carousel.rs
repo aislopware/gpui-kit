@@ -8,7 +8,6 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_base::spring;
-use rust_i18n::t;
 
 use super::{CONTEXT, scroll_mask::CarouselScrollMask, state::CarouselState};
 use crate::{
@@ -51,7 +50,7 @@ impl Carousel {
             id: id.into(),
             state: state.clone(),
             style: StyleRefinement::default(),
-            accessibility_label: t!("Carousel.label").into(),
+            accessibility_label: "Carousel".into(),
             focus_ring_enabled: true,
             children: Vec::new(),
         }
@@ -582,8 +581,8 @@ impl RenderOnce for CarouselItem {
         let axis = state.axis();
         let count = state.item_count();
         let label = self.accessibility_label.unwrap_or_else(|| {
-            t!(
-                "Carousel.slide",
+            format!(
+                "Slide {current} of {total}",
                 current = self.index.saturating_add(1),
                 total = count
             )
@@ -749,10 +748,10 @@ fn carousel_control(
         !snapshot.has_previous()
     };
     let (name, default_label, icon) = match (axis, next) {
-        (Axis::Horizontal, false) => ("previous", t!("Carousel.previous"), IconName::ChevronLeft),
-        (Axis::Horizontal, true) => ("next", t!("Carousel.next"), IconName::ChevronRight),
-        (Axis::Vertical, false) => ("previous", t!("Carousel.previous"), IconName::ChevronUp),
-        (Axis::Vertical, true) => ("next", t!("Carousel.next"), IconName::ChevronDown),
+        (Axis::Horizontal, false) => ("previous", "Previous slide", IconName::ChevronLeft),
+        (Axis::Horizontal, true) => ("next", "Next slide", IconName::ChevronRight),
+        (Axis::Vertical, false) => ("previous", "Previous slide", IconName::ChevronUp),
+        (Axis::Vertical, true) => ("next", "Next slide", IconName::ChevronDown),
     };
     let label = accessibility_label.unwrap_or_else(|| default_label.into());
     let has_custom_content = !children.is_empty();
@@ -822,7 +821,7 @@ impl CarouselPagination {
         Self {
             id: ElementId::CodeLocation(*Location::caller()),
             style: StyleRefinement::default(),
-            accessibility_label: t!("Carousel.pagination").into(),
+            accessibility_label: "Carousel pagination".into(),
             children: Vec::new(),
         }
     }
@@ -919,8 +918,8 @@ impl RenderOnce for CarouselPaginationItem {
         let disabled = self.index >= self.state.read(cx).item_count();
         let focus_handle = self.state.read(cx).focus_handle(cx);
         let label = self.accessibility_label.unwrap_or_else(|| {
-            t!(
-                "Carousel.go_to_slide",
+            format!(
+                "Go to slide {current}",
                 current = self.index.saturating_add(1)
             )
             .into()

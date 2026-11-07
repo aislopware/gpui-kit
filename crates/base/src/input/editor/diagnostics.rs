@@ -9,10 +9,10 @@ use sum_tree::{Bias, SeekTarget, SumTree};
 
 use crate::input::{Position, RopeExt as _};
 
-pub type DiagnosticRelatedInformation = lsp_types::DiagnosticRelatedInformation;
-pub(super) type CodeDescription = lsp_types::CodeDescription;
-pub type RelatedInformation = lsp_types::DiagnosticRelatedInformation;
-pub type DiagnosticTag = lsp_types::DiagnosticTag;
+pub type DiagnosticRelatedInformation = ls_types::DiagnosticRelatedInformation;
+pub(super) type CodeDescription = ls_types::CodeDescription;
+pub type RelatedInformation = ls_types::DiagnosticRelatedInformation;
+pub type DiagnosticTag = ls_types::DiagnosticTag;
 
 #[derive(Debug, Eq, PartialEq, Clone, Default)]
 pub struct Diagnostic {
@@ -51,8 +51,8 @@ pub struct Diagnostic {
     pub data: Option<serde_json::Value>,
 }
 
-impl From<lsp_types::Diagnostic> for Diagnostic {
-    fn from(value: lsp_types::Diagnostic) -> Self {
+impl From<ls_types::Diagnostic> for Diagnostic {
+    fn from(value: ls_types::Diagnostic) -> Self {
         Self {
             range: value.range.start..value.range.end,
             severity: value
@@ -60,8 +60,8 @@ impl From<lsp_types::Diagnostic> for Diagnostic {
                 .map(Into::into)
                 .unwrap_or(DiagnosticSeverity::Info),
             code: value.code.map(|c| match c {
-                lsp_types::NumberOrString::Number(n) => SharedString::from(n.to_string()),
-                lsp_types::NumberOrString::String(s) => SharedString::from(s),
+                ls_types::NumberOrString::Number(n) => SharedString::from(n.to_string()),
+                ls_types::NumberOrString::String(s) => SharedString::from(s),
             }),
             code_description: value.code_description,
             source: value.source.map(|s| s.into()),
@@ -82,13 +82,13 @@ pub enum DiagnosticSeverity {
     Info,
 }
 
-impl From<lsp_types::DiagnosticSeverity> for DiagnosticSeverity {
-    fn from(value: lsp_types::DiagnosticSeverity) -> Self {
+impl From<ls_types::DiagnosticSeverity> for DiagnosticSeverity {
+    fn from(value: ls_types::DiagnosticSeverity) -> Self {
         match value {
-            lsp_types::DiagnosticSeverity::ERROR => Self::Error,
-            lsp_types::DiagnosticSeverity::WARNING => Self::Warning,
-            lsp_types::DiagnosticSeverity::INFORMATION => Self::Info,
-            lsp_types::DiagnosticSeverity::HINT => Self::Hint,
+            ls_types::DiagnosticSeverity::ERROR => Self::Error,
+            ls_types::DiagnosticSeverity::WARNING => Self::Warning,
+            ls_types::DiagnosticSeverity::INFORMATION => Self::Info,
+            ls_types::DiagnosticSeverity::HINT => Self::Hint,
             _ => Self::Info, // Default to Info if unknown
         }
     }

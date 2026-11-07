@@ -1,6 +1,6 @@
 use anyhow::Result;
 use gpui::{App, Context, Hsla, Task, Window};
-use lsp_types::ColorInformation;
+use ls_types::ColorInformation;
 use ropey::Rope;
 use std::ops::Range;
 use std::time::Duration;
@@ -26,7 +26,7 @@ pub trait DocumentColorProvider {
 
 fn document_colors_from_response(
     colors: &[ColorInformation],
-) -> Option<Vec<(lsp_types::Range, Hsla)>> {
+) -> Option<Vec<(ls_types::Range, Hsla)>> {
     if colors.len() > MAX_DOCUMENT_COLORS {
         return None;
     }
@@ -125,16 +125,16 @@ impl Lsp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lsp_types::{Position, Range as LspRange};
+    use ls_types::{Position, Range as LspRange};
 
     #[test]
     fn test_document_colors_from_response_enforces_limit() {
         let color = ColorInformation {
-            range: lsp_types::Range::new(
-                lsp_types::Position::new(0, 0),
-                lsp_types::Position::new(0, 1),
+            range: ls_types::Range::new(
+                ls_types::Position::new(0, 0),
+                ls_types::Position::new(0, 1),
             ),
-            color: lsp_types::Color {
+            color: ls_types::Color {
                 red: 1.,
                 green: 0.,
                 blue: 0.,

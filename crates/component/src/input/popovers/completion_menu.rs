@@ -8,7 +8,7 @@ use gpui::{
 };
 use gpui_base::TestSupportExt as _;
 use gpui_base::input::CompletionHighlighter;
-use lsp_types::CompletionItem;
+use ls_types::CompletionItem;
 
 const MAX_MENU_HEIGHT: Pixels = px(240.);
 const POPOVER_GAP: Pixels = px(4.);
@@ -465,8 +465,8 @@ impl Render for CompletionMenu {
                     )
                     .when_some(selected_documentation, |this, documentation| {
                         let mut doc = match documentation {
-                            lsp_types::Documentation::String(s) => s.clone(),
-                            lsp_types::Documentation::MarkupContent(mc) => mc.value.clone(),
+                            ls_types::Documentation::String(s) => s.clone(),
+                            ls_types::Documentation::MarkupContent(mc) => mc.value.clone(),
                         };
                         if vertical_layout {
                             doc = doc.split("\n").next().unwrap_or_default().to_string();

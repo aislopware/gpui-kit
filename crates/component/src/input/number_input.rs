@@ -14,7 +14,6 @@ use super::{Input, InputState, input::input_style};
 use crate::ThemeStyled as _;
 use gpui_base::NumberInput as BaseNumberInput;
 pub use gpui_base::{NumberInputEvent, NumberStep, StepAction};
-use rust_i18n::t;
 
 /// A number input element with increment and decrement buttons.
 #[derive(IntoElement)]
@@ -149,7 +148,7 @@ impl RenderOnce for NumberInput {
             })
             .size_full()
             .decrement_button(move |this| {
-                this.accessibility_label(t!("Input.Decrement"))
+                this.accessibility_label("Decrement")
                     .flex()
                     .items_center()
                     .justify_center()
@@ -182,7 +181,7 @@ impl RenderOnce for NumberInput {
                     .when_some(self.suffix, |this, suffix| this.suffix(suffix)),
             )
             .increment_button(move |this| {
-                this.accessibility_label(t!("Input.Increment"))
+                this.accessibility_label("Increment")
                     .flex()
                     .items_center()
                     .justify_center()

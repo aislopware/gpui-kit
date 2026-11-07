@@ -25,7 +25,6 @@ use gpui_base::{
     },
     spring,
 };
-use rust_i18n::t;
 
 use crate::{
     ActiveTheme as _, IconName, Selectable as _, Sizable as _,
@@ -268,8 +267,8 @@ impl TabGroupSkin {
                 .ghost()
                 .tab_stop(false)
                 .tooltip(match is_open {
-                    true => t!("Dock.Collapse"),
-                    false => t!("Dock.Expand"),
+                    true => "Collapse",
+                    false => "Expand",
                 })
                 .debug_selector(move || format!("{DOCK_TOGGLE_SELECTOR}-{placement:?}"))
                 .on_click(move |_, window, cx| {
@@ -313,8 +312,8 @@ impl TabGroupSkin {
             })
             .when_some(
                 match (zoomed, toolbar_zoom) {
-                    (true, _) => Some(("zoom-out", IconName::Minimize, t!("Dock.Zoom Out"))),
-                    (false, true) => Some(("zoom-in", IconName::Maximize, t!("Dock.Zoom In"))),
+                    (true, _) => Some(("zoom-out", IconName::Minimize, "Zoom Out")),
+                    (false, true) => Some(("zoom-in", IconName::Maximize, "Zoom In")),
                     (false, false) => None,
                 },
                 |this, (id, icon, tooltip)| {
@@ -351,15 +350,14 @@ impl TabGroupSkin {
                         .separator()
                         .menu_with_disabled(
                             match zoomed {
-                                true => t!("Dock.Zoom Out"),
-                                false => t!("Dock.Zoom In"),
+                                true => "Zoom Out",
+                                false => "Zoom In",
                             },
                             Box::new(ToggleZoom),
                             !menu_zoom,
                         )
                         .when(closable, |menu| {
-                            menu.separator()
-                                .menu(t!("Dock.Close"), Box::new(ClosePanel))
+                            menu.separator().menu("Close", Box::new(ClosePanel))
                         })
                     })
                     .anchor(Anchor::TopRight),

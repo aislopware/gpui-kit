@@ -7,7 +7,7 @@ edition.workspace = true
 [dependencies]
 gpui-kit.workspace = true
 gpui-component-story = { path = "../../crates/story" }
-lsp-types.workspace = true
+ls-types.workspace = true
 regex = "1"
 
 [lints]

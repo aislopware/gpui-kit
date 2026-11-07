@@ -1,7 +1,7 @@
 use crate::input::EditorMode;
 use anyhow::Result;
 use gpui::{App, Context, EntityInputHandler, Pixels, Task, Window, px};
-use lsp_types::{
+use ls_types::{
     CompletionContext, CompletionItem, CompletionResponse, InlineCompletionContext,
     InlineCompletionItem, InlineCompletionResponse, InlineCompletionTriggerKind,
     request::Completion,
@@ -294,7 +294,7 @@ impl InputBaseState<EditorMode> {
             start_offset,
             query.clone(),
             CompletionContext {
-                trigger_kind: lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER,
+                trigger_kind: ls_types::CompletionTriggerKind::TRIGGER_CHARACTER,
                 trigger_character: Some(query),
             },
             window,
@@ -354,7 +354,7 @@ impl InputBaseState<EditorMode> {
             start_offset,
             query,
             CompletionContext {
-                trigger_kind: lsp_types::CompletionTriggerKind::INVOKED,
+                trigger_kind: ls_types::CompletionTriggerKind::INVOKED,
                 trigger_character: None,
             },
             window,
@@ -492,7 +492,7 @@ impl InputBaseState<EditorMode> {
                 }
 
                 let trigger = InlineCompletionContext {
-                    trigger_kind: InlineCompletionTriggerKind::Automatic,
+                    trigger_kind: InlineCompletionTriggerKind::AUTOMATIC,
                     selected_completion_info: None,
                 };
 

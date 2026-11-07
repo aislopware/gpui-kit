@@ -18,7 +18,7 @@ pub trait HoverProvider {
         _offset: usize,
         _window: &mut Window,
         _cx: &mut App,
-    ) -> Task<Result<Option<lsp_types::Hover>>>;
+    ) -> Task<Result<Option<ls_types::Hover>>>;
 }
 
 impl InputBaseState<EditorMode> {

@@ -115,6 +115,10 @@ pub(crate) use language::EditorLanguage;
 pub use language::{LanguageProvider, set_language_config, set_language_provider};
 pub(crate) use language_config::LanguageConfig;
 pub use language_config::{AutoClosingPair, BracketPair, IndentationRules};
+/// The LSP types the providers speak ([`CompletionProvider`] and the others), at the version
+/// this crate builds with, so a provider needs no `ls-types` of its own to match it.
+pub use ls_types;
+pub use ls_types::Position;
 pub use lsp::{
     CodeActionItem, CodeActionMenuState, CodeActionProvider, CompletionHighlighter,
     CompletionMenuOptions, CompletionMenuState, CompletionProvider, DefinitionProvider,
@@ -122,10 +126,6 @@ pub use lsp::{
     InputOverlayKind, Lsp, ShowDocumentHandler, highlight_characters, highlight_contains,
     highlight_prefix,
 };
-/// The LSP types the providers speak ([`CompletionProvider`] and the others), at the version
-/// this crate builds with, so a provider needs no `lsp-types` of its own to match it.
-pub use lsp_types;
-pub use lsp_types::Position;
 pub use mask_pattern::MaskPattern;
 #[cfg(target_os = "macos")]
 #[doc(hidden)]

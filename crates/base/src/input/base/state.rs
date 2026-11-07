@@ -5502,7 +5502,7 @@ mod tests {
     fn test_multicursor_unicode_completion_uses_post_edit_start(cx: &mut TestAppContext) {
         use crate::input::{CompletionProvider, EditorState};
         use gpui::Task;
-        use lsp_types::{CompletionContext, CompletionResponse};
+        use ls_types::{CompletionContext, CompletionResponse};
         use std::cell::RefCell;
 
         #[derive(Default)]
@@ -10398,10 +10398,10 @@ mod tests {
                 );
                 state.present_hover(
                     0..6,
-                    lsp_types::Hover {
-                        contents: lsp_types::HoverContents::Scalar(
-                            lsp_types::MarkedString::String("docs".into()),
-                        ),
+                    ls_types::Hover {
+                        contents: ls_types::HoverContents::Scalar(ls_types::MarkedString::String(
+                            "docs".into(),
+                        )),
                         range: None,
                     },
                     cx,
@@ -10766,7 +10766,7 @@ mod tests {
                 view.input.update(cx, |state, _| {
                     state.extras.hover_definition.update(
                         0..4,
-                        vec![lsp_types::LocationLink {
+                        vec![ls_types::LocationLink {
                             origin_selection_range: None,
                             target_uri: "file:///tmp/column-selection.rs".parse().unwrap(),
                             target_range: Default::default(),
@@ -11156,7 +11156,7 @@ mod tests {
     fn test_add_selection_clears_inline_completion(cx: &mut TestAppContext) {
         use crate::input::CompletionProvider;
         use gpui::Task;
-        use lsp_types::{
+        use ls_types::{
             CompletionContext, CompletionResponse, InlineCompletionContext, InlineCompletionItem,
             InlineCompletionResponse,
         };

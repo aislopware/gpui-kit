@@ -4,7 +4,6 @@ use gpui::{
     StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, Window, div, hsla,
     linear_color_stop, linear_gradient, prelude::FluentBuilder as _,
 };
-use rust_i18n::t;
 
 use gpui_base::{ColorPicker as BaseColorPicker, ColorSwatch};
 pub use gpui_base::{ColorPickerEvent, ColorPickerState};
@@ -179,8 +178,8 @@ impl ColorPicker {
                     .on_click(move |ix: &usize, _, cx| {
                         tab_state.update(cx, |state, cx| state.set_active_tab(*ix, cx));
                     })
-                    .child(Tab::new().flex_1().label(t!("ColorPicker.Palette")))
-                    .child(Tab::new().flex_1().label(t!("ColorPicker.HSLA"))),
+                    .child(Tab::new().flex_1().label("Palette"))
+                    .child(Tab::new().flex_1().label("HSLA")),
             )
             .child(match active_tab {
                 0 => self.render_palette_panel(cx).into_any_element(),
@@ -285,7 +284,7 @@ impl ColorPicker {
                             .min_w_16()
                             .text_xs()
                             .text_color(label_color)
-                            .child(t!("ColorPicker.Hue")),
+                            .child("Hue"),
                     )
                     .child(
                         div()
@@ -319,7 +318,7 @@ impl ColorPicker {
                             .min_w_16()
                             .text_xs()
                             .text_color(label_color)
-                            .child(t!("ColorPicker.Saturation")),
+                            .child("Saturation"),
                     )
                     .child(
                         div()
@@ -357,7 +356,7 @@ impl ColorPicker {
                             .min_w_16()
                             .text_xs()
                             .text_color(label_color)
-                            .child(t!("ColorPicker.Lightness")),
+                            .child("Lightness"),
                     )
                     .child(
                         div()
@@ -391,7 +390,7 @@ impl ColorPicker {
                             .min_w_16()
                             .text_xs()
                             .text_color(label_color)
-                            .child(t!("ColorPicker.Alpha")),
+                            .child("Alpha"),
                     )
                     .child(
                         div()
@@ -803,10 +802,9 @@ impl ColorPickerButton {
                     .whitespace_nowrap()
                     .map(|this| match self.value {
                         Some(value) => this.child(value.to_hex()),
-                        None => this.text_color(cx.theme().muted_foreground).child(
-                            self.placeholder
-                                .unwrap_or_else(|| t!("Select.placeholder").into()),
-                        ),
+                        None => this
+                            .text_color(cx.theme().muted_foreground)
+                            .child(self.placeholder.unwrap_or_else(|| "Please select".into())),
                     }),
             )
             .child(Caret::new(self.size).text_color(cx.theme().muted_foreground))

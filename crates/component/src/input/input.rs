@@ -17,7 +17,6 @@ use crate::{IconName, Size};
 use crate::{RoleOverride, Selectable, StyledExt, h_flex};
 use crate::{Sizable, StyleSized};
 use gpui_base::InputBase as BaseInput;
-use rust_i18n::t;
 
 use super::state::{TextInputState, sync_focused_input_registry};
 use super::{InputContentType, InputState, sync_native_content_type};
@@ -454,30 +453,29 @@ impl Input {
         let mut items = Vec::with_capacity(4);
         if editable && copyable {
             let dispatch = dispatch.clone();
-            items.push(EditMenuItem::new(t!("Input.Cut"), move |window, cx| {
+            items.push(EditMenuItem::new("Cut", move |window, cx| {
                 dispatch(&gpui_base::input::Cut, window, cx);
             }));
         }
         if copyable {
             let dispatch = dispatch.clone();
             let state = state.clone();
-            items.push(EditMenuItem::new(t!("Input.Copy"), move |window, cx| {
+            items.push(EditMenuItem::new("Copy", move |window, cx| {
                 dispatch(&gpui_base::input::Copy, window, cx);
                 state.close_edit_menu(cx);
             }));
         }
         if pasteable {
             let dispatch = dispatch.clone();
-            items.push(EditMenuItem::new(t!("Input.Paste"), move |window, cx| {
+            items.push(EditMenuItem::new("Paste", move |window, cx| {
                 dispatch(&gpui_base::input::Paste, window, cx);
             }));
         }
         if selectable {
             let state = state.clone();
-            items.push(EditMenuItem::new(
-                t!("Input.Select All"),
-                move |window, cx| state.select_all_from_edit_menu(window, cx),
-            ));
+            items.push(EditMenuItem::new("Select All", move |window, cx| {
+                state.select_all_from_edit_menu(window, cx)
+            }));
         }
 
         let drag_state = state.clone();
@@ -504,9 +502,9 @@ impl Input {
                 IconName::EyeOff
             })
             .accessibility_label(if masked {
-                t!("Input.Show Password")
+                "Show password"
             } else {
-                t!("Input.Hide Password")
+                "Hide password"
             })
             .xsmall()
             .text()
@@ -629,40 +627,33 @@ impl RenderOnce for Input {
                     if capabilities.is_code_editor() {
                         menu = menu
                             .menu_with_disabled(
-                                t!("Input.Go to Definition"),
+                                "Go to Definition",
                                 !(enabled && capabilities.has_definition()),
                                 Box::new(gpui_base::input::GoToDefinition),
                             )
                             .menu_with_disabled(
-                                t!("Input.Show Code Actions"),
+                                "Show Code Actions",
                                 !(editable && capabilities.has_code_actions()),
                                 Box::new(gpui_base::input::ToggleCodeActions),
                             )
                             .separator();
                     }
                     menu.menu_with_disabled(
-                        t!("Input.Cut"),
+                        "Cut",
                         !(editable && capabilities.is_copyable()),
                         Box::new(gpui_base::input::Cut),
                     )
                     .menu_with_disabled(
-                        t!("Input.Copy"),
+                        "Copy",
                         !capabilities.is_copyable(),
                         Box::new(gpui_base::input::Copy),
                     )
                     // Offered whenever the text can change, without peeking
                     // at the clipboard: the synchronous read is always empty
                     // on the web, and an empty clipboard pastes nothing.
-                    .menu_with_disabled(
-                        t!("Input.Paste"),
-                        !editable,
-                        Box::new(gpui_base::input::Paste),
-                    )
+                    .menu_with_disabled("Paste", !editable, Box::new(gpui_base::input::Paste))
                     .separator()
-                    .menu(
-                        t!("Input.Select All"),
-                        Box::new(gpui_base::input::SelectAll),
-                    )
+                    .menu("Select All", Box::new(gpui_base::input::SelectAll))
                 };
                 menu.show(position, window, cx);
             }),

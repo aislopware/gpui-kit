@@ -33,15 +33,9 @@ pub use crate::title_bar::AppTitleBar;
 pub use gallery::Gallery;
 pub use stories::*;
 
-rust_i18n::i18n!("locales", fallback = "en");
-
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = story, no_json)]
 pub struct SelectScrollbarMode(ScrollbarMode);
-
-#[derive(Action, Clone, PartialEq, Eq, Deserialize)]
-#[action(namespace = story, no_json)]
-pub struct SelectLocale(SharedString);
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = story, no_json)]
@@ -179,14 +173,6 @@ pub fn create_new_window_with_size<F, E>(
 
 impl Global for AppState {}
 
-/// Layers the story locales over the component ones. `extend!` takes the
-/// crate as an identifier and stringifies it into the namespace key, so the
-/// layer is bound under its crate name here.
-fn extend_component_translations() {
-    use gpui_kit::component as gpui_component;
-    rust_i18n::extend!(gpui_component);
-}
-
 pub fn init(cx: &mut App) {
     // Try to initialize tracing subscriber, but ignore if already initialized
     use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
@@ -198,7 +184,6 @@ pub fn init(cx: &mut App) {
         )
         .try_init();
 
-    extend_component_translations();
     gpui_kit::init(cx);
     AppState::init(cx);
     themes::init(cx);
@@ -1189,22 +1174,5 @@ impl Render for StoryRoot {
                         .child(fps_monitor(window, cx)),
                 )
             })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn extends_component_translations_with_story_locales() {
-        super::extend_component_translations();
-
-        assert_eq!(
-            gpui_kit::component::_rust_i18n_try_translate("fr", "Calendar.month.January"),
-            Some("Janvier".into())
-        );
-        assert_eq!(
-            gpui_kit::component::_rust_i18n_try_translate("en", "Calendar.month.January"),
-            Some("January".into())
-        );
     }
 }

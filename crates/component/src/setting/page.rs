@@ -5,7 +5,6 @@ use gpui::{
     ListState, ParentElement as _, SharedString, StyleRefinement, Styled, Window, div, list,
     prelude::FluentBuilder as _, px,
 };
-use rust_i18n::t;
 
 use crate::{
     ActiveTheme, Icon, IconName, Sizable, StyledExt,
@@ -264,7 +263,7 @@ impl SettingPage {
                                         .icon(IconName::Undo2)
                                         .ghost()
                                         .small()
-                                        .tooltip(t!("Settings.Reset All"))
+                                        .tooltip("Reset All")
                                         .on_click({
                                             let page = self.clone();
                                             let query = query.clone();

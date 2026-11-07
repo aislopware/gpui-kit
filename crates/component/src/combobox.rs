@@ -6,8 +6,6 @@ use gpui::{
     prelude::FluentBuilder, px, rems,
 };
 
-use rust_i18n::t;
-
 pub use crate::select::Caret;
 
 use crate::ThemeStyled as _;
@@ -570,7 +568,7 @@ where
             .state
             .placeholder
             .clone()
-            .unwrap_or_else(|| t!("Combobox.placeholder").into());
+            .unwrap_or_else(|| "Please select".into());
 
         if self.state.selection.is_empty() {
             return div()

@@ -3,7 +3,6 @@ use gpui::{
     Anchor, App, Context, Edges, ElementId, InteractiveElement as _, IntoElement, ParentElement,
     RenderOnce, SharedString, StyleRefinement, Styled, Window, div, prelude::FluentBuilder,
 };
-use rust_i18n::t;
 
 use crate::{
     Disableable, Selectable, Sizable, Size, StyledExt as _,
@@ -208,7 +207,7 @@ impl RenderOnce for DropdownButton {
                         .dropdown_caret(true)
                         .accessibility_label(
                             self.menu_accessibility_label
-                                .unwrap_or_else(|| t!("DropdownButton.more_options").into()),
+                                .unwrap_or_else(|| "More options".into()),
                         )
                         .border_corners(Corners {
                             top_left: false,

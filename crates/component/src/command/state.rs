@@ -8,7 +8,6 @@ use gpui::{
     SharedString, Size, StatefulInteractiveElement as _, StyleRefinement, Styled, Subscription,
     TextOverflow, WhiteSpace, Window, div, prelude::FluentBuilder as _, px, size,
 };
-use rust_i18n::t;
 
 use crate::{
     ActiveTheme as _, ElementExt as _, Icon, IconName, IndexPath, StyledExt as _,
@@ -688,7 +687,7 @@ impl CommandState {
             .placeholder
             .as_ref()
             .cloned()
-            .unwrap_or_else(|| t!("Command.placeholder").to_string().into());
+            .unwrap_or_else(|| "Type a command or search...".to_string().into());
 
         if self.applied_placeholder == placeholder {
             return;
@@ -882,7 +881,7 @@ impl CommandState {
             return empty(self, window, cx);
         }
 
-        let message: SharedString = t!("Command.empty").to_string().into();
+        let message: SharedString = "No results found.".to_string().into();
 
         div()
             .py_6()

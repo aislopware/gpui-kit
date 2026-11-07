@@ -457,7 +457,7 @@ mod tests {
     use gpui::{AppContext as _, ParentElement, Render, SharedString, Styled, div};
     use gpui_base::input::CodeActionItem;
     use gpui_base::input::DiagnosticEntry;
-    use lsp_types::{CodeAction, CompletionItem, Hover, HoverContents, MarkedString};
+    use ls_types::{CodeAction, CompletionItem, Hover, HoverContents, MarkedString};
 
     struct OverlayProbe {
         state: Entity<crate::input::EditorState>,

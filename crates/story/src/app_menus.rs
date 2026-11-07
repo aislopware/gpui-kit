@@ -2,7 +2,7 @@ use gpui_kit::component::{ActiveTheme as _, GlobalState, Theme, ThemeMode, menu:
 use gpui_kit::{App, Entity, Menu, MenuItem, SharedString};
 
 use crate::{
-    About, Open, OpenCommandPalette, Quit, SelectLocale,
+    About, Open, OpenCommandPalette, Quit,
     themes::{SelectTheme, SwitchThemeMode},
 };
 
@@ -10,15 +10,6 @@ pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> 
     let app_menu_bar = AppMenuBar::new(cx);
     let title: SharedString = title.into();
     update_app_menu(title.clone(), app_menu_bar.clone(), cx);
-
-    cx.on_action({
-        let title = title.clone();
-        let app_menu_bar = app_menu_bar.clone();
-        move |s: &SelectLocale, cx: &mut App| {
-            rust_i18n::set_locale(&s.0.as_str());
-            update_app_menu(title.clone(), app_menu_bar.clone(), cx);
-        }
-    });
 
     // Observe theme changes to update the menu to refresh the checked state
     cx.observe_global::<Theme>({
@@ -67,7 +58,6 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
                     ],
                     disabled: false,
                 }),
-                language_menu(cx),
                 MenuItem::Separator,
                 MenuItem::action("Quit", Quit),
             ],
@@ -119,19 +109,6 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
     ]
 }
 
-fn language_menu(_: &App) -> MenuItem {
-    let locale = rust_i18n::locale().to_string();
-    MenuItem::Submenu(Menu {
-        name: "Language".into(),
-        items: vec![
-            MenuItem::action("English", SelectLocale("en".into())).checked(locale == "en"),
-            MenuItem::action("简体中文", SelectLocale("zh-CN".into())).checked(locale == "zh-CN"),
-            MenuItem::action("Français", SelectLocale("fr".into())).checked(locale == "fr"),
-        ],
-        disabled: false,
-    })
-}
-
 #[cfg(all(test, feature = "test-support"))]
 mod tests {
     // The glob also carries GPUI's `test` attribute; keep the built-in one for `#[test]`.
@@ -171,10 +148,9 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn build_menus_reflects_active_theme_and_locale_checked_states(cx: &mut TestAppContext) {
+    fn build_menus_reflects_active_theme_checked_states(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         cx.update(|cx| Theme::change(ThemeMode::Dark, None, cx));
-        rust_i18n::set_locale("fr");
 
         cx.read(|cx| {
             let menus = build_menus("Story", cx);
@@ -183,14 +159,7 @@ mod tests {
             assert_eq!(appearance.items.len(), 2);
             assert!(!appearance.items[0].is_checked());
             assert!(appearance.items[1].is_checked());
-
-            let language = submenu(&app_menu.items, "Language");
-            assert!(!language.items[0].is_checked());
-            assert!(!language.items[1].is_checked());
-            assert!(language.items[2].is_checked());
         });
-
-        rust_i18n::set_locale("en");
     }
 
     fn submenu<'a>(items: &'a [MenuItem], name: &str) -> &'a Menu {

@@ -2,7 +2,6 @@ use gpui::{
     App, ClipboardItem, Context, IntoElement, ParentElement as _, Render, Subscription, Window, div,
 };
 use gpui_base::TextSelection;
-use rust_i18n::t;
 
 use super::{EditMenuItem, TouchSelectionOverlay};
 
@@ -52,8 +51,8 @@ impl Render for WindowTouchSelectionOverlay {
             TextSelection::touch_selection(window, cx)
         })
         .items([
-            EditMenuItem::new(t!("Input.Copy"), Self::copy),
-            EditMenuItem::new(t!("Input.Select All"), Self::select_all),
+            EditMenuItem::new("Copy", Self::copy),
+            EditMenuItem::new("Select All", Self::select_all),
         ])
         .on_paint(|bounds, window, cx| TextSelection::register_touch_ui(bounds, window, cx));
         div().children(overlay.into_elements(window, cx))

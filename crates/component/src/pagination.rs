@@ -4,7 +4,6 @@ use gpui::{
     App, ElementId, IntoElement, ParentElement, RenderOnce, SharedString, StyleRefinement, Styled,
     Window, prelude::FluentBuilder, px,
 };
-use rust_i18n::t;
 
 use gpui_base::{Pagination as BasePagination, PaginationItem as PageItem, PaginationState};
 
@@ -116,9 +115,9 @@ impl Pagination {
 
     fn render_nav_button(&self, state: &PaginationState, is_prev: bool) -> Button {
         let (id, label, icon) = if is_prev {
-            ("prev", t!("Pagination.previous"), IconName::ChevronLeft)
+            ("prev", "Previous", IconName::ChevronLeft)
         } else {
-            ("next", t!("Pagination.next"), IconName::ChevronRight)
+            ("next", "Next", IconName::ChevronRight)
         };
 
         let target_page = if is_prev {
@@ -132,7 +131,7 @@ impl Pagination {
             .compact()
             .with_size(self.size)
             .disabled(target_page.is_none())
-            .tooltip(label.clone())
+            .tooltip(label)
             .when(self.compact, |this| this.icon(icon.clone()))
             .when(!self.compact, |this| {
                 this.child(

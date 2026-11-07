@@ -1,5 +1,4 @@
 use ropey::Rope;
-use rust_i18n::t;
 use std::ops::Range;
 
 use gpui::{
@@ -462,7 +461,7 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                         .child(
                             Button::new("replace-one")
                                 .small()
-                                .label(t!("Input.Replace"))
+                                .label("Replace")
                                 .disabled(!has_matches)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.replace_next(window, cx);
@@ -471,7 +470,7 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                         .child(
                             Button::new("replace-all")
                                 .small()
-                                .label(t!("Input.Replace All"))
+                                .label("Replace All")
                                 .disabled(!has_matches)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.replace_all(window, cx);

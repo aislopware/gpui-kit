@@ -7,7 +7,7 @@ use gpui::{
     SharedString, StyleRefinement, Styled, Subscription, Task, Window, actions, div,
     inspector_reflection::FunctionReflection, prelude::FluentBuilder, px,
 };
-use lsp_types::{
+use ls_types::{
     CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit, Diagnostic,
     DiagnosticSeverity, Position, TextEdit,
 };
@@ -334,7 +334,7 @@ fn rust_to_style(mut style: StyleRefinement, source: &str) -> (StyleRefinement, 
         return (
             style,
             vec![Diagnostic {
-                range: lsp_types::Range::new(start_pos, end_pos),
+                range: ls_types::Range::new(start_pos, end_pos),
                 severity: Some(DiagnosticSeverity::ERROR),
                 message: "expected `div()`".into(),
                 ..Default::default()
@@ -383,8 +383,8 @@ fn rust_to_style(mut style: StyleRefinement, source: &str) -> (StyleRefinement, 
                 let message = format!("unknown method `{}`", method);
                 let start = rope.offset_to_position(offset.saturating_sub(method.len()));
                 let end = rope.offset_to_position(offset);
-                let diagnostic = lsp_types::Diagnostic {
-                    range: lsp_types::Range::new(start, end),
+                let diagnostic = ls_types::Diagnostic {
+                    range: ls_types::Range::new(start, end),
                     severity: Some(DiagnosticSeverity::ERROR),
                     message,
                     ..Default::default()
@@ -565,7 +565,7 @@ impl CompletionProvider for LspProvider {
         &self,
         rope: &ropey::Rope,
         offset: usize,
-        _: lsp_types::CompletionContext,
+        _: ls_types::CompletionContext,
         _: &mut Window,
         cx: &mut App,
     ) -> Task<Result<CompletionResponse>> {
@@ -604,9 +604,9 @@ impl CompletionProvider for LspProvider {
                             documentation: method
                                 .documentation
                                 .as_ref()
-                                .map(|doc| lsp_types::Documentation::String(doc.to_string())),
+                                .map(|doc| ls_types::Documentation::String(doc.to_string())),
                             text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                                range: lsp_types::Range {
+                                range: ls_types::Range {
                                     start: start_pos,
                                     end: end_pos,
                                 },
@@ -633,7 +633,7 @@ impl CompletionProvider for LspProvider {
 mod tests {
     use gpui::{AbsoluteLength, DefiniteLength, Length, rems};
     use indoc::indoc;
-    use lsp_types::Position;
+    use ls_types::Position;
 
     #[test]
     fn test_rust_to_style() {

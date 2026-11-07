@@ -2,7 +2,7 @@ use gpui::SharedString;
 
 use crate::highlighter::GrammarConfig;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_iterator::Sequence)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Language {
     Json,
     Plain,
@@ -87,8 +87,86 @@ impl From<Language> for SharedString {
 }
 
 impl Language {
+    /// Every language this build has a grammar for, in declaration order.
+    const ALL: &[Self] = &[
+        Self::Json,
+        Self::Plain,
+        #[cfg(feature = "tree-sitter-astro")]
+        Self::Astro,
+        #[cfg(feature = "tree-sitter-bash")]
+        Self::Bash,
+        #[cfg(feature = "tree-sitter-c")]
+        Self::C,
+        #[cfg(feature = "tree-sitter-cmake")]
+        Self::CMake,
+        #[cfg(feature = "tree-sitter-csharp")]
+        Self::CSharp,
+        #[cfg(feature = "tree-sitter-cpp")]
+        Self::Cpp,
+        #[cfg(feature = "tree-sitter-css")]
+        Self::Css,
+        #[cfg(feature = "tree-sitter-diff")]
+        Self::Diff,
+        #[cfg(feature = "tree-sitter-ejs")]
+        Self::Ejs,
+        #[cfg(feature = "tree-sitter-elixir")]
+        Self::Elixir,
+        #[cfg(feature = "tree-sitter-erb")]
+        Self::Erb,
+        #[cfg(feature = "tree-sitter-go")]
+        Self::Go,
+        #[cfg(feature = "tree-sitter-graphql")]
+        Self::GraphQL,
+        #[cfg(feature = "tree-sitter-html")]
+        Self::Html,
+        #[cfg(feature = "tree-sitter-java")]
+        Self::Java,
+        #[cfg(feature = "tree-sitter-javascript")]
+        Self::JavaScript,
+        #[cfg(feature = "tree-sitter-jsdoc")]
+        Self::JsDoc,
+        #[cfg(feature = "tree-sitter-kotlin")]
+        Self::Kotlin,
+        #[cfg(feature = "tree-sitter-lua")]
+        Self::Lua,
+        #[cfg(feature = "tree-sitter-make")]
+        Self::Make,
+        #[cfg(feature = "tree-sitter-markdown")]
+        Self::Markdown,
+        #[cfg(feature = "tree-sitter-markdown")]
+        Self::MarkdownInline,
+        #[cfg(feature = "tree-sitter-php")]
+        Self::Php,
+        #[cfg(feature = "tree-sitter-proto")]
+        Self::Proto,
+        #[cfg(feature = "tree-sitter-python")]
+        Self::Python,
+        #[cfg(feature = "tree-sitter-ruby")]
+        Self::Ruby,
+        #[cfg(feature = "tree-sitter-rust")]
+        Self::Rust,
+        #[cfg(feature = "tree-sitter-scala")]
+        Self::Scala,
+        #[cfg(feature = "tree-sitter-sql")]
+        Self::Sql,
+        #[cfg(feature = "tree-sitter-svelte")]
+        Self::Svelte,
+        #[cfg(feature = "tree-sitter-swift")]
+        Self::Swift,
+        #[cfg(feature = "tree-sitter-toml")]
+        Self::Toml,
+        #[cfg(feature = "tree-sitter-tsx")]
+        Self::Tsx,
+        #[cfg(feature = "tree-sitter-typescript")]
+        Self::TypeScript,
+        #[cfg(feature = "tree-sitter-yaml")]
+        Self::Yaml,
+        #[cfg(feature = "tree-sitter-zig")]
+        Self::Zig,
+    ];
+
     pub fn all() -> impl Iterator<Item = Self> {
-        enum_iterator::all::<Language>()
+        Self::ALL.iter().copied()
     }
 
     pub fn name(&self) -> &'static str {

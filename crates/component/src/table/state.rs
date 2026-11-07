@@ -19,7 +19,6 @@ use gpui::{
     StatefulInteractiveElement as _, Styled, Task, TextAlign, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
-use rust_i18n::t;
 
 use super::*;
 
@@ -1902,7 +1901,7 @@ where
                 .id(("icon-sort", col_ix))
                 .test_support()
                 .role(gpui::Role::Button)
-                .aria_label(t!("Table.SortBy", column = col_group.column.name).to_string())
+                .aria_label(format!("Sort by {column}", column = col_group.column.name))
                 .p(px(2.))
                 .rounded(cx.theme().radius / 2.)
                 .map(|this| match is_on {

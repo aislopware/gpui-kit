@@ -15,7 +15,6 @@ use gpui::{
     ParentElement as _, Pixels, RenderOnce, StyleRefinement, Styled, Window, container_query, div,
     prelude::FluentBuilder as _, px, relative,
 };
-use rust_i18n::t;
 
 const STACKED_LAYOUT_MAX_WIDTH: Pixels = px(480.);
 
@@ -146,8 +145,8 @@ impl Settings {
                         .with_variant(EmptyMediaVariant::Icon)
                         .child(Icon::new(IconName::Search)),
                 )
-                .title(EmptyTitle::new().child(t!("Settings.no_results")))
-                .description(EmptyDescription::new().child(t!("Settings.no_results_description"))),
+                .title(EmptyTitle::new().child("No matching settings"))
+                .description(EmptyDescription::new().child("Try a different keyword.")),
         )
     }
 
@@ -419,7 +418,7 @@ impl RenderOnce for Settings {
         let state = window.use_keyed_state(self.id.clone(), cx, |window, cx| {
             let search_input = cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder(t!("Settings.search_placeholder"))
+                    .placeholder("Search...")
                     .default_value("")
             });
 
@@ -430,16 +429,7 @@ impl RenderOnce for Settings {
             }
         });
 
-        // The placeholder is localized when the state is created, and rebuilding
-        // the state would lose the selected page, so follow a runtime locale
-        // change here. `set_placeholder` notifies, so only write on a change.
-        let placeholder = t!("Settings.search_placeholder");
         let search_input = state.read(cx).search_input.clone();
-        if search_input.read(cx).presentation().placeholder() != &*placeholder {
-            search_input.update(cx, |input, cx| {
-                input.set_placeholder(placeholder, window, cx);
-            });
-        }
 
         let query = search_input.read(cx).value();
         let filter = SettingsFilter::new(&self.pages, &query, cx);

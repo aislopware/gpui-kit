@@ -31,7 +31,7 @@ pub use semantic_tokens::*;
 /// return `false` to fall through to the default handling (`external` URIs
 /// open in the browser, anything else jumps within the current document).
 pub type ShowDocumentHandler =
-    Rc<dyn Fn(&lsp_types::ShowDocumentParams, &mut Window, &mut App) -> bool>;
+    Rc<dyn Fn(&ls_types::ShowDocumentParams, &mut Window, &mut App) -> bool>;
 
 /// LSP ServerCapabilities
 ///
@@ -64,11 +64,11 @@ pub struct Lsp {
     /// match, a character-by-character match, or ranges the host computed.
     completion_highlighter: Rc<CompletionHighlighter>,
 
-    pub(crate) document_colors: Vec<(lsp_types::Range, Hsla)>,
+    pub(crate) document_colors: Vec<(ls_types::Range, Hsla)>,
     /// Cached semantic tokens as absolute position ranges + theme token-type
     /// names. Color is resolved from the name at paint time so theme switches
     /// take effect without a refetch.
-    pub(crate) semantic_tokens: Vec<(lsp_types::Range, SharedString)>,
+    pub(crate) semantic_tokens: Vec<(ls_types::Range, SharedString)>,
     pub(crate) _hover_task: Task<Result<()>>,
     pub(crate) _definition_task: Task<Result<()>>,
     pub(crate) _document_color_task: Task<()>,
@@ -139,10 +139,10 @@ impl Lsp {
 }
 
 impl InputBaseState<EditorMode> {
-    /// Apply a list of [`lsp_types::TextEdit`] to mutate the text.
+    /// Apply a list of [`ls_types::TextEdit`] to mutate the text.
     pub fn apply_lsp_edits(
         &mut self,
-        text_edits: &Vec<lsp_types::TextEdit>,
+        text_edits: &Vec<ls_types::TextEdit>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {

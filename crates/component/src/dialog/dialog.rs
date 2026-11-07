@@ -10,7 +10,6 @@ use gpui::{
     prelude::FluentBuilder, px,
 };
 use gpui_base::{ElementExt as _, TextSelectionScopeId, motion::Transition};
-use rust_i18n::t;
 
 use crate::{
     ActiveTheme as _, IconName, Sizable as _, StyledExt, TITLE_BAR_HEIGHT, WindowExt as _,
@@ -147,10 +146,7 @@ impl DialogButtonProps {
     }
 
     pub(crate) fn render_ok(&self, _: &mut Window, _: &mut App) -> AnyElement {
-        let ok_text = self
-            .ok_text
-            .clone()
-            .unwrap_or_else(|| t!("Dialog.ok").into());
+        let ok_text = self.ok_text.clone().unwrap_or_else(|| "OK".into());
 
         DialogButton {
             anchor_key: "dialog-ok-anchor",
@@ -163,10 +159,7 @@ impl DialogButtonProps {
     }
 
     pub(crate) fn render_cancel(&self, _: &mut Window, _: &mut App) -> AnyElement {
-        let cancel_text = self
-            .cancel_text
-            .clone()
-            .unwrap_or_else(|| t!("Dialog.cancel").into());
+        let cancel_text = self.cancel_text.clone().unwrap_or_else(|| "Cancel".into());
 
         DialogButton {
             anchor_key: "dialog-cancel-anchor",

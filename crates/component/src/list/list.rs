@@ -21,7 +21,6 @@ use gpui::{
     AppContext, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
     Length, MouseButton, ParentElement, Render, Styled, Task, Window, div, prelude::FluentBuilder,
 };
-use rust_i18n::t;
 
 pub(crate) fn init(cx: &mut App) {
     let context: Option<&str> = Some("List");
@@ -102,8 +101,7 @@ where
     D: ListDelegate,
 {
     pub fn new(delegate: D, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let query_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder(t!("List.search_placeholder")));
+        let query_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search..."));
 
         let _query_input_subscription =
             cx.subscribe_in(&query_input, window, Self::on_query_input_event);

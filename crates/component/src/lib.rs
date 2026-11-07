@@ -1,5 +1,4 @@
 use gpui::App;
-use std::ops::Deref;
 use std::sync::LazyLock;
 
 mod component_traits;
@@ -120,8 +119,6 @@ pub use virtual_list::{VirtualList, VirtualListScrollHandle, h_virtual_list, v_v
 pub use window_border::{WindowBorder, window_border, window_paddings};
 pub use window_ext::WindowExt;
 
-rust_i18n::i18n!("locales", fallback = "en");
-
 /// Sets gpui-component up in `cx`: its theme, the globals its behaviours keep, and every
 /// component's key bindings. It runs on its own for every [`App`] as it is made
 /// ([`gpui::on_every_app!`]), test apps included; calling it again does nothing.
@@ -158,16 +155,6 @@ struct Initialized;
 impl gpui::Global for Initialized {}
 
 gpui::on_every_app!(init);
-
-#[inline]
-pub fn locale() -> impl Deref<Target = str> {
-    rust_i18n::locale()
-}
-
-#[inline]
-pub fn set_locale(locale: &str) {
-    rust_i18n::set_locale(locale)
-}
 
 /// Whether measurement logging is enabled, read once per process.
 ///

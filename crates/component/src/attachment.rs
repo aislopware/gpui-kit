@@ -12,7 +12,6 @@ use gpui_base::{
     is_mobile,
     motion::{Transition, transition},
 };
-use rust_i18n::t;
 
 use crate::{
     ActiveTheme as _, Icon, IconName, Sizable, Size, StyledExt as _,
@@ -603,7 +602,7 @@ fn remove_button(id: ElementId, on_remove: ControlHandler, cx: &App) -> Button {
                 .active(tokens.colors.muted)
                 .foreground(tokens.colors.foreground),
         )
-        .accessibility_label(t!("Attachment.Remove"))
+        .accessibility_label("Remove")
         .child(
             Icon::new(IconName::Close)
                 .size(px(10.))
@@ -625,7 +624,7 @@ fn retry_button(id: ElementId, on_retry: ControlHandler, cx: &App) -> Button {
     let tokens = cx.theme().semantic_tokens();
     Button::new((id, "retry"))
         .ghost()
-        .accessibility_label(t!("Attachment.Retry"))
+        .accessibility_label("Retry")
         .child(
             Icon::new(IconName::RefreshCw)
                 .size(px(12.))
@@ -1016,7 +1015,7 @@ impl RenderOnce for AttachmentContent {
                                 Button::new((id, "retry"))
                                     .link()
                                     .xsmall()
-                                    .label(t!("Attachment.Retry"))
+                                    .label("Retry")
                                     .on_click(move |event, window, cx| on_retry(event, window, cx)),
                             )
                             .into_any_element(),

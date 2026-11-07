@@ -5,7 +5,6 @@ use gpui::{
     deferred, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_base::TestSupportExt as _;
-use rust_i18n::t;
 
 use crate::ThemeStyled as _;
 use crate::{
@@ -480,7 +479,7 @@ where
             self.state
                 .placeholder
                 .clone()
-                .unwrap_or_else(|| t!("Select.placeholder").into()),
+                .unwrap_or_else(|| "Please select".into()),
         );
 
         let Some(selected_index) = self.selected_index(cx) else {
@@ -520,7 +519,7 @@ where
                 .state
                 .placeholder
                 .clone()
-                .unwrap_or_else(|| t!("Select.placeholder").into());
+                .unwrap_or_else(|| "Please select".into());
         };
 
         if let Some(prefix) = self.title_prefix.as_ref() {
@@ -1058,7 +1057,7 @@ mod tests {
             _ = Select::new(&state).render(window, cx);
             assert_eq!(
                 state.read(cx).accessibility_value(),
-                rust_i18n::t!("Select.placeholder").to_string(),
+                "Please select".to_string(),
             );
         });
     }

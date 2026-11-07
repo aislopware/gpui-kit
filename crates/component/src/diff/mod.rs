@@ -28,7 +28,6 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_base::TestSupportExt as _;
-use rust_i18n::t;
 
 use crate::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
@@ -601,8 +600,8 @@ fn render_diff(
     let horizontal = state.horizontal_scroll().clone();
     let has_rows = !rows.is_empty();
     let label = match state.files() {
-        [file] => t!("Diff.Viewer", name = file.path().as_str()).to_string(),
-        files => t!("Diff.ViewerFiles", count = files.len()).to_string(),
+        [file] => format!("Diff for {name}", name = file.path().as_str()),
+        files => format!("Diff for {count} files", count = files.len()),
     };
     let body = div()
         .id("diff-body")
@@ -1031,7 +1030,7 @@ fn render_hunk_separator(
                 return div().into_any_element();
             }
             row.h_6()
-                .child(t!("Diff.HiddenLines", count = hidden).to_string())
+                .child(format!("{count} lines not in patch", count = hidden))
                 .into_any_element()
         }
         DiffHunkSeparator::Simple => row.h_1().into_any_element(),
@@ -1078,14 +1077,14 @@ fn render_fold(
             this.child(
                 expand(("expand-down", pairs.start), FoldExpansion::Down)
                     .icon(IconName::ArrowDown)
-                    .accessibility_label(t!("Diff.ExpandBelow", count = lines).to_string()),
+                    .accessibility_label(format!("Show {count} lines below", count = lines)),
             )
         })
         .when(partial && pairs.end < hunk.end, |this| {
             this.child(
                 expand(("expand-up", pairs.start), FoldExpansion::Up)
                     .icon(IconName::ArrowUp)
-                    .accessibility_label(t!("Diff.ExpandAbove", count = lines).to_string()),
+                    .accessibility_label(format!("Show {count} lines above", count = lines)),
             )
         })
         .child(
@@ -1095,8 +1094,11 @@ fn render_fold(
                 } else {
                     IconName::ChevronDown
                 })
-                .label(t!("Diff.UnchangedLines", count = pairs.len()).to_string())
-                .accessibility_label(t!("Diff.ExpandLines", count = pairs.len()).to_string()),
+                .label(format!("{count} unchanged lines", count = pairs.len()))
+                .accessibility_label(format!(
+                    "Expand {count} unchanged lines",
+                    count = pairs.len()
+                )),
         )
         .into_any_element()
 }
@@ -1136,24 +1138,20 @@ fn render_conflict(
         .bg(conflict_tint(Some(part), cx).opacity(0.25));
     if let Some(resolution) = resolution {
         let label = match resolution {
-            DiffConflictResolution::Current => t!("Diff.AcceptedCurrent"),
-            DiffConflictResolution::Incoming => t!("Diff.AcceptedIncoming"),
-            _ => t!("Diff.AcceptedBoth"),
+            DiffConflictResolution::Current => "Accepted current change",
+            DiffConflictResolution::Incoming => "Accepted incoming change",
+            _ => "Accepted both changes",
         };
         return row
             .bg(cx.theme().muted.opacity(0.35))
             .child(label.to_string())
-            .child(choose(
-                "undo-resolution",
-                t!("Diff.UndoResolution").to_string(),
-                None,
-            ))
+            .child(choose("undo-resolution", "Undo".to_string(), None))
             .into_any_element();
     }
     let title = match part {
-        ConflictPart::Current => t!("Diff.CurrentChange"),
-        ConflictPart::Base => t!("Diff.BaseChange"),
-        ConflictPart::Incoming => t!("Diff.IncomingChange"),
+        ConflictPart::Current => "Current change",
+        ConflictPart::Base => "Common ancestor",
+        ConflictPart::Incoming => "Incoming change",
     };
     let label = conflict.label(part).clone();
     row.child(div().font_medium().child(title.to_string()))
@@ -1162,17 +1160,17 @@ fn render_conflict(
             this.child(div().flex_1())
                 .child(choose(
                     "accept-current",
-                    t!("Diff.AcceptCurrent").to_string(),
+                    "Accept Current".to_string(),
                     Some(DiffConflictResolution::Current),
                 ))
                 .child(choose(
                     "accept-incoming",
-                    t!("Diff.AcceptIncoming").to_string(),
+                    "Accept Incoming".to_string(),
                     Some(DiffConflictResolution::Incoming),
                 ))
                 .child(choose(
                     "accept-both",
-                    t!("Diff.AcceptBoth").to_string(),
+                    "Accept Both".to_string(),
                     Some(DiffConflictResolution::Both),
                 ))
         })
@@ -1217,11 +1215,11 @@ fn render_file_header(
         let title_suffix = slot(&code.header.title_suffix, window, cx);
         let suffix = slot(&code.header.suffix, window, cx);
         let status = match document.status() {
-            DiffFileStatus::Added => Some(t!("Diff.AddedFile")),
-            DiffFileStatus::Deleted => Some(t!("Diff.DeletedFile")),
-            DiffFileStatus::Renamed => Some(t!("Diff.RenamedFile")),
-            DiffFileStatus::Copied => Some(t!("Diff.CopiedFile")),
-            DiffFileStatus::Conflicted => Some(t!("Diff.ConflictedFile")),
+            DiffFileStatus::Added => Some("Added file"),
+            DiffFileStatus::Deleted => Some("Deleted file"),
+            DiffFileStatus::Renamed => Some("Renamed"),
+            DiffFileStatus::Copied => Some("Copied"),
+            DiffFileStatus::Conflicted => Some("Conflicts"),
             _ => None,
         };
         let statistics = !document.is_single_column();
@@ -1285,9 +1283,9 @@ fn render_file_header(
                         })
                         .accessibility_label(
                             if collapsed {
-                                t!("Diff.ExpandFile", name = name.as_str())
+                                format!("Expand {name}", name = name.as_str())
                             } else {
-                                t!("Diff.CollapseFile", name = name.as_str())
+                                format!("Collapse {name}", name = name.as_str())
                             }
                             .to_string(),
                         )
@@ -1320,13 +1318,13 @@ fn file_annotations(
 /// Summarizes a file without source rows: binary, metadata-only or empty.
 fn render_notice(file: &DiffFile, cx: &App) -> AnyElement {
     let message = if !file.has_changes() {
-        t!("Diff.NoChanges")
+        "No changes"
     } else if file.is_binary() {
-        t!("Diff.BinaryChanges")
+        "Binary file changed"
     } else if !file.extended_headers().is_empty() {
-        t!("Diff.NoTextChanges")
+        "No text changes in this patch"
     } else {
-        t!("Diff.EmptyFile")
+        "Empty file"
     };
     v_flex()
         .w_full()
@@ -1389,8 +1387,8 @@ fn render_gutter(
                     .hover(|this| this.text_color(cx.theme().foreground))
                     .role(gpui::accesskit::Role::Button)
                     .aria_label(
-                        t!(
-                            "Diff.SelectLine",
+                        format!(
+                            "Select {side} line {line}",
                             side = side_label(side),
                             line = position.line()
                         )
@@ -1419,11 +1417,11 @@ fn render_gutter(
         .into_any_element()
 }
 
-fn side_label(side: DiffSide) -> std::borrow::Cow<'static, str> {
+fn side_label(side: DiffSide) -> &'static str {
     if side == DiffSide::Original {
-        t!("Diff.Original")
+        "Original"
     } else {
-        t!("Diff.Modified")
+        "Modified"
     }
 }
 
@@ -1631,7 +1629,10 @@ fn add_annotation_button(
                     .group_hover("diff-line", |this| this.opacity(1.))
             })
             .role(gpui::accesskit::Role::Button)
-            .aria_label(t!("Diff.AddAnnotation", line = position.line()).to_string())
+            .aria_label(format!(
+                "Add annotation to line {line}",
+                line = position.line()
+            ))
             .child(Icon::new(IconName::Plus).xsmall())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(move |_, window, cx| handler(&range, window, cx))
@@ -1847,22 +1848,18 @@ fn code_line(
                 })
                 .role(gpui::accesskit::Role::Label)
                 .aria_label(source_line.text().clone())
-                .aria_description(
-                    t!(
-                        if changed {
-                            if side == DiffSide::Original {
-                                "Diff.RemovedLine"
-                            } else {
-                                "Diff.AddedLine"
-                            }
-                        } else {
-                            "Diff.SourceLine"
-                        },
-                        side = side_label(text_side),
-                        line = position.line()
-                    )
-                    .to_string(),
-                )
+                .aria_description({
+                    let removed = side == DiffSide::Original;
+                    let side = side_label(text_side);
+                    let line = position.line();
+                    if !changed {
+                        format!("{side} line {line}")
+                    } else if removed {
+                        format!("{side} line {line}, removed")
+                    } else {
+                        format!("{side} line {line}, added")
+                    }
+                })
                 .when_some(code.on_line_click.clone(), |this, handler| {
                     let position = position.clone();
                     this.on_click(move |event, window, cx| {
@@ -1900,7 +1897,7 @@ fn line_extras(
     let ending_only = changed && has_line_ending_change(document, side, ix, other_ix);
     if ending.is_empty() || ending_only {
         let label = if ending.is_empty() {
-            t!("Diff.NoNewline").to_string()
+            "No newline at end of file".to_string()
         } else {
             format!("\\ {}", if ending == "\r\n" { "CRLF" } else { "LF" })
         };

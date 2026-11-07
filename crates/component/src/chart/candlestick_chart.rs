@@ -5,7 +5,6 @@ use gpui::{
     fill, point, px,
 };
 use gpui_component_macros::IntoPlot;
-use rust_i18n::t;
 
 use crate::{
     ActiveTheme,
@@ -479,10 +478,10 @@ where
             || Some(x_fn(d).into()),
             || {
                 [
-                    (t!("Chart.open"), open),
-                    (t!("Chart.high"), high_fn(d)),
-                    (t!("Chart.low"), low_fn(d)),
-                    (t!("Chart.close"), close),
+                    ("Open", open),
+                    ("High", high_fn(d)),
+                    ("Low", low_fn(d)),
+                    ("Close", close),
                 ]
                 .into_iter()
                 .map(|(label, value)| Some((color, label.to_string().into(), value.to_f64()?)))

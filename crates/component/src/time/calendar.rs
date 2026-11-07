@@ -3,7 +3,6 @@ use gpui::{
     App, ElementId, Entity, InteractiveElement, IntoElement, ParentElement, RenderOnce,
     SharedString, StyleRefinement, Styled, Window, prelude::FluentBuilder as _, px,
 };
-use rust_i18n::t;
 
 use crate::{ActiveTheme, Icon, IconName, Sizable, Size, StyledExt as _};
 
@@ -12,18 +11,18 @@ pub use gpui_base::{CalendarEvent, CalendarState, Date, Matcher};
 
 fn month_name(month: i32) -> SharedString {
     match month {
-        1 => t!("Calendar.month.January"),
-        2 => t!("Calendar.month.February"),
-        3 => t!("Calendar.month.March"),
-        4 => t!("Calendar.month.April"),
-        5 => t!("Calendar.month.May"),
-        6 => t!("Calendar.month.June"),
-        7 => t!("Calendar.month.July"),
-        8 => t!("Calendar.month.August"),
-        9 => t!("Calendar.month.September"),
-        10 => t!("Calendar.month.October"),
-        11 => t!("Calendar.month.November"),
-        12 => t!("Calendar.month.December"),
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        12 => "December",
         _ => "".into(),
     }
     .into()
@@ -89,13 +88,13 @@ impl RenderOnce for Calendar {
                 CalendarItemKind::Next => "›".into(),
                 CalendarItemKind::MonthToggle | CalendarItemKind::Month => month_name(value),
                 CalendarItemKind::Weekday => match value {
-                    0 => t!("Calendar.week.0"),
-                    1 => t!("Calendar.week.1"),
-                    2 => t!("Calendar.week.2"),
-                    3 => t!("Calendar.week.3"),
-                    4 => t!("Calendar.week.4"),
-                    5 => t!("Calendar.week.5"),
-                    _ => t!("Calendar.week.6"),
+                    0 => "Su",
+                    1 => "Mo",
+                    2 => "Tu",
+                    3 => "We",
+                    4 => "Th",
+                    5 => "Fr",
+                    _ => "Sa",
                 }
                 .into(),
                 _ => value.to_string().into(),

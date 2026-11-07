@@ -23,7 +23,6 @@ use gpui::{
     WeakEntity, Window,
 };
 use gpui_base::dock::{PanelId, PanelState, TabGroup};
-use rust_i18n::t;
 
 use crate::{button::Button, menu::PopupMenu};
 
@@ -80,7 +79,7 @@ pub trait Panel: gpui_base::dock::Panel {
     /// The panel's title, as an element rather than a string so a panel can
     /// draw an icon, a badge, or a styled fragment in the tab.
     fn title(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        t!("Dock.Unnamed")
+        "Unnamed"
     }
 
     /// Colors for the title, for a panel that wants its tab to stand out.

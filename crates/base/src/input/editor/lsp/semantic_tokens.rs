@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use anyhow::Result;
 use gpui::{App, Context, HighlightStyle, SharedString, Task, Window};
-use lsp_types::{Position, SemanticTokens, SemanticTokensLegend};
+use ls_types::{Position, SemanticTokens, SemanticTokensLegend};
 use ropey::Rope;
 use std::time::Duration;
 
@@ -158,7 +158,7 @@ impl Lsp {
 fn decode_semantic_tokens(
     tokens: &SemanticTokens,
     legend: &SemanticTokensLegend,
-) -> Vec<(lsp_types::Range, SharedString)> {
+) -> Vec<(ls_types::Range, SharedString)> {
     // Resolve the legend names once; tokens then share them via cheap
     // ref-counted clones instead of allocating a String per token.
     let names: Vec<SharedString> = legend
@@ -185,7 +185,7 @@ fn decode_semantic_tokens(
 
         let start = Position::new(line, character);
         let end = Position::new(line, character + token.length);
-        out.push((lsp_types::Range { start, end }, name.clone()));
+        out.push((ls_types::Range { start, end }, name.clone()));
     }
 
     out.sort_by_key(|(range, _)| range.start);
@@ -196,7 +196,7 @@ fn decode_semantic_tokens(
 mod tests {
     use super::*;
     use gpui::hsla;
-    use lsp_types::{SemanticToken, SemanticTokenType, SemanticTokensLegend};
+    use ls_types::{SemanticToken, SemanticTokenType, SemanticTokensLegend};
 
     fn legend() -> SemanticTokensLegend {
         SemanticTokensLegend {
@@ -275,14 +275,14 @@ mod tests {
         // "SELECT" (line 0, 0..6) as keyword; comment on line 1.
         lsp.semantic_tokens = vec![
             (
-                lsp_types::Range {
+                ls_types::Range {
                     start: Position::new(0, 0),
                     end: Position::new(0, 6),
                 },
                 SharedString::from("keyword"),
             ),
             (
-                lsp_types::Range {
+                ls_types::Range {
                     start: Position::new(1, 0),
                     end: Position::new(1, 17),
                 },
@@ -315,7 +315,7 @@ mod tests {
         lsp.semantic_tokens = (0..100u32)
             .map(|line| {
                 (
-                    lsp_types::Range {
+                    ls_types::Range {
                         start: Position::new(line, 0),
                         end: Position::new(line, 3),
                     },

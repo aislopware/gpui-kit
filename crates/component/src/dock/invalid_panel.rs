@@ -3,7 +3,6 @@ use gpui::{
     Styled as _, Window, div,
 };
 use gpui_base::dock::{PanelEvent, PanelState};
-use rust_i18n::t;
 
 use crate::{ActiveTheme as _, dock::Panel};
 
@@ -64,6 +63,6 @@ impl Render for InvalidPanel {
             .items_center()
             .justify_center()
             .text_color(cx.theme().muted_foreground)
-            .child(t!("Dock.Unavailable Panel"))
+            .child("This panel isn’t available in this version.")
     }
 }

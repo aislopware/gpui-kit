@@ -41,9 +41,9 @@ data-url = "0.3"
 futures = "0.3"
 gpui.workspace = true
 gpui_macros.workspace = true
-itertools = "0.13.0"
+itertools = "0.14.0"
 memchr = "2.8.3"
-lsp-types.workspace = true
+ls-types.workspace = true
 markdown = { version = "1.0.0", features = ["serde"] }
 html5ever = "0.39"
 markup5ever_rcdom = "=0.39.0"

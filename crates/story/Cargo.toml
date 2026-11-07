@@ -22,7 +22,7 @@ anyhow.workspace = true
 gpui.workspace = true
 gpui-kit = { workspace = true, features = ["speech"] }
 gpui-fps.workspace = true
-lsp-types.workspace = true
+ls-types.workspace = true
 
 async-channel = "2.3.1"
 autocorrect = "2.14.2"
@@ -41,7 +41,6 @@ tracing-subscriber = { version = "0.3.22", features = [
   "registry",
 ], default-features = false }
 unindent = "0.2.3"
-rust-i18n.workspace = true
 dirs = "6.0.0"
 reqwest_client.workspace = true
 

@@ -21,7 +21,7 @@ use gpui_kit::{
     px, size,
     test::{TestEventExt, TestWindowExt},
 };
-use lsp_types::{
+use ls_types::{
     CodeAction, CompletionContext, CompletionItem, CompletionResponse, CompletionTextEdit,
     CompletionTriggerKind, Position, Range, TextEdit,
 };
@@ -1468,20 +1468,20 @@ impl CompletionProvider for InlineSuggestions {
         &self,
         text: &Rope,
         offset: usize,
-        trigger: lsp_types::InlineCompletionContext,
+        trigger: ls_types::InlineCompletionContext,
         _: &mut Window,
         _: &mut App,
-    ) -> Task<Result<lsp_types::InlineCompletionResponse>> {
+    ) -> Task<Result<ls_types::InlineCompletionResponse>> {
         assert_eq!(
             trigger.trigger_kind,
-            lsp_types::InlineCompletionTriggerKind::Automatic
+            ls_types::InlineCompletionTriggerKind::AUTOMATIC
         );
         self.requests.borrow_mut().push((text.to_string(), offset));
         if self.fail {
             return Task::ready(Err(std::io::Error::other("synthetic inline failure").into()));
         }
-        Task::ready(Ok(lsp_types::InlineCompletionResponse::Array(vec![
-            lsp_types::InlineCompletionItem {
+        Task::ready(Ok(ls_types::InlineCompletionResponse::Array(vec![
+            ls_types::InlineCompletionItem {
                 insert_text: "rint".into(),
                 filter_text: None,
                 range: None,
@@ -1582,10 +1582,10 @@ impl gpui_kit::component::input::DefinitionProvider for Definitions {
         offset: usize,
         _: &mut Window,
         cx: &mut App,
-    ) -> Task<Result<Vec<lsp_types::LocationLink>>> {
+    ) -> Task<Result<Vec<ls_types::LocationLink>>> {
         self.requests.borrow_mut().push((text.to_string(), offset));
         let response = match self.response.get() {
-            DefinitionResponse::Location => Ok(vec![lsp_types::LocationLink {
+            DefinitionResponse::Location => Ok(vec![ls_types::LocationLink {
                 origin_selection_range: Some(Range::new(Position::new(0, 0), Position::new(0, 6))),
                 target_uri: "fixture:///definition".parse().unwrap(),
                 target_range: Range::new(Position::new(0, 0), Position::new(0, 13)),

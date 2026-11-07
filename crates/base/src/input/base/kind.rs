@@ -136,7 +136,7 @@ pub trait InputExtras: Default + 'static {
     }
 
     /// The inline completion to paint as ghost text.
-    fn inline_completion_item(&self) -> Option<&lsp_types::InlineCompletionItem> {
+    fn inline_completion_item(&self) -> Option<&ls_types::InlineCompletionItem> {
         None
     }
 

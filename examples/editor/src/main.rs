@@ -27,7 +27,7 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
-use lsp_types::{
+use ls_types::{
     CodeAction, CodeActionKind, CompletionContext, CompletionItem, CompletionResponse,
     CompletionTextEdit, InlineCompletionContext, InlineCompletionItem, InlineCompletionResponse,
     InsertReplaceEdit, InsertTextFormat, TextEdit, WorkspaceEdit,
@@ -138,20 +138,20 @@ impl ExampleLspStore {
 }
 
 fn completion_item(
-    replace_range: &lsp_types::Range,
+    replace_range: &ls_types::Range,
     label: &str,
     replace_text: &str,
     documentation: &str,
 ) -> CompletionItem {
     CompletionItem {
         label: label.to_string(),
-        kind: Some(lsp_types::CompletionItemKind::FUNCTION),
+        kind: Some(ls_types::CompletionItemKind::FUNCTION),
         text_edit: Some(CompletionTextEdit::InsertAndReplace(InsertReplaceEdit {
             new_text: replace_text.to_string(),
             insert: *replace_range,
             replace: *replace_range,
         })),
-        documentation: Some(lsp_types::Documentation::String(documentation.to_string())),
+        documentation: Some(ls_types::Documentation::String(documentation.to_string())),
         insert_text: None,
         ..Default::default()
     }
@@ -182,7 +182,7 @@ impl CompletionProvider for ExampleLspStore {
                 let start = offset.saturating_sub(trigger_character.len());
                 let start_pos = rope.offset_to_position(start);
                 let end_pos = rope.offset_to_position(offset);
-                let replace_range = lsp_types::Range::new(start_pos, end_pos);
+                let replace_range = ls_types::Range::new(start_pos, end_pos);
 
                 let items = vec![
                     completion_item(
@@ -322,7 +322,7 @@ impl HoverProvider for ExampleLspStore {
         offset: usize,
         _window: &mut Window,
         _cx: &mut App,
-    ) -> Task<Result<Option<lsp_types::Hover>>> {
+    ) -> Task<Result<Option<ls_types::Hover>>> {
         let word = text.word_at(offset);
         if word.is_empty() {
             return Task::ready(Ok(None));
@@ -334,15 +334,15 @@ impl HoverProvider for ExampleLspStore {
 
         let contents = if let Some(doc) = &item.documentation {
             match doc {
-                lsp_types::Documentation::String(s) => s.clone(),
-                lsp_types::Documentation::MarkupContent(mc) => mc.value.clone(),
+                ls_types::Documentation::String(s) => s.clone(),
+                ls_types::Documentation::MarkupContent(mc) => mc.value.clone(),
             }
         } else {
             "No documentation available.".to_string()
         };
 
-        let hover = lsp_types::Hover {
-            contents: lsp_types::HoverContents::Scalar(lsp_types::MarkedString::String(contents)),
+        let hover = ls_types::Hover {
+            contents: ls_types::HoverContents::Scalar(ls_types::MarkedString::String(contents)),
             range: None,
         };
 
@@ -371,29 +371,29 @@ impl DefinitionProvider for ExampleLspStore {
         offset: usize,
         _window: &mut Window,
         _cx: &mut App,
-    ) -> Task<Result<Vec<lsp_types::LocationLink>>> {
+    ) -> Task<Result<Vec<ls_types::LocationLink>>> {
         let Some(word_range) = text.word_range(offset) else {
             return Task::ready(Ok(vec![]));
         };
         let word = text.slice(word_range.clone()).to_string();
 
-        let document_uri = lsp_types::Uri::from_str("file://example").unwrap();
+        let document_uri = ls_types::Uri::from_str("file://example").unwrap();
         let start = text.offset_to_position(word_range.start);
         let end = text.offset_to_position(word_range.end);
-        let symbol_range = lsp_types::Range { start, end };
+        let symbol_range = ls_types::Range { start, end };
 
         if word == "Duration" {
-            let target_range = lsp_types::Range {
-                start: lsp_types::Position {
+            let target_range = ls_types::Range {
+                start: ls_types::Position {
                     line: 2,
                     character: 4,
                 },
-                end: lsp_types::Position {
+                end: ls_types::Position {
                     line: 2,
                     character: 23,
                 },
             };
-            return Task::ready(Ok(vec![lsp_types::LocationLink {
+            return Task::ready(Ok(vec![ls_types::LocationLink {
                 target_uri: document_uri,
                 target_range: target_range,
                 target_selection_range: target_range,
@@ -408,14 +408,14 @@ impl DefinitionProvider for ExampleLspStore {
         for (ix, t) in names.iter().enumerate() {
             if *t == word {
                 let url = RUST_DOC_URLS[ix].1;
-                let location = lsp_types::LocationLink {
-                    target_uri: lsp_types::Uri::from_str(&format!(
+                let location = ls_types::LocationLink {
+                    target_uri: ls_types::Uri::from_str(&format!(
                         "https://doc.rust-lang.org/std/{}.html",
                         url
                     ))
                     .unwrap(),
-                    target_selection_range: lsp_types::Range::default(),
-                    target_range: lsp_types::Range::default(),
+                    target_selection_range: ls_types::Range::default(),
+                    target_range: ls_types::Range::default(),
                     origin_selection_range: Some(symbol_range),
                 };
 
@@ -447,13 +447,13 @@ impl CodeActionProvider for TextConvertor {
         }
 
         let state = state.read(cx);
-        let document_uri = lsp_types::Uri::from_str("file://example").unwrap();
+        let document_uri = ls_types::Uri::from_str("file://example").unwrap();
 
         let text = state.text();
         let old_text = text.slice(range.clone()).to_string();
         let start = text.offset_to_position(range.start);
         let end = text.offset_to_position(range.end);
-        let range = lsp_types::Range { start, end };
+        let range = ls_types::Range { start, end };
 
         actions.push(CodeAction {
             title: "Convert to Uppercase".into(),
@@ -626,20 +626,20 @@ impl DocumentColorProvider for ExampleLspStore {
         text: &Rope,
         _window: &mut Window,
         _cx: &mut App,
-    ) -> Task<gpui_kit::Result<Vec<lsp_types::ColorInformation>>> {
+    ) -> Task<gpui_kit::Result<Vec<ls_types::ColorInformation>>> {
         let nodes = color_lsp::parse(&text.to_string());
         let colors = nodes
             .into_iter()
             .map(|node| {
-                let start = lsp_types::Position::new(node.position.line, node.position.character);
-                let end = lsp_types::Position::new(
+                let start = ls_types::Position::new(node.position.line, node.position.character);
+                let end = ls_types::Position::new(
                     node.position.line,
                     node.position.character + node.matched.chars().count() as u32,
                 );
 
-                lsp_types::ColorInformation {
-                    range: lsp_types::Range { start, end },
-                    color: lsp_types::Color {
+                ls_types::ColorInformation {
+                    range: ls_types::Range { start, end },
+                    color: ls_types::Color {
                         red: node.color.r,
                         green: node.color.g,
                         blue: node.color.b,
@@ -839,14 +839,14 @@ impl Example {
                 let range = text.position_to_offset(&start)..text.position_to_offset(&end);
 
                 let text_edit = TextEdit {
-                    range: lsp_types::Range { start, end },
+                    range: ls_types::Range { start, end },
                     new_text: item.new.clone(),
                 };
 
                 let edit = WorkspaceEdit {
                     changes: Some(
                         std::iter::once((
-                            lsp_types::Uri::from_str("file://example").unwrap(),
+                            ls_types::Uri::from_str("file://example").unwrap(),
                             vec![text_edit],
                         ))
                         .collect(),

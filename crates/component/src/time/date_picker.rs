@@ -7,7 +7,6 @@ use gpui::{
     ParentElement as _, Pixels, Render, RenderOnce, SharedString, StatefulInteractiveElement as _,
     StyleRefinement, Styled, Subscription, Window, deferred, div, prelude::FluentBuilder as _, px,
 };
-use rust_i18n::t;
 
 use crate::ThemeStyled as _;
 use crate::{
@@ -660,7 +659,7 @@ impl DatePicker {
                         _ => this.text_sm(),
                     })
                     .text_color(cx.theme().muted_foreground)
-                    .child(SharedString::from(t!("DatePicker.time"))),
+                    .child(SharedString::from("Time")),
             )
             .child(
                 TimeField::new(&state.time_field)
@@ -684,7 +683,7 @@ impl RenderOnce for DatePicker {
         let placeholder = self
             .placeholder
             .clone()
-            .unwrap_or_else(|| t!("DatePicker.placeholder").into());
+            .unwrap_or_else(|| "Select date".into());
         let display_title = state
             .date_time()
             .format(&state.display_format())

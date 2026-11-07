@@ -20,21 +20,21 @@ pub trait DefinitionProvider {
         _offset: usize,
         _window: &mut Window,
         _cx: &mut App,
-    ) -> Task<Result<Vec<lsp_types::LocationLink>>>;
+    ) -> Task<Result<Vec<ls_types::LocationLink>>>;
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct HoverDefinition {
     /// The range of the symbol that triggered the hover.
     symbol_range: Range<usize>,
-    pub(crate) locations: Rc<Vec<lsp_types::LocationLink>>,
+    pub(crate) locations: Rc<Vec<ls_types::LocationLink>>,
 }
 
 impl HoverDefinition {
     pub(crate) fn update(
         &mut self,
         symbol_range: Range<usize>,
-        locations: Vec<lsp_types::LocationLink>,
+        locations: Vec<ls_types::LocationLink>,
     ) {
         self.clear();
         self.symbol_range = symbol_range;
@@ -165,20 +165,17 @@ impl InputBaseState<EditorMode> {
 
     pub(crate) fn go_to_definition(
         &mut self,
-        location: &lsp_types::LocationLink,
+        location: &ls_types::LocationLink,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let external = location
-            .target_uri
-            .scheme()
-            .map(|s| s.as_str() == "https" || s.as_str() == "http")
-            == Some(true);
+        let scheme = location.target_uri.scheme().as_str();
+        let external = scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http");
 
         // Give the host a chance to show the document first (window/showDocument),
         // e.g. to open virtual/external documents (stdlib docs) in an app window.
         if let Some(handler) = self.extras.lsp.show_document.clone() {
-            let params = lsp_types::ShowDocumentParams {
+            let params = ls_types::ShowDocumentParams {
                 uri: location.target_uri.clone(),
                 external: Some(external),
                 take_focus: Some(true),

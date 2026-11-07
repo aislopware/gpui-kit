@@ -32,6 +32,7 @@ pub struct Popup {
     style: StyleRefinement,
     anchor: Anchor,
     offset: Pixels,
+    approach: Pixels,
     on_position: Option<Box<dyn Fn(ResolvedPosition, Bounds<Pixels>)>>,
     trigger: AnyElement,
     content: Option<AnyElement>,
@@ -46,6 +47,7 @@ impl Popup {
             style: StyleRefinement::default(),
             anchor: Anchor::TopLeft,
             offset: px(0.),
+            approach: px(0.),
             on_position: None,
             trigger: trigger.into_any_element(),
             content: None,
@@ -60,6 +62,13 @@ impl Popup {
     /// Gap from the trigger along the anchor's outward direction, zero by default.
     pub fn offset(mut self, offset: Pixels) -> Self {
         self.offset = offset;
+        self
+    }
+
+    /// Draws the content this far back toward the trigger, for motion that
+    /// brings it out of the trigger (see [`Positioner::approach`]).
+    pub fn approach(mut self, distance: Pixels) -> Self {
+        self.approach = distance;
         self
     }
 
@@ -186,7 +195,8 @@ impl RenderOnce for Popup {
         // other, as Base UI's does, rather than sliding over its trigger.
         let positioner = Positioner::corner(anchor, position.get())
             .tracked_flip_around(trigger_bounds.clone())
-            .tracked_corner_position(position);
+            .tracked_corner_position(position)
+            .approach(self.approach);
         let positioner = if let Some(callback) = self.on_position {
             positioner.on_position(move |position| callback(position, trigger_bounds.get()))
         } else {

@@ -8,24 +8,39 @@ use std::{
 
 use gpui::{
     Anchor, Animation, AnimationExt, AnyElement, AnyWindowHandle, App, AppContext, ClickEvent,
-    Context, DismissEvent, ElementId, Entity, EventEmitter, FocusHandle, Global,
-    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, SharedString,
-    StatefulInteractiveElement, StyleRefinement, Styled, Subscription, SystemNotification,
-    SystemNotificationResponse, WeakEntity, Window, WindowId, div, prelude::FluentBuilder, px,
-    relative,
+    Context, DismissEvent, DispatchPhase, ElementId, Entity, EventEmitter, FocusHandle, Global,
+    InteractiveElement as _, IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollDelta, ScrollEvent,
+    ScrollSource, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription,
+    SystemNotification, SystemNotificationResponse, TouchPhase, WeakEntity, WeakFocusHandle,
+    Window, WindowId, actions, canvas, div, point, prelude::FluentBuilder, px, relative,
 };
 use gpui_base::{
-    Toast as BaseToast, ToastManager, ToastMotion, ToastOptions, ToastStack, ToastStackState,
-    ToastTransitionStatus,
+    SwipeDirection, Toast as BaseToast, ToastManager, ToastMotion, ToastOptions, ToastStack,
+    ToastStackState, ToastSwipe, ToastTransitionStatus, actions::Cancel, motion::spring,
 };
 
 use crate::{
     ActiveTheme as _, Edges, Icon, IconName, Sizable as _, StyledExt, TITLE_BAR_HEIGHT,
     animation::cubic_bezier,
     button::{Button, ButtonVariants as _},
+    root::WindowState,
     styled::toast_shadow,
     v_flex,
 };
+
+actions!(
+    notification,
+    [
+        /// Move the focus to the newest notification, or give it back to where
+        /// it was when a notification already holds it, as Base UI's F6 to the
+        /// toast viewport.
+        FocusNotifications
+    ]
+);
+
+/// The key context of a notification, where Escape dismisses it.
+const CONTEXT: &str = "Notification";
 
 const NOTIFICATION_TRANSITION_DURATION: Duration = Duration::from_millis(400);
 const NOTIFICATION_EXIT_DURATION: Duration = Duration::from_millis(200);
@@ -130,6 +145,25 @@ pub struct Notification {
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     on_close: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     transition_status: ToastTransitionStatus,
+    /// Given by the list that mounts the notification, so F6, Tab and a click
+    /// can focus it.
+    focus_handle: Option<FocusHandle>,
+    swipe: ToastSwipe,
+    /// What drives the swipe in progress.
+    swipe_input: Option<SwipeInput>,
+    /// The direction a swipe threw the notification out in, which its exit
+    /// continues.
+    swipe_exit: Option<SwipeDirection>,
+}
+
+/// The input driving a notification's swipe.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SwipeInput {
+    /// A press-drag of the primary button.
+    Pointer,
+    /// Two fingers on a trackpad, with the horizontal distance they have
+    /// scrolled so far.
+    Trackpad(Pixels),
 }
 
 impl From<String> for Notification {
@@ -190,6 +224,10 @@ impl Notification {
             on_click: None,
             on_close: None,
             transition_status: ToastTransitionStatus::Starting,
+            focus_handle: None,
+            swipe: ToastSwipe::default(),
+            swipe_input: None,
+            swipe_exit: None,
         }
     }
 
@@ -380,6 +418,136 @@ impl Notification {
         }
     }
 
+    /// Start a swipe at `position` toward the edges of `placement`.
+    fn begin_swipe(
+        &mut self,
+        position: Point<Pixels>,
+        input: SwipeInput,
+        placement: Anchor,
+        cx: &mut Context<Self>,
+    ) {
+        if self.transition_status == ToastTransitionStatus::Ending {
+            return;
+        }
+        self.swipe = ToastSwipe::new(SwipeDirection::off_screen(placement));
+        self.swipe.begin(position, cx.background_executor().now());
+        self.swipe_input = Some(input);
+        cx.notify();
+    }
+
+    fn move_swipe(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.swipe_input.is_none() {
+            return;
+        }
+        self.swipe.move_to(position, cx.background_executor().now());
+        cx.notify();
+    }
+
+    /// Let go of the swipe: past the threshold, or flicked, the notification
+    /// leaves the way it was thrown; short of it, it springs back.
+    fn end_swipe(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.swipe_input.take().is_none() {
+            return;
+        }
+        if let Some(direction) = self.swipe.release(cx.background_executor().now()) {
+            self.swipe_exit = Some(direction);
+            self.dismiss(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn cancel_swipe(&mut self, cx: &mut Context<Self>) {
+        if self.swipe_input.take().is_some() {
+            self.swipe.cancel();
+            cx.notify();
+        }
+    }
+
+    /// A horizontal two-finger scroll over the notification is the Mac's own
+    /// swipe, and is read as a press-drag would be.
+    ///
+    /// Only fingers on a trackpad swipe: wheel notches, a touch screen's pan
+    /// and the momentum that carries on after the fingers lift do not. Only
+    /// the horizontal distance counts, so scrolling up or down over a
+    /// notification never throws it out.
+    fn scroll_swipe(
+        &mut self,
+        event: &ScrollEvent,
+        placement: Anchor,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.source != ScrollSource::Pointer || event.momentum_phase.is_some() {
+            return;
+        }
+        let ScrollDelta::Pixels(delta) = event.delta else {
+            return;
+        };
+        let by_trackpad = matches!(self.swipe_input, Some(SwipeInput::Trackpad(_)));
+        match event.touch_phase {
+            TouchPhase::Started if self.swipe_input.is_none() => {
+                self.begin_swipe(
+                    Point::default(),
+                    SwipeInput::Trackpad(px(0.)),
+                    placement,
+                    cx,
+                );
+                self.scroll_swipe_by(delta.x, cx);
+            }
+            TouchPhase::Moved => self.scroll_swipe_by(delta.x, cx),
+            TouchPhase::Ended if by_trackpad => {
+                self.scroll_swipe_by(delta.x, cx);
+                self.end_swipe(window, cx);
+            }
+            TouchPhase::Cancelled if by_trackpad => self.cancel_swipe(cx),
+            _ => {}
+        }
+    }
+
+    fn scroll_swipe_by(&mut self, distance: Pixels, cx: &mut Context<Self>) {
+        let Some(SwipeInput::Trackpad(travel)) = &mut self.swipe_input else {
+            return;
+        };
+        *travel = *travel + distance;
+        let position = point(*travel, px(0.));
+        self.move_swipe(position, cx);
+    }
+
+    /// While a press-drag swipes the notification, follow the pointer
+    /// wherever it goes: the notification's own listeners hear it only while
+    /// it is over the notification.
+    fn pointer_swipe_listener(cx: &Context<Self>) -> impl IntoElement + use<> {
+        let view = cx.entity().downgrade();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let moved = view.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Capture {
+                        return;
+                    }
+                    _ = moved.update(cx, |this, cx| {
+                        if event.pressed_button == Some(MouseButton::Left) {
+                            this.move_swipe(event.position, cx);
+                        } else {
+                            // The button came up where the window could not
+                            // hear it.
+                            this.end_swipe(window, cx);
+                        }
+                    });
+                });
+                let released = view.clone();
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                        _ = released.update(cx, |this, cx| this.end_swipe(window, cx));
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
     /// Set the content of the notification.
     pub fn content(
         mut self,
@@ -419,7 +587,38 @@ impl Render for Notification {
         let has_icon = icon.is_some();
         let placement = self.placement.unwrap_or(cx.theme().notification.placement);
 
+        // While a gesture drives the notification it sits exactly under the
+        // pointer; let go short of leaving and it springs home, at once under
+        // reduced motion.
+        let swipe_spring = cx
+            .theme()
+            .motion_tokens()
+            .spring_move
+            .with_epsilon(0.5)
+            .with_travel(!self.swipe.is_swiping());
+        let swipe_offset = self.swipe.offset();
+        let swipe_x = spring(
+            ("notification-swipe", "x"),
+            swipe_offset.x,
+            swipe_spring,
+            window,
+            cx,
+        );
+        let swipe_y = spring(
+            ("notification-swipe", "y"),
+            swipe_offset.y,
+            swipe_spring,
+            window,
+            cx,
+        );
+        let swipe_exit = self.swipe_exit;
+        let swipe_exit_travel = match swipe_exit {
+            Some(SwipeDirection::Left | SwipeDirection::Right) => cx.theme().notification.width,
+            _ => NOTIFICATION_TRANSITION_OFFSET,
+        };
+
         BaseToast::new("notification")
+            .debug_selector(|| "notification".into())
             .transition_status(transition_status)
             // An error is announced at once; anything else after what is
             // being said.
@@ -442,6 +641,38 @@ impl Render for Notification {
             .px_4()
             .gap_3()
             .refine_style(&self.style)
+            .when_some(self.focus_handle.clone(), |this, handle| {
+                this.track_focus(&handle)
+            })
+            .key_context(CONTEXT)
+            .on_action(cx.listener(|this, _: &Cancel, window, cx| this.dismiss(window, cx)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    // A control inside that claims the press, as its buttons
+                    // do, keeps it.
+                    if window.default_prevented() || this.swipe_input.is_some() {
+                        return;
+                    }
+                    this.begin_swipe(event.position, SwipeInput::Pointer, placement, cx);
+                }),
+            )
+            // The window-wide listener only exists from the next frame on; a
+            // click quicker than that still ends its press here.
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, window, cx| {
+                    if this.swipe_input == Some(SwipeInput::Pointer) {
+                        this.end_swipe(window, cx);
+                    }
+                }),
+            )
+            .on_scroll(cx.listener(move |this, event: &ScrollEvent, window, cx| {
+                this.scroll_swipe(event, placement, window, cx);
+            }))
+            .when(self.swipe_input == Some(SwipeInput::Pointer), |this| {
+                this.child(Self::pointer_swipe_listener(cx))
+            })
             .when_some(icon, |this, icon| {
                 this.child(div().absolute().top(px(18.)).left_4().child(icon))
             })
@@ -480,6 +711,10 @@ impl Render for Notification {
             )
             .when_some(self.on_click.clone(), |this, on_click| {
                 this.on_click(cx.listener(move |view, event, window, cx| {
+                    // Letting go of a swipe is not a click.
+                    if view.swipe.has_moved() {
+                        return;
+                    }
                     view.dismiss(window, cx);
                     on_click(event, window, cx);
                 }))
@@ -501,16 +736,29 @@ impl Render for Notification {
                     if closing {
                         let opacity = 1. - delta;
                         let that = this.opacity(opacity).shadow(toast_shadow(opacity.powi(3)));
-                        let y_offset = match placement {
-                            Anchor::TopLeft | Anchor::TopRight | Anchor::TopCenter => {
-                                -delta * NOTIFICATION_TRANSITION_OFFSET
+                        // A swiped notification carries on the way it was
+                        // thrown, from where the pointer let go of it.
+                        let travel = delta * swipe_exit_travel;
+                        match swipe_exit {
+                            Some(SwipeDirection::Up) => that.left(swipe_x).top(swipe_y - travel),
+                            Some(SwipeDirection::Down) => that.left(swipe_x).top(swipe_y + travel),
+                            Some(SwipeDirection::Left) => that.left(swipe_x - travel).top(swipe_y),
+                            Some(SwipeDirection::Right) => that.left(swipe_x + travel).top(swipe_y),
+                            None => {
+                                let y_offset = match placement {
+                                    Anchor::TopLeft | Anchor::TopRight | Anchor::TopCenter => {
+                                        -delta * NOTIFICATION_TRANSITION_OFFSET
+                                    }
+                                    Anchor::BottomLeft
+                                    | Anchor::BottomRight
+                                    | Anchor::BottomCenter => {
+                                        delta * NOTIFICATION_TRANSITION_OFFSET
+                                    }
+                                    _ => px(0.),
+                                };
+                                that.left(swipe_x).top(swipe_y + y_offset)
                             }
-                            Anchor::BottomLeft | Anchor::BottomRight | Anchor::BottomCenter => {
-                                delta * NOTIFICATION_TRANSITION_OFFSET
-                            }
-                            _ => px(0.),
-                        };
-                        that.top(y_offset)
+                        }
                     } else {
                         let y_offset = match placement {
                             Anchor::TopLeft | Anchor::TopRight | Anchor::TopCenter => {
@@ -531,7 +779,8 @@ impl Render for Notification {
                         // keeps it out of sight until the card can cover it —
                         // where this used to drop the shadow outright past a
                         // threshold, which popped.
-                        this.top(px(0.) + y_offset)
+                        this.left(swipe_x)
+                            .top(swipe_y + y_offset)
                             .opacity(opacity)
                             .shadow(toast_shadow(opacity.powi(3)))
                     }
@@ -586,6 +835,44 @@ impl Default for NotificationSettings {
 /// Responses to notifications the application posts itself are ignored here.
 pub(crate) fn init(cx: &mut App) {
     cx.on_system_notification_response(SystemNotificationRegistry::handle_response);
+    // Tests call this again to reset the response handler; the shortcut is
+    // registered once, or F6 would toggle the focus in and straight back out.
+    if cx.has_global::<FocusShortcut>() {
+        return;
+    }
+    cx.set_global(FocusShortcut);
+    cx.bind_keys([
+        KeyBinding::new("f6", FocusNotifications, None),
+        KeyBinding::new("shift-f6", FocusNotifications, None),
+        KeyBinding::new("escape", Cancel, Some(CONTEXT)),
+    ]);
+    cx.on_action(focus_notifications);
+}
+
+/// Marks an app whose F6 shortcut is registered.
+struct FocusShortcut;
+
+impl Global for FocusShortcut {}
+
+/// Hands F6 to the active window's notifications.
+///
+/// It is app-wide rather than on an element so it is heard from wherever the
+/// focus is, including nowhere, when a key reaches only the window's root.
+fn focus_notifications(_: &FocusNotifications, cx: &mut App) {
+    let Some(window) = cx.active_window() else {
+        return;
+    };
+    // The window is lent to the dispatch that called this, so it is updated
+    // as soon as the dispatch is over.
+    cx.defer(move |cx| {
+        _ = window.update(cx, |_, window, cx| {
+            WindowState::try_update(window, cx, |state, window, cx| {
+                state
+                    .notification
+                    .update(cx, |list, cx| list.toggle_focus(window, cx));
+            });
+        });
+    });
 }
 
 struct SystemNotificationEntry {
@@ -713,6 +1000,9 @@ pub struct NotificationList {
     focus_handle: FocusHandle,
     /// Mounted notifications that hide themselves after a timeout.
     autohide_ids: HashSet<NotificationId>,
+    /// Where the focus was when F6 moved it to the notifications, to give it
+    /// back when they let it go.
+    return_focus: Option<WeakFocusHandle>,
     /// Whether the lifecycle clock is running. The loop clears it as it exits.
     is_advancing: bool,
     _subscriptions: HashMap<NotificationId, Subscription>,
@@ -723,8 +1013,9 @@ impl NotificationList {
         Self {
             notifications: ToastManager::new(ToastMotion::sonner()),
             stacks: Vec::new(),
-            focus_handle: cx.focus_handle().tab_stop(true),
+            focus_handle: cx.focus_handle(),
             autohide_ids: HashSet::new(),
+            return_focus: None,
             is_advancing: false,
             _subscriptions: HashMap::new(),
         }
@@ -776,6 +1067,68 @@ impl NotificationList {
         self.stacks
             .iter()
             .any(|(_, stack)| stack.state.is_expanded())
+    }
+
+    fn is_swiping(&self, cx: &App) -> bool {
+        self.notifications
+            .iter()
+            .any(|(_, note, _)| note.read(cx).swipe.is_swiping())
+    }
+
+    /// Move the focus to the newest notification, or give it back to where it
+    /// was when a notification already holds it.
+    pub(crate) fn toggle_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.holds_focus(window, cx) {
+            self.give_focus_back(window, cx);
+        } else if let Some(newest) = self.newest_focus_handle(cx) {
+            self.return_focus = window.focused(cx).map(|focused| focused.downgrade());
+            window.focus(&newest, cx);
+        }
+    }
+
+    fn holds_focus(&self, window: &Window, cx: &App) -> bool {
+        self.notifications
+            .iter()
+            .any(|(_, note, _)| Self::note_holds_focus(note, window, cx))
+    }
+
+    fn note_holds_focus(note: &Entity<Notification>, window: &Window, cx: &App) -> bool {
+        note.read(cx)
+            .focus_handle
+            .as_ref()
+            .is_some_and(|handle| handle.contains_focused(window, cx))
+    }
+
+    /// The focus handle of the newest notification that is not leaving.
+    fn newest_focus_handle(&self, cx: &App) -> Option<FocusHandle> {
+        self.notifications
+            .iter()
+            .rev()
+            .filter(|(_, _, status)| *status != ToastTransitionStatus::Ending)
+            .find_map(|(_, note, _)| note.read(cx).focus_handle.clone())
+    }
+
+    fn give_focus_back(&mut self, window: &mut Window, cx: &mut App) {
+        match self.return_focus.take().and_then(|handle| handle.upgrade()) {
+            Some(handle) => window.focus(&handle, cx),
+            None => window.blur(cx),
+        }
+    }
+
+    /// Keep the focus off a notification that is leaving: hand it to the
+    /// newest one still showing, or back to where it was before F6 when none
+    /// is.
+    fn release_focus_from_ending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let leaving_holds_focus = self.notifications.iter().any(|(_, note, status)| {
+            status == ToastTransitionStatus::Ending && Self::note_holds_focus(note, window, cx)
+        });
+        if !leaving_holds_focus {
+            return;
+        }
+        match self.newest_focus_handle(cx) {
+            Some(newest) => window.focus(&newest, cx),
+            None => self.give_focus_back(window, cx),
+        }
     }
 
     /// Group the visible notifications by their effective placement, pairing
@@ -845,8 +1198,20 @@ impl NotificationList {
         let id = notification.id.clone();
         let autohide = notification.autohide;
         let window_id = window.window_handle().window_id();
+        // A notification replacing one that holds the focus takes it over.
+        let takes_focus = self
+            .notifications
+            .get(&id)
+            .is_some_and(|replaced| Self::note_holds_focus(replaced, window, cx));
 
-        let notification = cx.new(|_| notification);
+        let focus_handle = cx.focus_handle().tab_stop(true);
+        let notification = cx.new(|_| Notification {
+            focus_handle: Some(focus_handle.clone()),
+            ..notification
+        });
+        if takes_focus {
+            window.focus(&focus_handle, cx);
+        }
 
         let dismiss_id = id.clone();
         self._subscriptions.insert(
@@ -863,6 +1228,7 @@ impl NotificationList {
                             note.update(cx, |note, cx| note.begin_close(cx));
                         }
                         SystemNotificationRegistry::dismiss(cx, &dismiss_id, window_id);
+                        view.release_focus_from_ending(window, cx);
                         view.start_advancing(window, cx);
                     }
                 },
@@ -912,18 +1278,25 @@ impl NotificationList {
     }
 
     fn advance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Hovering, focusing or swiping a notification holds every timer, as
+        // Base UI's toasts do.
+        let paused = self.is_expanded() || self.is_swiping(cx);
         let changes = self
             .notifications
-            .advance(cx.background_executor().now(), self.is_expanded());
+            .advance(cx.background_executor().now(), paused);
         for id in changes.presented {
             if let Some(note) = self.notifications.get(&id) {
                 note.update(cx, |note, cx| note.complete_enter(cx));
             }
         }
+        let any_ending = !changes.ending.is_empty();
         for id in changes.ending {
             if let Some(note) = self.notifications.get(&id) {
                 note.update(cx, |note, cx| note.begin_close(cx));
             }
+        }
+        if any_ending {
+            self.release_focus_from_ending(window, cx);
         }
         for (id, note) in changes.removed {
             self._subscriptions.remove(&id);
@@ -952,6 +1325,7 @@ impl NotificationList {
             if let Some(n) = self.notifications.get(&id) {
                 n.update(cx, |note, cx| note.begin_close(cx))
             }
+            self.release_focus_from_ending(window, cx);
             self.start_advancing(window, cx);
         }
         cx.notify();
@@ -989,6 +1363,7 @@ impl NotificationList {
                 self.start_advancing(window, cx);
             }
         }
+        self.release_focus_from_ending(window, cx);
         cx.notify();
     }
 
@@ -1003,6 +1378,7 @@ impl NotificationList {
             }
             self.start_advancing(window, cx);
         }
+        self.release_focus_from_ending(window, cx);
         cx.notify();
     }
 
@@ -1040,10 +1416,12 @@ impl Render for NotificationList {
                         anchor,
                         AnchorStack {
                             state: ToastStackState::default(),
+                            // Not a tab stop: Tab moves between the
+                            // notifications themselves.
                             focus_handle: if anchor == placement {
                                 default_focus_handle.clone()
                             } else {
-                                cx.focus_handle().tab_stop(true)
+                                cx.focus_handle()
                             },
                         },
                     ));
@@ -1059,6 +1437,7 @@ impl Render for NotificationList {
                 )
                 .placement(anchor)
                 .focus_handle(stack.focus_handle.clone())
+                .aria_label("Notifications")
                 .v_flex()
                 .w(width)
                 .max_h(size.height)
@@ -1085,8 +1464,9 @@ impl Render for NotificationList {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::Theme;
-    use gpui::{TestAppContext, VisualTestContext};
+    use crate::{WindowExt as _, theme::Theme};
+    use gpui::{Modifiers, Role, TestAppContext, VisualTestContext};
+    use std::cell::Cell;
 
     struct FooKind;
     struct BarKind;
@@ -1174,6 +1554,434 @@ mod tests {
             Notification::new().id.system_tag(),
             Notification::new().id.system_tag()
         );
+    }
+
+    fn mount(cx: &mut TestAppContext) -> (Entity<NotificationList>, &mut VisualTestContext) {
+        cx.update(|cx| cx.set_global(Theme::default()));
+        let (root, cx) = cx.add_window_view(|window, cx| TestRoot {
+            list: cx.new(|cx| NotificationList::new(window, cx)),
+            other_focus: cx.focus_handle(),
+        });
+        cx.update(|window, _| window.activate_window());
+        let list = root.read_with(cx, |root, _| root.list.clone());
+        (list, cx)
+    }
+
+    fn draw(cx: &mut VisualTestContext) {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    /// Push a notification and let it finish entering.
+    fn show(
+        list: &Entity<NotificationList>,
+        note: Notification,
+        cx: &mut VisualTestContext,
+    ) -> Entity<Notification> {
+        list.update_in(cx, |list, window, cx| list.push(note, window, cx));
+        draw(cx);
+        cx.background_executor
+            .advance_clock(NOTIFICATION_TRANSITION_DURATION + NOTIFICATION_ADVANCE_INTERVAL);
+        draw(cx);
+        list.read_with(cx, |list, _| list.notifications().last().unwrap().clone())
+    }
+
+    fn status(note: &Entity<Notification>, cx: &mut VisualTestContext) -> ToastTransitionStatus {
+        note.read_with(cx, |note, _| note.transition_status)
+    }
+
+    fn toast_bounds(cx: &mut VisualTestContext) -> gpui::Bounds<Pixels> {
+        cx.debug_bounds("notification")
+            .expect("the notification is painted")
+    }
+
+    fn shifted(position: Point<Pixels>, dx: f32, dy: f32) -> Point<Pixels> {
+        point(position.x + px(dx), position.y + px(dy))
+    }
+
+    /// Layout snaps to device pixels, so positions agree to within one.
+    #[track_caller]
+    fn assert_at(actual: Point<Pixels>, expected: Point<Pixels>) {
+        assert!(
+            (actual.x - expected.x).abs() <= px(1.) && (actual.y - expected.y).abs() <= px(1.),
+            "at {actual:?}, expected {expected:?}"
+        );
+    }
+
+    /// Draw the notification again once the clock has moved, as the next
+    /// animation frame would.
+    fn redraw(note: &Entity<Notification>, cx: &mut VisualTestContext) {
+        note.update(cx, |_, cx| cx.notify());
+        draw(cx);
+    }
+
+    fn drag(cx: &mut VisualTestContext, from: Point<Pixels>, to: Point<Pixels>) {
+        cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::default());
+        draw(cx);
+        cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::default());
+        draw(cx);
+    }
+
+    fn scroll(
+        cx: &mut VisualTestContext,
+        position: Point<Pixels>,
+        dx: f32,
+        dy: f32,
+        phase: TouchPhase,
+    ) {
+        cx.simulate_event(ScrollEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(dx), px(dy))),
+            touch_phase: phase,
+            ..Default::default()
+        });
+        draw(cx);
+    }
+
+    #[gpui::test]
+    fn a_drag_past_the_threshold_throws_the_toast_out_the_way_it_went(cx: &mut TestAppContext) {
+        let (list, cx) = mount(cx);
+        let note = show(
+            &list,
+            Notification::info("swipe").id::<FooKind>().autohide(false),
+            cx,
+        );
+        let rest = toast_bounds(cx);
+        let to = shifted(rest.center(), 60., 0.);
+
+        drag(cx, rest.center(), to);
+        // The toast sits exactly under the pointer, on the axis it moved along.
+        assert_at(toast_bounds(cx).origin, shifted(rest.origin, 60., 0.));
+
+        cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
+        draw(cx);
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Ending);
+        assert_eq!(
+            note.read_with(cx, |note, _| note.swipe_exit),
+            Some(SwipeDirection::Right)
+        );
+
+        // Its exit carries on to the right from where it was let go.
+        cx.background_executor
+            .advance_clock(NOTIFICATION_EXIT_DURATION / 2);
+        redraw(&note, cx);
+        let leaving = toast_bounds(cx).origin;
+        assert!(leaving.x > rest.origin.x + px(61.), "at {leaving:?}");
+        assert!((leaving.y - rest.origin.y).abs() <= px(1.));
+
+        flush_dismiss(cx);
+        assert!(ids(&list, cx).is_empty());
+    }
+
+    #[gpui::test]
+    fn a_drag_let_go_short_of_the_threshold_springs_back_and_is_no_click(cx: &mut TestAppContext) {
+        let (list, cx) = mount(cx);
+        let clicked = Rc::new(Cell::new(false));
+        let on_click = clicked.clone();
+        let note = show(
+            &list,
+            Notification::info("stay")
+                .id::<FooKind>()
+                .autohide(false)
+                .on_click(move |_, _, _| on_click.set(true)),
+            cx,
+        );
+        let rest = toast_bounds(cx);
+        let to = shifted(rest.center(), 20., 0.);
+
+        drag(cx, rest.center(), to);
+        assert_at(toast_bounds(cx).origin, shifted(rest.origin, 20., 0.));
+        cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
+        draw(cx);
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Present);
+        assert!(!clicked.get(), "letting go of a swipe is not a click");
+
+        cx.background_executor.advance_clock(Duration::from_secs(1));
+        redraw(&note, cx);
+        assert_at(toast_bounds(cx).origin, rest.origin);
+
+        // A press that does not move is still a click.
+        cx.simulate_click(rest.center(), Modifiers::default());
+        assert!(clicked.get());
+    }
+
+    #[gpui::test]
+    fn a_pull_toward_the_content_resists_and_never_dismisses(cx: &mut TestAppContext) {
+        let (list, cx) = mount(cx);
+        let note = show(
+            &list,
+            Notification::info("stay").id::<FooKind>().autohide(false),
+            cx,
+        );
+        let rest = toast_bounds(cx);
+        let to = shifted(rest.center(), -120., 0.);
+
+        drag(cx, rest.center(), to);
+        let pulled = toast_bounds(cx).origin.x - rest.origin.x;
+        assert!(pulled < px(0.) && pulled > px(-30.), "pulled {pulled:?}");
+
+        cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
+        draw(cx);
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Present);
+    }
+
+    #[gpui::test]
+    fn under_reduced_motion_a_released_swipe_is_home_at_once(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (list, cx) = mount(cx);
+        let note = show(
+            &list,
+            Notification::info("stay").id::<FooKind>().autohide(false),
+            cx,
+        );
+        let rest = toast_bounds(cx);
+        let to = shifted(rest.center(), 0., -20.);
+
+        // Following the pointer is direct manipulation, not motion.
+        drag(cx, rest.center(), to);
+        assert_at(toast_bounds(cx).origin, shifted(rest.origin, 0., -20.));
+
+        cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
+        draw(cx);
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Present);
+        assert_at(toast_bounds(cx).origin, rest.origin);
+    }
+
+    #[gpui::test]
+    fn a_horizontal_two_finger_scroll_swipes_and_a_vertical_one_does_not(cx: &mut TestAppContext) {
+        let (list, cx) = mount(cx);
+        let note = show(
+            &list,
+            Notification::info("scroll").id::<FooKind>().autohide(false),
+            cx,
+        );
+        let rest = toast_bounds(cx);
+        let at = rest.center();
+
+        scroll(cx, at, 0., 0., TouchPhase::Started);
+        scroll(cx, at, 0., -80., TouchPhase::Moved);
+        assert_at(toast_bounds(cx).origin, rest.origin);
+        scroll(cx, at, 0., 0., TouchPhase::Ended);
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Present);
+
+        // Momentum after the fingers lift does not move it either.
+        cx.simulate_event(ScrollEvent {
+            position: at,
+            delta: ScrollDelta::Pixels(point(px(80.), px(0.))),
+            touch_phase: TouchPhase::Moved,
+            momentum_phase: Some(TouchPhase::Moved),
+            ..Default::default()
+        });
+        draw(cx);
+        assert_at(toast_bounds(cx).origin, rest.origin);
+
+        scroll(cx, at, 0., 0., TouchPhase::Started);
+        scroll(cx, at, 25., 0., TouchPhase::Moved);
+        scroll(cx, at, 25., 0., TouchPhase::Moved);
+        assert_at(toast_bounds(cx).origin, shifted(rest.origin, 50., 0.));
+        scroll(cx, at, 0., 0., TouchPhase::Ended);
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Ending);
+        assert_eq!(
+            note.read_with(cx, |note, _| note.swipe_exit),
+            Some(SwipeDirection::Right)
+        );
+    }
+
+    #[gpui::test]
+    fn a_fast_flick_dismisses_short_of_the_threshold(cx: &mut TestAppContext) {
+        let (list, cx) = mount(cx);
+        let note = show(
+            &list,
+            Notification::info("flick").id::<FooKind>().autohide(false),
+            cx,
+        );
+        let at = toast_bounds(cx).center();
+
+        scroll(cx, at, 0., 0., TouchPhase::Started);
+        cx.background_executor
+            .advance_clock(Duration::from_millis(16));
+        scroll(cx, at, 20., 0., TouchPhase::Moved);
+        scroll(cx, at, 0., 0., TouchPhase::Ended);
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Ending);
+    }
+
+    #[gpui::test]
+    fn a_swipe_in_progress_holds_the_autohide_timer(cx: &mut TestAppContext) {
+        let (list, cx) = mount(cx);
+        let note = show(&list, Notification::info("held").id::<FooKind>(), cx);
+        let at = toast_bounds(cx).center();
+
+        // A trackpad swipe neither hovers nor focuses the toast, so only the
+        // swipe holds the timer.
+        scroll(cx, at, 0., 0., TouchPhase::Started);
+        scroll(cx, at, 10., 0., TouchPhase::Moved);
+        cx.background_executor.advance_clock(Duration::from_secs(6));
+        cx.run_until_parked();
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Present);
+
+        scroll(cx, at, 0., 0., TouchPhase::Ended);
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Present);
+        cx.background_executor
+            .advance_clock(Duration::from_secs(5) + Duration::from_millis(100));
+        cx.run_until_parked();
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Ending);
+    }
+
+    struct Content {
+        focus: FocusHandle,
+    }
+
+    impl Render for Content {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(div().id("content").track_focus(&self.focus).size(px(10.)))
+        }
+    }
+
+    /// A window with the component root, its content holding the focus.
+    fn mount_in_root(cx: &mut TestAppContext) -> (FocusHandle, &mut VisualTestContext) {
+        cx.update(crate::init);
+        let focus = cx.update(|cx| cx.focus_handle().tab_stop(true));
+        let (_, cx) = cx.add_window_view({
+            let focus = focus.clone();
+            move |window, cx| {
+                let content = cx.new(|_| Content { focus });
+                crate::Root::new(content, window, cx)
+            }
+        });
+        cx.update(|window, cx| {
+            window.activate_window();
+            focus.focus(window, cx);
+        });
+        draw(cx);
+        (focus, cx)
+    }
+
+    fn root_list(cx: &mut VisualTestContext) -> Entity<NotificationList> {
+        cx.update(|window, cx| WindowState::read(window, cx).notification.clone())
+    }
+
+    fn push_in_root(note: Notification, cx: &mut VisualTestContext) -> Entity<Notification> {
+        cx.update(|window, cx| window.push_notification(note, cx));
+        draw(cx);
+        let list = root_list(cx);
+        list.read_with(cx, |list, _| list.notifications().last().unwrap().clone())
+    }
+
+    fn is_focused(handle: &FocusHandle, cx: &mut VisualTestContext) -> bool {
+        cx.update(|window, _| handle.is_focused(window))
+    }
+
+    fn note_focus(note: &Entity<Notification>, cx: &mut VisualTestContext) -> FocusHandle {
+        note.read_with(cx, |note, _| note.focus_handle.clone().unwrap())
+    }
+
+    #[gpui::test]
+    fn f6_moves_the_focus_to_the_newest_toast_and_back(cx: &mut TestAppContext) {
+        let (content, cx) = mount_in_root(cx);
+        push_in_root(
+            Notification::info("older").id::<FooKind>().autohide(false),
+            cx,
+        );
+        let newest = push_in_root(
+            Notification::info("newer").id::<BarKind>().autohide(false),
+            cx,
+        );
+
+        cx.simulate_keystrokes("f6");
+        draw(cx);
+        assert!(is_focused(&note_focus(&newest, cx), cx));
+
+        cx.simulate_keystrokes("shift-f6");
+        draw(cx);
+        assert!(is_focused(&content, cx));
+
+        cx.simulate_keystrokes("f6");
+        draw(cx);
+        assert!(is_focused(&note_focus(&newest, cx), cx));
+        cx.simulate_keystrokes("f6");
+        draw(cx);
+        assert!(is_focused(&content, cx));
+    }
+
+    #[gpui::test]
+    fn f6_does_nothing_without_toasts(cx: &mut TestAppContext) {
+        let (content, cx) = mount_in_root(cx);
+        cx.simulate_keystrokes("f6");
+        draw(cx);
+        assert!(is_focused(&content, cx));
+    }
+
+    #[gpui::test]
+    fn escape_dismisses_the_focused_toast_and_the_focus_moves_on_then_home(
+        cx: &mut TestAppContext,
+    ) {
+        let (content, cx) = mount_in_root(cx);
+        let older = push_in_root(
+            Notification::info("older").id::<FooKind>().autohide(false),
+            cx,
+        );
+        let newer = push_in_root(
+            Notification::info("newer").id::<BarKind>().autohide(false),
+            cx,
+        );
+
+        cx.simulate_keystrokes("f6");
+        draw(cx);
+        cx.simulate_keystrokes("escape");
+        draw(cx);
+        assert_eq!(status(&newer, cx), ToastTransitionStatus::Ending);
+        assert!(is_focused(&note_focus(&older, cx), cx));
+
+        cx.simulate_keystrokes("escape");
+        draw(cx);
+        assert_eq!(status(&older, cx), ToastTransitionStatus::Ending);
+        assert!(is_focused(&content, cx));
+    }
+
+    #[gpui::test]
+    fn a_focused_toast_holds_the_autohide_timer(cx: &mut TestAppContext) {
+        let (content, cx) = mount_in_root(cx);
+        let note = push_in_root(Notification::info("held").id::<FooKind>(), cx);
+        cx.background_executor
+            .advance_clock(NOTIFICATION_TRANSITION_DURATION + NOTIFICATION_ADVANCE_INTERVAL);
+        draw(cx);
+
+        cx.simulate_keystrokes("f6");
+        draw(cx);
+        cx.background_executor.advance_clock(Duration::from_secs(6));
+        cx.run_until_parked();
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Present);
+
+        cx.simulate_keystrokes("f6");
+        draw(cx);
+        assert!(is_focused(&content, cx));
+        cx.background_executor
+            .advance_clock(Duration::from_secs(5) + Duration::from_millis(100));
+        cx.run_until_parked();
+        assert_eq!(status(&note, cx), ToastTransitionStatus::Ending);
+    }
+
+    #[gpui::test]
+    fn the_toast_stack_is_a_notifications_landmark(cx: &mut TestAppContext) {
+        let (_, cx) = mount_in_root(cx);
+        push_in_root(
+            Notification::info("labelled")
+                .id::<FooKind>()
+                .autohide(false),
+            cx,
+        );
+        let stack = cx.update(|window, _| {
+            gpui_base::test_support::find(
+                window,
+                &[],
+                &NotificationList::stack_id(Anchor::TopRight),
+            )
+            .expect("the stack is painted")
+        });
+        assert_eq!(stack.role(), Some(Role::Region));
+        assert_eq!(stack.label(), Some("Notifications"));
     }
 
     /// A stack's element id must not depend on how many other placements are

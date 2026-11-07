@@ -97,6 +97,9 @@ where
 #[derive(Default)]
 struct DropdownMenuState {
     menu: Option<Entity<PopupMenu>>,
+    /// The menu was dismissed: it is still drawn while the popover exits,
+    /// and opening again builds a new one from the builder.
+    dismissed: bool,
     /// The item to highlight as the menu opens from an arrow key.
     open_highlight: Option<MenuEdge>,
 }
@@ -169,14 +172,20 @@ where
             .when_some(self.on_open_change, |this, callback| {
                 this.on_open_change(move |open, window, cx| callback(open, window, cx))
             })
-            .content(move |_, window, cx| {
+            .content(move |popover, window, cx| {
                 // Here is special logic to only create the PopupMenu once and reuse it.
                 // Because this `content` will called in every time render, so we need to store the menu
                 // in state to avoid recreating at every render.
                 //
                 // And we also need to rebuild the menu when it is dismissed, to rebuild menu items
                 // dynamically for support `dropdown_menu` method, so we listen for DismissEvent below.
-                let menu = match menu_state.read(cx).menu.clone() {
+                let exiting = popover.is_exiting();
+                let current = menu_state
+                    .read(cx)
+                    .menu
+                    .clone()
+                    .filter(|_| exiting || !menu_state.read(cx).dismissed);
+                let menu = match current {
                     Some(menu) => {
                         // An option was set with the menu left open: build its
                         // items again from this render's builder, which sees
@@ -216,6 +225,7 @@ where
                         });
                         menu_state.update(cx, |state, _| {
                             state.menu = Some(menu.clone());
+                            state.dismissed = false;
                         });
                         menu.focus_handle(cx).focus(window, cx);
 
@@ -238,7 +248,7 @@ where
                                         });
                                     }
                                     _ = menu_state.update(cx, |state, _| {
-                                        state.menu = None;
+                                        state.dismissed = true;
                                         state.open_highlight = None;
                                     });
                                 }
@@ -485,6 +495,9 @@ mod tests {
     fn shortcut_hint_is_painted_on_the_frame_the_menu_opens(cx: &mut TestAppContext) {
         cx.update(|cx| {
             crate::init(cx);
+            // The entry motion would ask for frames of its own after the
+            // first, which is the one under test.
+            cx.set_reduce_motion(true);
             cx.bind_keys([KeyBinding::new("ctrl-c", CopyText, Some(CONTEXT))]);
         });
         let frames = Rc::new(Cell::new(0));

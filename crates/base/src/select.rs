@@ -39,6 +39,7 @@ pub fn init(cx: &mut App) {
 type OpenChangeHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 type ActionHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 type TypeaheadHandler = Rc<dyn Fn(char, &mut Window, &mut App)>;
+type ItemAlignmentHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 
 /// An unstyled controlled select root.
 ///
@@ -66,6 +67,8 @@ pub struct Select {
     on_dismiss: Option<ActionHandler>,
     on_confirm: Option<ActionHandler>,
     on_typeahead: Option<TypeaheadHandler>,
+    align_item_with_trigger: bool,
+    on_item_alignment: Option<ItemAlignmentHandler>,
 }
 
 impl Select {
@@ -85,7 +88,22 @@ impl Select {
             on_dismiss: None,
             on_confirm: None,
             on_typeahead: None,
+            align_item_with_trigger: false,
+            on_item_alignment: None,
         }
+    }
+
+    /// Whether a popup opening now lines its selected item up with the
+    /// trigger, given whether the select asks for it.
+    ///
+    /// Base UI turns `alignItemWithTrigger` off for a select opened by touch,
+    /// where a list laid over the finger that opened it hides what it is
+    /// choosing from, and drops it below the trigger instead. This is that
+    /// rule, for an application that opens the popup from its own trigger;
+    /// the root applies it to the openings it handles and reports the answer
+    /// to [`Self::on_item_alignment`].
+    pub fn item_alignment(align_item_with_trigger: bool, window: &Window) -> bool {
+        align_item_with_trigger && !window.last_input_was_touch()
     }
 
     /// The character a key press types into a select's typeahead, or `None`
@@ -186,6 +204,32 @@ impl Select {
         self.on_typeahead = Some(Rc::new(handler));
         self
     }
+
+    /// Asks for the open popup to lay its selected item over the trigger, as
+    /// Base UI's `alignItemWithTrigger` does, rather than hang below it. Off
+    /// by default.
+    ///
+    /// The root owns no popup, so it decides and reports: each time it opens
+    /// the popup it tells [`Self::on_item_alignment`] whether this opening
+    /// aligns (see [`Self::item_alignment`]), and the application positions
+    /// its popup accordingly, with [`crate::Positioner::align_item_with_trigger`].
+    pub fn align_item_with_trigger(mut self, align: bool) -> Self {
+        self.align_item_with_trigger = align;
+        self
+    }
+
+    /// Handles the decision, made each time the root opens the popup, of
+    /// whether the popup lines its selected item up with the trigger.
+    ///
+    /// It runs just before [`Self::on_open_change`] is asked to open, so the
+    /// first frame of the popup is already placed the right way.
+    pub fn on_item_alignment(
+        mut self,
+        handler: impl Fn(bool, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_item_alignment = Some(Rc::new(handler));
+        self
+    }
 }
 
 impl Styled for Select {
@@ -210,6 +254,26 @@ impl RenderOnce for Select {
         let on_dismiss = self.on_dismiss;
         let on_confirm = self.on_confirm;
         let on_typeahead = self.on_typeahead.filter(|_| !open && !disabled);
+
+        // Every way of opening runs the same steps, so the popup is placed the
+        // same way however it was opened.
+        let request_open: ActionHandler = Rc::new({
+            let on_open_change = on_open_change.clone();
+            let on_item_alignment = self.on_item_alignment;
+            let align_item_with_trigger = self.align_item_with_trigger;
+            move |window: &mut Window, cx: &mut App| {
+                if let Some(handler) = on_item_alignment.as_ref() {
+                    handler(
+                        Select::item_alignment(align_item_with_trigger, window),
+                        window,
+                        cx,
+                    );
+                }
+                if let Some(handler) = on_open_change.as_ref() {
+                    handler(true, window, cx);
+                }
+            }
+        });
 
         // Every way of closing runs the same steps. A caller that tracks
         // dismissal has to see one however the popup was closed, and the
@@ -246,7 +310,7 @@ impl RenderOnce for Select {
                 |this, handle| this.track_focus(&handle.tab_stop(true)),
             )
             .when(!disabled, |this| {
-                let on_open_change = on_open_change.clone();
+                let request_open = request_open.clone();
                 let content_focus_handle = content_focus_handle.clone();
                 let close = close.clone();
 
@@ -258,16 +322,14 @@ impl RenderOnce for Select {
                         return;
                     }
 
-                    if let Some(handler) = on_open_change.as_ref() {
-                        handler(true, window, cx);
-                    }
+                    request_open(window, cx);
                     if let Some(handle) = content_focus_handle.as_ref() {
                         handle.focus(window, cx);
                     }
                 })
             })
             .on_action({
-                let on_open_change = on_open_change.clone();
+                let request_open = request_open.clone();
                 let content_focus_handle = content_focus_handle.clone();
                 move |_: &SelectUp, window, cx| {
                     if disabled {
@@ -276,9 +338,7 @@ impl RenderOnce for Select {
                     }
 
                     if !open {
-                        if let Some(handler) = on_open_change.as_ref() {
-                            handler(true, window, cx);
-                        }
+                        request_open(window, cx);
                     }
 
                     if let Some(handle) = content_focus_handle.as_ref() {
@@ -288,7 +348,7 @@ impl RenderOnce for Select {
                 }
             })
             .on_action({
-                let on_open_change = on_open_change.clone();
+                let request_open = request_open.clone();
                 let content_focus_handle = content_focus_handle.clone();
                 move |_: &SelectDown, window, cx| {
                     if disabled {
@@ -297,9 +357,7 @@ impl RenderOnce for Select {
                     }
 
                     if !open {
-                        if let Some(handler) = on_open_change.as_ref() {
-                            handler(true, window, cx);
-                        }
+                        request_open(window, cx);
                     }
 
                     if let Some(handle) = content_focus_handle.as_ref() {
@@ -308,25 +366,22 @@ impl RenderOnce for Select {
                     cx.propagate();
                 }
             })
-            .on_action({
-                let on_open_change = on_open_change.clone();
-                move |_: &Confirm, window, cx| {
-                    if disabled {
-                        cx.propagate();
-                        return;
-                    }
+            .on_action(move |_: &Confirm, window, cx| {
+                if disabled {
+                    cx.propagate();
+                    return;
+                }
 
-                    if open {
-                        if let Some(handler) = on_confirm.as_ref() {
-                            handler(window, cx);
-                        }
-                    } else if let Some(handler) = on_open_change.as_ref() {
-                        handler(true, window, cx);
+                if open {
+                    if let Some(handler) = on_confirm.as_ref() {
+                        handler(window, cx);
                     }
+                } else {
+                    request_open(window, cx);
+                }
 
-                    if let Some(handle) = content_focus_handle.as_ref() {
-                        handle.focus(window, cx);
-                    }
+                if let Some(handle) = content_focus_handle.as_ref() {
+                    handle.focus(window, cx);
                 }
             })
             .on_action(move |_: &Cancel, window, cx| {
@@ -376,6 +431,9 @@ mod tests {
         closing: Arc<Mutex<Vec<&'static str>>>,
         /// Every character the typeahead received.
         typed: Arc<Mutex<Vec<char>>>,
+        align_item_with_trigger: bool,
+        /// Every item alignment the root decided on, in order.
+        alignments: Arc<Mutex<Vec<bool>>>,
     }
 
     impl SelectHarness {
@@ -391,6 +449,8 @@ mod tests {
                 parent_confirms: Arc::new(Mutex::new(0)),
                 confirmations: Arc::new(Mutex::new(0)),
                 typed: Arc::new(Mutex::new(Vec::new())),
+                align_item_with_trigger: false,
+                alignments: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
@@ -412,6 +472,7 @@ mod tests {
             let parent_confirms = self.parent_confirms.clone();
             let confirmations = self.confirmations.clone();
             let typed = self.typed.clone();
+            let alignments = self.alignments.clone();
             div()
                 .on_action(move |_: &Confirm, _, _| *parent_confirms.lock().unwrap() += 1)
                 .child(
@@ -437,6 +498,10 @@ mod tests {
                             *confirmations.lock().unwrap() += 1;
                         })
                         .on_typeahead(move |character, _, _| typed.lock().unwrap().push(character))
+                        .align_item_with_trigger(self.align_item_with_trigger)
+                        .on_item_alignment(move |aligned, _, _| {
+                            alignments.lock().unwrap().push(aligned)
+                        })
                         .when_some(self.search_input.clone(), |this, input| {
                             this.child(crate::Input::new(&input))
                         })
@@ -672,6 +737,58 @@ mod tests {
             assert!(state.open);
             assert_eq!(*state.confirmations.lock().unwrap(), 1);
             assert_eq!(*state.parent_confirms.lock().unwrap(), 0);
+        });
+    }
+
+    /// Each opening the root handles reports whether the popup lines its
+    /// selected item up with the trigger, before it asks to open.
+    #[gpui::test]
+    fn opening_reports_the_item_alignment_first(cx: &mut TestAppContext) {
+        let (cx, state) = harness(cx, false);
+        cx.simulate_keystrokes("down escape");
+        state.update(cx, |state, cx| {
+            state.align_item_with_trigger = true;
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_keystrokes("enter");
+
+        let alignments = state.read_with(cx, |state, _| state.alignments.clone());
+        assert_eq!(
+            &*alignments.lock().unwrap(),
+            &[false, true],
+            "off unless asked for"
+        );
+        assert!(state.read_with(cx, |state, _| state.open));
+    }
+
+    /// Base UI drops a select opened by touch below its trigger instead of
+    /// laying the list over the finger that opened it.
+    #[gpui::test]
+    fn a_touch_opening_does_not_align_the_item(cx: &mut TestAppContext) {
+        let (cx, _) = harness(cx, false);
+        let touch = gpui::TouchEvent {
+            phase: gpui::TouchPhase::Started,
+            position: gpui::point(px(5.), px(5.)),
+            ..Default::default()
+        };
+        cx.simulate_event(touch.clone());
+        cx.update(|window, _| {
+            assert!(!Select::item_alignment(true, window));
+        });
+        cx.simulate_event(gpui::TouchEvent {
+            phase: gpui::TouchPhase::Ended,
+            ..touch
+        });
+
+        cx.simulate_mouse_move(
+            gpui::point(px(6.), px(6.)),
+            None,
+            gpui::Modifiers::default(),
+        );
+        cx.update(|window, _| {
+            assert!(Select::item_alignment(true, window), "a pointer aligns");
+            assert!(!Select::item_alignment(false, window), "unless not asked");
         });
     }
 }

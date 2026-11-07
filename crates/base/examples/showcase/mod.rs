@@ -141,7 +141,11 @@ pub struct BaseShowcase {
     alert_dialog_open: bool,
     collapsible_open: bool,
     combobox_open: bool,
+    /// The text in the combobox's field.
     combobox_query: gpui::Entity<InputState>,
+    /// The highlighted row among the frameworks the field's text matches.
+    combobox_highlight: Option<usize>,
+    /// The committed framework; empty before one is chosen.
     combobox_selection: String,
     color_picker: gpui::Entity<ColorPickerState>,
     date_open: bool,
@@ -258,7 +262,7 @@ impl BaseShowcase {
             });
         });
         let combobox_query = cx.new(|cx| {
-            let mut state = InputState::new(window, cx).placeholder("Search frameworks…");
+            let mut state = InputState::new(window, cx).placeholder("Select framework…");
             state.set_editor_style(InputEditorStyle {
                 foreground: example_rgb(0x171717).into(),
                 muted_foreground: example_rgb(0x737373).into(),
@@ -270,7 +274,14 @@ impl BaseShowcase {
         });
         cx.subscribe(
             &combobox_query,
-            |_, _, _: &gpui_base::input::InputEvent, cx| cx.notify(),
+            |this: &mut Self, _, event: &gpui_base::input::InputEvent, cx| {
+                // Typing in the field opens the list on its first match.
+                if matches!(event, gpui_base::input::InputEvent::Change) {
+                    this.combobox_open = true;
+                    this.combobox_highlight = Some(0);
+                }
+                cx.notify();
+            },
         )
         .detach();
         if matches!(component.as_str(), "input" | "number-input") {
@@ -359,7 +370,8 @@ impl BaseShowcase {
             collapsible_open: false,
             combobox_open: false,
             combobox_query,
-            combobox_selection: "Select framework".into(),
+            combobox_highlight: None,
+            combobox_selection: String::new(),
             color_picker,
             date_open: false,
             dialog_open: false,

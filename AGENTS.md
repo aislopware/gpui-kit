@@ -264,7 +264,7 @@ Text input system based on Rope data structure:
    `..Default::default()`, no longer compile there, so code in other workspace crates
    must use the same form. Apply this to every new type and to any existing type whose
    fields a change adds or alters; the value types exempt above stay exempt.
-9. **Spell `Context` out**: Name a context type `ComboboxTriggerContext`, never `…Ctx`.
+9. **Spell `Context` out**: Name a context type `ResizeHandleContext`, never `…Ctx`.
    `cx` is reserved for GPUI's `App`, `Context<T>`, and `AsyncApp`, so `ctx` for anything
    else reads as a competing context. A callback receiving both takes the GPUI one as `cx`
    and names the other after what it holds (`trigger`, `state`).

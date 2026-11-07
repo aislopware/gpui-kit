@@ -133,6 +133,9 @@ pub struct Popover {
     appearance: bool,
     overlay_closable: bool,
     on_open_change: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
+    open_on_hover: bool,
+    hover_delay: Option<Duration>,
+    hover_close_delay: Option<Duration>,
 }
 
 impl Popover {
@@ -155,7 +158,31 @@ impl Popover {
             default_open: false,
             open: None,
             on_open_change: None,
+            open_on_hover: false,
+            hover_delay: None,
+            hover_close_delay: None,
         }
+    }
+
+    /// Opens the popover while the pointer rests on its trigger, leaving the
+    /// focus where it is; see [`gpui_base::Popover::open_on_hover`].
+    pub fn open_on_hover(mut self, open_on_hover: bool) -> Self {
+        self.open_on_hover = open_on_hover;
+        self
+    }
+
+    /// How long the pointer rests on the trigger before an
+    /// [`Self::open_on_hover`] popover opens, 300 ms by default.
+    pub fn hover_delay(mut self, delay: Duration) -> Self {
+        self.hover_delay = Some(delay);
+        self
+    }
+
+    /// How long an [`Self::open_on_hover`] popover stays after the pointer
+    /// left the trigger and the content, none by default.
+    pub fn hover_close_delay(mut self, delay: Duration) -> Self {
+        self.hover_close_delay = Some(delay);
+        self
     }
 
     /// Set the anchor corner of the popover, default is [`Anchor::TopLeft`].
@@ -347,16 +374,32 @@ impl RenderOnce for Popover {
         BasePopover::new(self.id)
             .anchor(self.anchor)
             .offset(offset)
+            // In and out of the trigger, as the dropdowns enter.
+            .motion(gpui_base::Transition::new(DROPDOWN_ENTER_DURATION).ease(ease_out_cubic))
+            .approach(DROPDOWN_ENTER_OFFSET)
             .on_position(move |position, trigger| resolved.set(Some((position, trigger))))
             .mouse_button(self.mouse_button)
             .default_open(self.default_open)
             .overlay_closable(self.overlay_closable)
+            .open_on_hover(self.open_on_hover)
+            .when_some(self.hover_delay, |this, delay| this.hover_delay(delay))
+            .when_some(self.hover_close_delay, |this, delay| {
+                this.hover_close_delay(delay)
+            })
             .content(move |state, window, cx| {
+                let progress = state.motion_progress();
                 v_flex()
                     .id("content")
                     .occlude()
                     .tab_group()
                     .when(appearance, |this| this.popover_style(cx).p_3())
+                    // The shadow's ink follows the cube of the fade, as the
+                    // dropdowns' does (see `dropdown_popup`).
+                    .when(progress < 1., |this| {
+                        this.opacity(progress).when(appearance, |this| {
+                            this.shadow(popover_shadow(ring, progress * progress * progress))
+                        })
+                    })
                     .when_some(content, |this, content| {
                         this.child((content)(state, window, cx))
                     })
@@ -602,6 +645,8 @@ mod tests {
     #[gpui::test]
     fn anchor_and_offset_position_the_surface_on_each_trigger_edge(cx: &mut gpui::TestAppContext) {
         cx.update(crate::init);
+        // Where the surface settles, not where its entry starts.
+        cx.update(|cx| cx.set_reduce_motion(true));
         let (view, window) = cx.add_window_view(|_, _| AnchorHarness {
             anchor: Anchor::TopLeft,
             offset: None,
@@ -693,6 +738,8 @@ mod tests {
     #[gpui::test]
     fn trigger_style_is_applied_to_the_trigger_container(cx: &mut gpui::TestAppContext) {
         cx.update(crate::init);
+        // Where the surface settles, not where its entry starts.
+        cx.update(|cx| cx.set_reduce_motion(true));
         let (view, window) = cx.add_window_view(|_, _| TriggerStyleHarness { styled: false });
         window.update(|window, cx| crate::test_redraw(window, cx));
         window.update(|window, cx| crate::test_redraw(window, cx));
@@ -722,6 +769,8 @@ mod tests {
     #[gpui::test]
     fn arrow_reserves_space_without_changing_anchor_alignment(cx: &mut gpui::TestAppContext) {
         cx.update(crate::init);
+        // Where the surface settles, not where its entry starts.
+        cx.update(|cx| cx.set_reduce_motion(true));
         let (view, window) = cx.add_window_view(|_, _| AnchorHarness {
             anchor: Anchor::TopLeft,
             offset: Some(px(12.)),
@@ -752,6 +801,8 @@ mod tests {
     #[gpui::test]
     fn a_popover_with_no_room_on_its_side_flips_and_keeps_its_gap(cx: &mut gpui::TestAppContext) {
         cx.update(crate::init);
+        // Where the surface settles, not where its entry starts.
+        cx.update(|cx| cx.set_reduce_motion(true));
         let (_, window) = cx.add_window_view(|_, _| AnchorHarness {
             anchor: Anchor::BottomCenter,
             offset: Some(px(12.)),

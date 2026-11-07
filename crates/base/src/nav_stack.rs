@@ -788,10 +788,11 @@ mod tests {
             let stack = stack.clone();
             move |_, _| Host { stack }
         });
-        stack.update(cx, |stack, cx| {
-            stack.push(root, NavMotion::Immediate, cx);
-            stack.push(second, NavMotion::Animated, cx);
-        });
+        // The root is on screen before the second page pushes it out: a page
+        // never drawn has no exit to run.
+        stack.update(cx, |stack, cx| stack.push(root, NavMotion::Immediate, cx));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        stack.update(cx, |stack, cx| stack.push(second, NavMotion::Animated, cx));
 
         cx.update(|window, cx| window.draw(cx).clear(cx));
         assert!(stack.read_with(cx, |stack, _| stack.transit.is_some()));

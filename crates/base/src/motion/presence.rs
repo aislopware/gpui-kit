@@ -71,6 +71,12 @@ impl Presence {
             return stable_sample(self.present);
         }
 
+        // Settled where it is asked to be (a presence first sampled absent
+        // starts here): nothing moves, so it neither exits nor asks for frames.
+        if snapshot.from == target && snapshot.target == target {
+            return stable_sample(self.present);
+        }
+
         let elapsed = now.saturating_duration_since(snapshot.started_at);
         let (progress, status) = self.transition.progress(elapsed, snapshot.duration);
         let sampled = interpolate(

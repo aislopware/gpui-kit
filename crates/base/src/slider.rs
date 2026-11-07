@@ -316,6 +316,18 @@ impl SliderState {
         self.step
     }
 
+    /// How far one step from assistive technology, or an arrow key, moves a
+    /// thumb, and the step the slider reports to assistive technology: the
+    /// step, or a hundredth of the range for a slider without a usable one,
+    /// which assistive technology could not move at all.
+    pub fn accessibility_step(&self) -> f32 {
+        if self.step > 0. && self.step.is_finite() {
+            self.step
+        } else {
+            (self.max - self.min) / 100.
+        }
+    }
+
     /// Get the large step: Shift+arrow, Page Up and Page Down move this far.
     pub fn large_step_value(&self) -> f32 {
         self.large_step.unwrap_or(self.step * 10.)
@@ -333,12 +345,7 @@ impl SliderState {
         if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
             return None;
         }
-        // A slider without a usable step still moves by a hundredth of its range.
-        let step = if self.step > 0. && self.step.is_finite() {
-            self.step
-        } else {
-            (self.max - self.min) / 100.
-        };
+        let step = self.accessibility_step();
         let large_step = match self.large_step {
             Some(large_step) if large_step > 0. && large_step.is_finite() => large_step,
             _ => step * 10.,
@@ -380,6 +387,31 @@ impl SliderState {
         let Some(value) = self.keyboard_value(start, keystroke) else {
             return false;
         };
+        self.move_thumb(start, value, cx);
+        true
+    }
+
+    /// Steps the start (or end) thumb by `delta`, as Increment and Decrement
+    /// from assistive technology do: onto a step counted from `min`, inside
+    /// the range, pushing the other thumb as a key does. A range is kept, and
+    /// a move is reported as a key's is. A NaN value, a `min` above `max` or a
+    /// range whose start is past its end is left alone.
+    #[doc(hidden)]
+    pub fn step_thumb(&mut self, start: bool, delta: f32, cx: &mut Context<Self>) {
+        let (low, high) = (self.value.start(), self.value.end());
+        if low.is_nan() || high.is_nan() || self.min > self.max || low > high {
+            return;
+        }
+        let current = if start { low } else { high };
+        let value = snap_to_step(current + delta, self.min, self.max, self.step)
+            .min(self.max)
+            .max(self.min);
+        self.move_thumb(start, value, cx);
+    }
+
+    /// Moves the start (or end) thumb to `value` and, when that moved it,
+    /// reports a change and a release, as a press-and-release would.
+    fn move_thumb(&mut self, start: bool, value: f32, cx: &mut Context<Self>) {
         let before = self.value;
         if start {
             self.value.set_start(value);
@@ -392,7 +424,6 @@ impl SliderState {
             cx.emit(SliderEvent::Release(self.value));
             cx.notify();
         }
-        true
     }
 
     /// Converts a value between 0.0 and 1.0 to a value between the minimum and maximum value,
@@ -651,7 +682,7 @@ impl RenderOnce for Slider {
             .aria_numeric_value(state.value().end() as f64)
             .aria_min_numeric_value(state.min_value() as f64)
             .aria_max_numeric_value(state.max_value() as f64)
-            .aria_numeric_value_step(state.step_value() as f64)
+            .aria_numeric_value_step(state.accessibility_step() as f64)
             .aria_orientation(if axis.is_vertical() {
                 Orientation::Vertical
             } else {
@@ -662,21 +693,19 @@ impl RenderOnce for Slider {
             .when(!self.disabled, |this| {
                 this.on_a11y_action(AccessibleAction::Increment, {
                     let state = slider_state.clone();
-                    move |_, window, cx| {
+                    move |_, _, cx| {
                         state.update(cx, |state, cx| {
-                            let value =
-                                (state.value().end() + state.step_value()).min(state.max_value());
-                            state.set_value(value, window, cx);
+                            let step = state.accessibility_step();
+                            state.step_thumb(false, step, cx);
                         });
                     }
                 })
                 .on_a11y_action(AccessibleAction::Decrement, {
                     let state = slider_state.clone();
-                    move |_, window, cx| {
+                    move |_, _, cx| {
                         state.update(cx, |state, cx| {
-                            let value =
-                                (state.value().end() - state.step_value()).max(state.min_value());
-                            state.set_value(value, window, cx);
+                            let step = state.accessibility_step();
+                            state.step_thumb(false, -step, cx);
                         });
                     }
                 })
@@ -1511,5 +1540,72 @@ mod tests {
             cx.update(|window, cx| window.draw(cx).clear(cx));
             assert_eq!(renders.get(), rendered, "the readout was built again");
         }
+    }
+
+    fn changes(
+        state: SliderState,
+        steps: &[(bool, f32)],
+        cx: &mut gpui::TestAppContext,
+    ) -> (SliderValue, usize) {
+        use gpui::AppContext as _;
+        use std::rc::Rc;
+        let state = cx.new(|_| state);
+        let changes = Rc::new(std::cell::Cell::new(0));
+        cx.update(|cx| {
+            let changes = changes.clone();
+            cx.subscribe(&state, move |_, event: &SliderEvent, _| {
+                if matches!(event, SliderEvent::Change(_)) {
+                    changes.set(changes.get() + 1);
+                }
+            })
+            .detach();
+        });
+        for &(start, delta) in steps {
+            state.update(cx, |state, cx| state.step_thumb(start, delta, cx));
+        }
+        (state.read_with(cx, |state, _| state.value()), changes.get())
+    }
+
+    /// Increment from assistive technology keeps a range and reports the
+    /// move; at the end of the range it does nothing and reports nothing.
+    #[gpui::test]
+    fn an_accessibility_step_keeps_a_range_and_reports_each_move(cx: &mut gpui::TestAppContext) {
+        let range = || SliderState::new().default_value(20. ..60.);
+        assert_eq!(
+            changes(range(), &[(false, 1.)], cx),
+            (SliderValue::Range(20., 61.), 1)
+        );
+        assert_eq!(
+            changes(range(), &[(true, 1.)], cx),
+            (SliderValue::Range(21., 60.), 1)
+        );
+        assert_eq!(
+            changes(SliderState::new().default_value(100.), &[(false, 1.)], cx),
+            (SliderValue::Single(100.), 0)
+        );
+    }
+
+    #[gpui::test]
+    fn an_accessibility_step_lands_on_the_step_grid(cx: &mut gpui::TestAppContext) {
+        let state = SliderState::new().step(10.).default_value(33.);
+        assert_eq!(
+            changes(state, &[(false, 10.)], cx).0,
+            SliderValue::Single(40.)
+        );
+    }
+
+    #[gpui::test]
+    fn an_accessibility_step_leaves_an_invalid_value_alone(cx: &mut gpui::TestAppContext) {
+        let nan = SliderState::new().default_value(f32::NAN);
+        let (value, moved) = changes(nan, &[(false, 1.), (false, -1.)], cx);
+        assert!(value.end().is_nan());
+        assert_eq!(moved, 0);
+    }
+
+    #[test]
+    fn a_continuous_slider_steps_by_a_hundredth_of_its_range() {
+        let state = SliderState::new().min(0.).max(200.).step(0.);
+        assert_eq!(state.accessibility_step(), 2.);
+        assert_eq!(SliderState::new().step(5.).accessibility_step(), 5.);
     }
 }

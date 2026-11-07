@@ -244,7 +244,7 @@ readers are always combined the same way — `!disabled && !readonly` — publis
 that combination as its own reader (`is_editable`) so the rule has one
 definition and new inputs to it stay invisible to callers.
 
-Name such a type in full: `ComboboxTriggerContext`, never `…Ctx`. In a GPUI
+Name such a type in full: `ResizeHandleContext`, never `…Ctx`. In a GPUI
 codebase `cx` is reserved for `App`, `Context<T>`, and `AsyncApp`, so an
 abbreviated `ctx` for anything else reads as a second, competing context. A
 callback that receives both takes the GPUI one as `cx` and gives the other a
@@ -252,7 +252,7 @@ name describing what it holds.
 
 This applies to state snapshots (`InputPresentation`, `CalendarItemState`),
 capability sets (`InputContextMenuCapabilities`), render contexts
-(`ComboboxTriggerContext`), and option sets (`RenderOptions`). It does not
+(`ResizeHandleContext`), and option sets (`RenderOptions`). It does not
 apply to value types whose fields _are_ the definition and cannot grow, such as
 `Point`, `Selection`, `Edges`, `IndexPath`, or `FoldRange`, nor to types that
 mirror an external schema, such as the LSP `Diagnostic`.

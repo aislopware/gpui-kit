@@ -59,7 +59,6 @@ impl ToolbarStory {
                 window,
                 cx,
             )
-            .searchable(true)
         });
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
 

@@ -49,6 +49,7 @@ enum Strategy {
 
 /// The bounds a popup resolved to, and the side it ended up on.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ResolvedPosition {
     /// Final popup bounds in window coordinates.
     pub bounds: Bounds<Pixels>,
@@ -59,7 +60,61 @@ pub struct ResolvedPosition {
     /// or its mirror when it flipped around its trigger. `None` for side
     /// positioning.
     pub anchor: Option<Anchor>,
+    /// How far the popup's list must be scrolled for the item
+    /// [`Positioner::align_item_with_trigger`] names to sit over the trigger.
+    /// `None` when the popup was placed on a side or at a corner instead.
+    pub item_scroll: Option<Pixels>,
 }
+
+/// Where the item an item-aligned popup lines up with its trigger sits in the
+/// popup, measured from the popup's top edge with its list scrolled to the top.
+///
+/// See [`Positioner::align_item_with_trigger`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AlignedItem {
+    top: Pixels,
+    height: Pixels,
+    content_height: Pixels,
+}
+
+impl AlignedItem {
+    /// An item whose top edge is `top` below the popup's top edge and that is
+    /// `height` tall.
+    pub fn new(top: Pixels, height: Pixels) -> Self {
+        Self {
+            top,
+            height,
+            content_height: px(0.),
+        }
+    }
+
+    /// Sets the height the popup would have if nothing in it were clipped.
+    ///
+    /// The difference from the height it is laid out at is how far its list
+    /// can scroll. Without it the list is taken not to scroll at all.
+    pub fn with_content_height(mut self, content_height: Pixels) -> Self {
+        self.content_height = content_height;
+        self
+    }
+
+    /// The item's top edge, below the popup's top edge, with the list
+    /// unscrolled.
+    pub fn top(&self) -> Pixels {
+        self.top
+    }
+
+    /// The item's height.
+    pub fn height(&self) -> Pixels {
+        self.height
+    }
+
+    /// The height the popup would have if nothing in it were clipped.
+    pub fn content_height(&self) -> Pixels {
+        self.content_height
+    }
+}
+
+type AlignedItemSource = Box<dyn Fn(&App) -> Option<AlignedItem>>;
 
 /// An unstyled element that positions its children as an anchored popup.
 ///
@@ -70,6 +125,7 @@ pub struct Positioner {
     strategy: Strategy,
     corner_position: Option<Rc<Cell<Point<Pixels>>>>,
     corner_around: Option<Rc<Cell<Bounds<Pixels>>>>,
+    aligned_item: Option<AlignedItemSource>,
     on_position: Option<Box<dyn Fn(ResolvedPosition)>>,
     margin: Pixels,
     approach: Pixels,
@@ -94,6 +150,7 @@ impl Positioner {
             },
             corner_position: None,
             corner_around: None,
+            aligned_item: None,
             on_position: None,
             margin: px(4.),
             approach: px(0.),
@@ -116,6 +173,7 @@ impl Positioner {
             },
             corner_position: None,
             corner_around: None,
+            aligned_item: None,
             on_position: None,
             margin: px(4.),
             approach: px(0.),
@@ -178,6 +236,29 @@ impl Positioner {
         self
     }
 
+    /// Lines an item of the popup up with the trigger, as Base UI's Select
+    /// positioner does with `alignItemWithTrigger`.
+    ///
+    /// The popup is laid over the trigger so that the item `item` describes
+    /// is centred on it, which puts the item's text where the trigger's value
+    /// is. The popup's list is scrolled as far as that takes, reported as
+    /// [`ResolvedPosition::item_scroll`] for the caller to apply, and the
+    /// popup stays the margin inside the viewport. When there is not room to
+    /// do that with the whole item in view, or `item` returns `None`, the
+    /// popup is placed on its side of the trigger as it would be without this.
+    ///
+    /// `item` is asked while the popup is laid out, so it can read geometry
+    /// that only exists once the popup's content has been laid out. Only
+    /// meaningful for [`Positioner::side`], whose alignment still sets where
+    /// the popup sits across the trigger.
+    pub fn align_item_with_trigger(
+        mut self,
+        item: impl Fn(&App) -> Option<AlignedItem> + 'static,
+    ) -> Self {
+        self.aligned_item = Some(Box::new(item));
+        self
+    }
+
     // Read after trigger prepaint so an open popup follows a moving trigger.
     /// Reads the trigger [`Positioner::flip_around`] names from `around` as it
     /// lays out, as [`Positioner::tracked_corner_position`] does the position.
@@ -221,23 +302,37 @@ impl Positioner {
     /// edge, whichever side it lands on.
     ///
     /// Only the drawing moves: [`Positioner::on_position`] still reports the
-    /// place the popup settles at. A corner-positioned popup has no side and
-    /// does not move.
+    /// place the popup settles at. A corner-positioned popup comes out of the
+    /// corner it hangs from, the flipped one when it flipped.
     pub fn approach(mut self, distance: Pixels) -> Self {
         self.approach = distance;
         self
     }
 }
 
-/// How far back toward its trigger a popup on `placement` is drawn for an
-/// [`Positioner::approach`] of `distance`.
-fn approach_shift(placement: Option<Placement>, distance: Pixels) -> Point<Pixels> {
-    match placement {
-        Some(Placement::Bottom) => point(px(0.), -distance),
-        Some(Placement::Top) => point(px(0.), distance),
-        Some(Placement::Right) => point(-distance, px(0.)),
-        Some(Placement::Left) => point(distance, px(0.)),
-        None => Point::default(),
+/// How far back toward its trigger a popup on `placement`, or placed by its
+/// corner `anchor`, is drawn for an [`Positioner::approach`] of `distance`.
+fn approach_shift(
+    placement: Option<Placement>,
+    anchor: Option<Anchor>,
+    distance: Pixels,
+) -> Point<Pixels> {
+    match (placement, anchor) {
+        (Some(Placement::Bottom), _) => point(px(0.), -distance),
+        (Some(Placement::Top), _) => point(px(0.), distance),
+        (Some(Placement::Right), _) => point(-distance, px(0.)),
+        (Some(Placement::Left), _) => point(distance, px(0.)),
+        // A popup hung by its top corner opens below the point, by its bottom
+        // corner above it.
+        (None, Some(Anchor::TopLeft | Anchor::TopCenter | Anchor::TopRight)) => {
+            point(px(0.), -distance)
+        }
+        (None, Some(Anchor::BottomLeft | Anchor::BottomCenter | Anchor::BottomRight)) => {
+            point(px(0.), distance)
+        }
+        (None, Some(Anchor::LeftCenter)) => point(-distance, px(0.)),
+        (None, Some(Anchor::RightCenter)) => point(distance, px(0.)),
+        (None, None) => Point::default(),
     }
 }
 
@@ -291,6 +386,7 @@ fn resolve(
                 ),
                 placement: None,
                 anchor: Some(anchor),
+                item_scroll: None,
             }
         }
         Strategy::Side {
@@ -306,9 +402,66 @@ fn resolve(
                 bounds: clamp(Bounds::new(origin, popup_size), viewport_size, margin),
                 placement: Some(placement),
                 anchor: None,
+                item_scroll: None,
             }
         }
     }
+}
+
+/// Resolves an item-aligned popup of `popup_size`: the item centred on the
+/// trigger, the list scrolled within its range to get it there, the whole
+/// item in view and the popup inside the viewport by `margin`. `None` when no
+/// scroll satisfies all of that, so the caller places the popup on a side.
+///
+/// Of the scrolls that work, the one that centres the item in the popup is
+/// taken, so a long list opens with as much of it around the item as fits.
+fn resolve_aligned_item(
+    trigger_bounds: Bounds<Pixels>,
+    align: Align,
+    item: AlignedItem,
+    popup_size: Size<Pixels>,
+    viewport_size: Size<Pixels>,
+    margin: Edges<Pixels>,
+) -> Option<ResolvedPosition> {
+    let top_limit = margin.top;
+    let bottom_limit = (viewport_size.height - margin.bottom).max(margin.top);
+    let height = popup_size.height;
+    if height > bottom_limit - top_limit || item.height > height {
+        return None;
+    }
+
+    // Where the item's top edge has to be for it to be centred on the
+    // trigger. With the list scrolled by `scroll`, the popup's top edge is
+    // then `item_y - item.top + scroll`.
+    let item_y = trigger_bounds.center().y - item.height.half();
+    let max_scroll = (item.content_height - height).max(px(0.));
+    let lowest = px(0.)
+        .max(top_limit - item_y + item.top)
+        .max(item.top + item.height - height);
+    let highest = max_scroll
+        .min(bottom_limit - height - item_y + item.top)
+        .min(item.top);
+    if lowest > highest {
+        return None;
+    }
+
+    let centred = item.top + item.height.half() - height.half();
+    let scroll = centred
+        .clamp(lowest, highest)
+        .round()
+        .clamp(lowest, highest);
+    let x = match align {
+        Align::Start => trigger_bounds.left(),
+        Align::Center => trigger_bounds.center().x - popup_size.width.half(),
+        Align::End => trigger_bounds.right() - popup_size.width,
+    };
+    let origin = point(x, item_y - item.top + scroll);
+    Some(ResolvedPosition {
+        bounds: clamp(Bounds::new(origin, popup_size), viewport_size, margin),
+        placement: None,
+        anchor: None,
+        item_scroll: Some(scroll),
+    })
 }
 
 /// The anchor and position a corner-anchored popup takes: its own when it fits
@@ -539,12 +692,30 @@ impl Element for Positioner {
         {
             *around = Some(tracked.get());
         }
-        let position = resolve(
-            strategy,
-            popup_size,
-            window.viewport_size(),
-            frame.map(|inset| *inset + self.margin),
-        );
+        let viewport_size = window.viewport_size();
+        let margin = frame.map(|inset| *inset + self.margin);
+        let aligned = match (&self.aligned_item, strategy) {
+            (
+                Some(item),
+                Strategy::Side {
+                    trigger_bounds,
+                    align,
+                    ..
+                },
+            ) => item(&*cx).and_then(|item| {
+                resolve_aligned_item(
+                    trigger_bounds,
+                    align,
+                    item,
+                    popup_size,
+                    viewport_size,
+                    margin,
+                )
+            }),
+            _ => None,
+        };
+        let position =
+            aligned.unwrap_or_else(|| resolve(strategy, popup_size, viewport_size, margin));
         if let Some(callback) = &self.on_position {
             callback(position);
         }
@@ -554,7 +725,7 @@ impl Element for Positioner {
             window.insert_hitbox(position.bounds, HitboxBehavior::BlockMouse);
         }
 
-        let shift = approach_shift(position.placement, self.approach);
+        let shift = approach_shift(position.placement, position.anchor, self.approach);
         let offset = position.bounds.origin + shift - bounds.origin;
         let offset = point(offset.x.round(), offset.y.round());
 
@@ -640,25 +811,29 @@ mod tests {
     fn an_approach_comes_from_the_trigger_on_every_side() {
         let d = px(8.);
         assert_eq!(
-            approach_shift(Some(Placement::Bottom), d),
+            approach_shift(Some(Placement::Bottom), None, d),
             point(px(0.), px(-8.))
         );
         assert_eq!(
-            approach_shift(Some(Placement::Top), d),
+            approach_shift(Some(Placement::Top), None, d),
             point(px(0.), px(8.))
         );
         assert_eq!(
-            approach_shift(Some(Placement::Right), d),
+            approach_shift(Some(Placement::Right), None, d),
             point(px(-8.), px(0.))
         );
         assert_eq!(
-            approach_shift(Some(Placement::Left), d),
+            approach_shift(Some(Placement::Left), None, d),
             point(px(8.), px(0.))
         );
         assert_eq!(
-            approach_shift(None, d),
-            Point::default(),
-            "a corner has no side"
+            approach_shift(None, Some(Anchor::TopLeft), d),
+            point(px(0.), px(-8.)),
+            "a popup hung below a corner comes down out of it"
+        );
+        assert_eq!(
+            approach_shift(None, Some(Anchor::BottomRight), d),
+            point(px(0.), px(8.))
         );
     }
 
@@ -1027,5 +1202,90 @@ mod tests {
             Edges::all(MARGIN),
         );
         assert_eq!(position.bounds.right(), px(396.));
+    }
+
+    /// Eight 32 pt rows inside 4 pt of padding, which all fit.
+    fn short_list_row(row: f32) -> AlignedItem {
+        AlignedItem::new(px(4. + row * 32.), px(32.)).with_content_height(px(264.))
+    }
+
+    fn aligned(
+        trigger_bounds: Bounds<Pixels>,
+        item: AlignedItem,
+        popup: Size<Pixels>,
+    ) -> Option<ResolvedPosition> {
+        resolve_aligned_item(
+            trigger_bounds,
+            Align::Start,
+            item,
+            popup,
+            viewport(),
+            Edges::all(MARGIN),
+        )
+    }
+
+    #[test]
+    fn an_aligned_item_is_centred_on_the_trigger() {
+        let trigger_bounds = trigger(100., 200., 120., 36.);
+        let item = short_list_row(3.);
+        let position = aligned(trigger_bounds, item, Size::new(px(120.), px(264.)))
+            .expect("there is room to align the item");
+
+        assert_eq!(position.item_scroll, Some(px(0.)), "a list that fits");
+        assert_eq!(position.bounds.left(), trigger_bounds.left());
+        let item_top = position.bounds.top() + item.top();
+        assert_eq!(
+            item_top + item.height() * 0.5,
+            trigger_bounds.center().y,
+            "the item sits exactly over the trigger"
+        );
+        assert_eq!(position.placement, None);
+    }
+
+    #[test]
+    fn an_aligned_item_scrolls_the_list_to_keep_the_popup_in_the_viewport() {
+        // Twenty rows in a popup cut to 300 pt, below a trigger near the top:
+        // the popup cannot rise far enough to put row 10 over the trigger
+        // unscrolled, so the list scrolls instead.
+        let trigger_bounds = trigger(100., 40., 120., 36.);
+        let item = AlignedItem::new(px(4. + 10. * 32.), px(32.)).with_content_height(px(648.));
+        let position = aligned(trigger_bounds, item, Size::new(px(120.), px(300.)))
+            .expect("the list scrolls far enough");
+
+        let scroll = position.item_scroll.unwrap();
+        assert!(scroll > px(0.));
+        assert!(position.bounds.top() >= MARGIN, "inside the viewport");
+        assert_eq!(
+            position.bounds.top() + item.top() - scroll + item.height() * 0.5,
+            trigger_bounds.center().y
+        );
+    }
+
+    #[test]
+    fn an_item_that_cannot_reach_the_trigger_is_not_aligned() {
+        // A list that does not scroll, with row 5 under a trigger at the top
+        // of the window: the popup would have to start above the viewport.
+        let trigger_bounds = trigger(100., 10., 120., 36.);
+        assert_eq!(
+            aligned(
+                trigger_bounds,
+                short_list_row(5.),
+                Size::new(px(120.), px(264.))
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_popup_taller_than_the_viewport_is_not_aligned() {
+        let trigger_bounds = trigger(100., 200., 120., 36.);
+        assert_eq!(
+            aligned(
+                trigger_bounds,
+                short_list_row(0.),
+                Size::new(px(120.), px(600.))
+            ),
+            None
+        );
     }
 }

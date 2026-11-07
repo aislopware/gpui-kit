@@ -1,16 +1,20 @@
+use std::{cell::Cell, rc::Rc, time::Duration};
+
 use gpui::{
-    AnyElement, App, ClickEvent, Context, DismissEvent, Edges, ElementId, Entity, EventEmitter,
-    FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, Length, ParentElement, Render,
-    RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window,
-    deferred, div, prelude::FluentBuilder, px, rems,
+    Animation, AnimationExt as _, AnyElement, App, Bounds, ClickEvent, Context, DismissEvent,
+    Edges, ElementId, Entity, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement,
+    IntoElement, Length, ParentElement, Pixels, Render, RenderOnce, SharedString,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, deferred, div, point,
+    prelude::FluentBuilder, px, rems,
 };
-use gpui_base::TestSupportExt as _;
+use gpui_base::{AlignedItem, TestSupportExt as _};
 
 use crate::ThemeStyled as _;
 use crate::{
     ActiveTheme, Disableable, ElementExt as _, Icon, IconName, IndexPath, Sizable, Size,
     StyleSized, StyledExt,
     actions::Cancel,
+    animation::ease_out_cubic,
     h_flex,
     input::{clear_button, input_style},
     list::List,
@@ -18,6 +22,7 @@ use crate::{
         SearchableListChange, SearchableListDelegate, SearchableListItem, SearchableListState,
     },
     sizing::DROPDOWN_LIST_PADDING,
+    styled::{popover_ring, popover_shadow},
     v_flex,
 };
 use gpui_base::{GlobalState, Select as BaseSelect};
@@ -91,6 +96,7 @@ struct SelectOptions {
     disabled: bool,
     appearance: bool,
     focus_ring_enabled: bool,
+    align_item_with_trigger: bool,
 }
 
 impl Default for SelectOptions {
@@ -110,6 +116,7 @@ impl Default for SelectOptions {
             appearance: true,
             focus_ring_enabled: true,
             search_placeholder: None,
+            align_item_with_trigger: false,
         }
     }
 }
@@ -130,6 +137,15 @@ where
     icon: Option<Icon>,
     title_prefix: Option<SharedString>,
     focus_ring_enabled: bool,
+    /// Whether the select asks for its popup to lie over the trigger.
+    align_item_with_trigger: bool,
+    /// Whether the popup open now lies over the trigger, decided as it opened
+    /// so the popup does not jump when the input that follows differs.
+    item_aligned: bool,
+    /// Set as an item-aligned popup opens and taken by its first placement,
+    /// which scrolls the list to the selected item once and then leaves the
+    /// scrolling to the user.
+    aligned_scroll_pending: Rc<Cell<bool>>,
 }
 
 /// A Select element.
@@ -295,6 +311,9 @@ where
             icon: None,
             title_prefix: None,
             focus_ring_enabled: true,
+            align_item_with_trigger: false,
+            item_aligned: false,
+            aligned_scroll_pending: Rc::new(Cell::new(false)),
         }
     }
 
@@ -416,18 +435,39 @@ where
         cx.notify();
     }
 
+    /// Whether this select's popup asks to lie over its trigger. A searchable
+    /// one never does: its search field sits where the item would have to go.
+    fn aligns_item_with_trigger(&self) -> bool {
+        self.align_item_with_trigger && !self.searchable
+    }
+
+    /// Records whether the popup opening now lies over the trigger.
+    fn set_item_aligned(&mut self, aligned: bool) {
+        self.item_aligned = aligned;
+        self.aligned_scroll_pending.set(aligned);
+    }
+
     fn toggle_menu(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
 
-        self.set_open(!self.state.open, cx);
-
         if self.state.open {
-            self.state.list.focus_handle(cx).focus(window, cx);
-        } else {
+            self.set_open(false, cx);
             self.clear_query_and_restore_cursor(window, cx);
+        } else {
+            self.open_menu(window, cx);
         }
 
         cx.notify();
+    }
+
+    /// Opens the menu from the select's own trigger and hands it the keys.
+    fn open_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_item_aligned(BaseSelect::item_alignment(
+            self.aligns_item_with_trigger(),
+            window,
+        ));
+        self.set_open(true, cx);
+        self.state.list.focus_handle(cx).focus(window, cx);
     }
 
     fn escape(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
@@ -666,41 +706,108 @@ where
                         ),
                 )
                 .when(self.state.open, |this| {
-                    this.child(
-                        deferred(crate::popover::dropdown_popup(
-                            ("select-popup", cx.entity_id()),
-                            bounds,
-                            v_flex()
-                                .occlude()
-                                .map(|this| match self.state.menu_width {
-                                    Length::Auto => this.w(bounds.size.width),
-                                    Length::Definite(w) => this.w(w),
-                                })
-                                .popover_style(cx)
-                                .child(
-                                    List::new(&self.state.list)
-                                        .when_some(
-                                            self.state.search_placeholder.clone(),
-                                            |this, placeholder| {
-                                                this.search_placeholder(placeholder)
-                                            },
-                                        )
-                                        .with_size(self.state.size)
-                                        .max_h(self.state.menu_max_h)
-                                        .when_some(self.state.scroll_bounce, |list, on| {
-                                            list.scroll_bounce(on)
-                                        })
-                                        .paddings(Edges::all(DROPDOWN_LIST_PADDING)),
+                    let id = ("select-popup", cx.entity_id());
+                    let surface = v_flex()
+                        .occlude()
+                        .map(|this| match self.state.menu_width {
+                            Length::Auto => this.w(bounds.size.width),
+                            Length::Definite(w) => this.w(w),
+                        })
+                        .popover_style(cx)
+                        .child(
+                            List::new(&self.state.list)
+                                .when_some(
+                                    self.state.search_placeholder.clone(),
+                                    |this, placeholder| this.search_placeholder(placeholder),
                                 )
-                                .on_mouse_down_out(cx.listener(|this, _, window, cx| {
-                                    this.escape(&Cancel, window, cx);
-                                })),
-                            cx,
-                        ))
-                        .with_priority(gpui_base::POPUP_PRIORITY),
-                    )
+                                .with_size(self.state.size)
+                                .max_h(self.state.menu_max_h)
+                                .when_some(self.state.scroll_bounce, |list, on| {
+                                    list.scroll_bounce(on)
+                                })
+                                .paddings(Edges::all(DROPDOWN_LIST_PADDING)),
+                        )
+                        .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                            this.escape(&Cancel, window, cx);
+                        }));
+                    let popup = if self.item_aligned {
+                        self.item_aligned_popup(id, bounds, surface, cx)
+                            .into_any_element()
+                    } else {
+                        crate::popover::dropdown_popup(id, bounds, surface, cx).into_any_element()
+                    };
+                    this.child(deferred(popup).with_priority(gpui_base::POPUP_PRIORITY))
                 }),
         )
+    }
+}
+
+/// How long an item-aligned popup takes to fade in: the dropdown's 150ms.
+const ALIGNED_POPUP_ENTER_DURATION: Duration = Duration::from_millis(150);
+
+/// How far short of its place a popup that could not lie over its trigger
+/// starts out, as the dropdown's does.
+const ALIGNED_POPUP_FALLBACK_OFFSET: Pixels = px(8.);
+
+impl<D> SelectState<D>
+where
+    D: SearchableListDelegate + 'static,
+    <D::Item as SearchableListItem>::Value: PartialEq + Clone,
+{
+    /// Places the popup so its selected item lies over the trigger, as Base
+    /// UI's `alignItemWithTrigger` does, and fades it in.
+    ///
+    /// This is the dropdown's open motion on a positioner that tries to align
+    /// the item first. An aligned popup has no side to slide out of, so it
+    /// only fades, as Base UI's does; with no item selected, or no room to
+    /// align it, the popup falls back to the dropdown's place below or above
+    /// the trigger and slides out of that edge as the dropdown does.
+    fn item_aligned_popup(
+        &self,
+        id: impl Into<ElementId>,
+        bounds: Bounds<Pixels>,
+        surface: impl IntoElement + Styled + 'static,
+        cx: &App,
+    ) -> impl IntoElement {
+        let id = id.into();
+        let enter = || Animation::new(ALIGNED_POPUP_ENTER_DURATION).with_easing(ease_out_cubic);
+        let ring = popover_ring(cx);
+        let list = self.state.list.clone();
+        let selected = self.state.selection.first().map(|(ix, _)| *ix);
+        let scroll_handle = list.read(cx).scroll_handle().clone();
+        let scroll_pending = self.aligned_scroll_pending.clone();
+
+        gpui_base::Positioner::side(bounds)
+            .placement(gpui_base::Placement::Bottom)
+            .align(gpui_base::Align::Start)
+            .offset(px(6.))
+            .margin(px(8.))
+            .align_item_with_trigger(move |cx| {
+                // The row's place among the rows, inside the list's padding;
+                // the popup draws no border, so its edge is the list's.
+                let (top, height, rows) = list.read(cx).item_extent(selected?)?;
+                Some(
+                    AlignedItem::new(DROPDOWN_LIST_PADDING + top, height)
+                        .with_content_height(rows + DROPDOWN_LIST_PADDING * 2.),
+                )
+            })
+            .on_position(move |position| {
+                if let Some(scroll) = position.item_scroll
+                    && scroll_pending.replace(false)
+                {
+                    scroll_handle.set_offset(point(scroll_handle.offset().x, -scroll));
+                }
+            })
+            .child(
+                surface.with_animation(id.clone(), enter(), move |surface, delta| {
+                    surface
+                        .opacity(delta)
+                        .shadow(popover_shadow(ring, delta * delta * delta))
+                }),
+            )
+            .with_animation(id, enter(), |positioner, delta| {
+                positioner.approach(ALIGNED_POPUP_FALLBACK_OFFSET * (1. - delta))
+            })
     }
 }
 
@@ -806,6 +913,20 @@ where
         self.options.appearance = appearance;
         self
     }
+
+    /// Lay the open list over the trigger with the selected item exactly
+    /// where the trigger shows it, as Base UI's `alignItemWithTrigger` does,
+    /// instead of hanging the list below the trigger. Off by default.
+    ///
+    /// The list scrolls as far as that takes and stays inside the window.
+    /// It still opens below or above the trigger when nothing is selected,
+    /// when there is no room to align the item, when the select is opened by
+    /// touch, and when it is searchable, whose search field sits where the
+    /// item would have to go.
+    pub fn align_item_with_trigger(mut self, align: bool) -> Self {
+        self.options.align_item_with_trigger = align;
+        self
+    }
 }
 
 impl<D> Sizable for Select<D>
@@ -898,6 +1019,7 @@ where
             this.focus_ring_enabled = opts.focus_ring_enabled;
             this.icon = opts.icon;
             this.title_prefix = opts.title_prefix;
+            this.align_item_with_trigger = opts.align_item_with_trigger;
 
             if let Some(empty) = empty {
                 this.state.empty = Some(empty);
@@ -908,8 +1030,10 @@ where
         let accessibility_value = self.state.read(cx).accessibility_value();
         let content_focus_handle = self.state.read(cx).state.list.focus_handle(cx);
         let searchable = self.state.read(cx).searchable;
+        let aligns_item_with_trigger = self.state.read(cx).aligns_item_with_trigger();
         let open_state = self.state.clone();
         let typeahead_state = self.state.clone();
+        let alignment_state = self.state.clone();
 
         BaseSelect::new(self.id)
             .open(is_open)
@@ -920,6 +1044,10 @@ where
             .focus_handle(&focus_handle)
             .content_focus_handle(&content_focus_handle)
             .accessibility_value(accessibility_value)
+            .align_item_with_trigger(aligns_item_with_trigger)
+            .on_item_alignment(move |aligned, _, cx| {
+                alignment_state.update(cx, |state, _| state.set_item_aligned(aligned));
+            })
             .on_open_change(move |open, window, cx| {
                 open_state.update(cx, |state, cx| {
                     if !open {
@@ -1313,6 +1441,152 @@ mod tests {
             cx.simulate_keystrokes("b->b");
             assert_eq!(selected(&state, cx), Some("Apple"));
             assert!(confirmed.borrow().is_empty());
+        }
+    }
+
+    /// The list laid over the trigger, as Base UI's `alignItemWithTrigger`
+    /// does.
+    mod item_alignment {
+        use std::time::Duration;
+
+        use gpui::{
+            AppContext as _, Bounds, Context, Entity, IntoElement, Modifiers, ParentElement as _,
+            Pixels, Render, Styled as _, TestAppContext, TouchEvent, TouchPhase, VisualTestContext,
+            Window, div, px, size,
+        };
+
+        use crate::{
+            IndexPath,
+            searchable_list::SearchableVec,
+            select::{Select, SelectState},
+        };
+
+        type Numbers = SearchableVec<&'static str>;
+
+        struct Form {
+            state: Entity<SelectState<Numbers>>,
+            align: bool,
+            top: Pixels,
+        }
+
+        impl Render for Form {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().child(
+                    div()
+                        .absolute()
+                        .top(self.top)
+                        .left(px(40.))
+                        .w(px(200.))
+                        .child(Select::new(&self.state).align_item_with_trigger(self.align)),
+                )
+            }
+        }
+
+        /// A select of eight numbers with `selected` chosen, its trigger
+        /// `top` down a 400 by 600 window.
+        fn form(
+            cx: &mut TestAppContext,
+            align: bool,
+            top: f32,
+            selected: usize,
+        ) -> (Entity<SelectState<Numbers>>, &mut VisualTestContext) {
+            cx.update(crate::init);
+            let (form, cx) = cx.add_window_view(|window, cx| {
+                let items = SearchableVec::new(vec![
+                    "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight",
+                ]);
+                Form {
+                    state: cx.new(|cx| {
+                        SelectState::new(items, Some(IndexPath::new(selected)), window, cx)
+                    }),
+                    align,
+                    top: px(top),
+                }
+            });
+            cx.simulate_resize(size(px(400.), px(600.)));
+            let state = form.read_with(cx, |form, _| form.state.clone());
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            (state, cx)
+        }
+
+        fn trigger(
+            state: &Entity<SelectState<Numbers>>,
+            cx: &mut VisualTestContext,
+        ) -> Bounds<Pixels> {
+            state.read_with(cx, |state, _| state.state.bounds)
+        }
+
+        /// Lets the open motion finish and draws the settled popup.
+        fn settle(cx: &mut VisualTestContext) {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            cx.executor().advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+
+        #[gpui::test]
+        fn the_selected_item_opens_over_the_trigger(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, true, 300., 4);
+            let trigger = trigger(&state, cx);
+            cx.simulate_click(trigger.center(), Modifiers::none());
+            settle(cx);
+
+            assert!(state.read_with(cx, |state, _| state.state.open));
+            let row = cx.debug_bounds("list-item-0-4").expect("`Five` is drawn");
+            assert!(
+                (row.center().y - trigger.center().y).abs() <= px(1.),
+                "`Five` sits over the trigger: {row:?} against {trigger:?}"
+            );
+        }
+
+        #[gpui::test]
+        fn without_it_the_list_hangs_below_the_trigger(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, false, 300., 4);
+            let trigger = trigger(&state, cx);
+            cx.simulate_click(trigger.center(), Modifiers::none());
+            settle(cx);
+
+            let first = cx.debug_bounds("list-item-0-0").expect("`One` is drawn");
+            assert!(
+                first.top() >= trigger.bottom(),
+                "{first:?} under {trigger:?}"
+            );
+        }
+
+        /// A trigger near the top of the window leaves no room for `Seven`
+        /// to rise over it, so the list opens below as usual.
+        #[gpui::test]
+        fn an_item_with_no_room_to_align_opens_below(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, true, 10., 6);
+            let trigger = trigger(&state, cx);
+            cx.simulate_click(trigger.center(), Modifiers::none());
+            settle(cx);
+
+            let first = cx.debug_bounds("list-item-0-0").expect("`One` is drawn");
+            assert!(
+                first.top() >= trigger.bottom(),
+                "{first:?} under {trigger:?}"
+            );
+        }
+
+        /// Base UI does not align a select opened by touch.
+        #[gpui::test]
+        fn a_select_opened_by_touch_opens_below(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, true, 300., 4);
+            let trigger = trigger(&state, cx);
+            cx.simulate_event(TouchEvent {
+                phase: TouchPhase::Started,
+                position: trigger.center(),
+                ..Default::default()
+            });
+            cx.update(|window, cx| state.update(cx, |state, cx| state.open_menu(window, cx)));
+            settle(cx);
+
+            let first = cx.debug_bounds("list-item-0-0").expect("`One` is drawn");
+            assert!(
+                first.top() >= trigger.bottom(),
+                "{first:?} under {trigger:?}"
+            );
         }
     }
 

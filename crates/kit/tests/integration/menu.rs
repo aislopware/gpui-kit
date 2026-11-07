@@ -267,9 +267,13 @@ async fn hovering_submenu_opens_and_clicking_item_dismisses_the_chain(cx: &mut T
     .await;
     cx.update_window(handle.into(), |_, window, _| {
         assert!(window.try_find("submenu").is_none());
-        assert!(window.try_find("popup-menu").is_none());
     })
     .unwrap();
+    // The menu leaves through its exit motion, then is gone.
+    cx.wait_for(handle.into(), Duration::from_secs(1), |window, _| {
+        window.try_find("popup-menu").is_none()
+    })
+    .await;
 }
 
 /// A scrollable menu whose only submenu item is the last of 31 rows, so it

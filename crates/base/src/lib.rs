@@ -31,6 +31,7 @@ mod global_state;
 pub mod grid_layout;
 mod history;
 mod hover_card;
+mod hover_open;
 mod index_path;
 pub mod input;
 mod link;
@@ -102,7 +103,7 @@ pub use checkbox::{
 };
 pub use collapsible::Collapsible;
 pub use color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState, ColorSwatch, HslaSliders};
-pub use combobox::Combobox;
+pub use combobox::{Combobox, HighlightStep};
 pub use component_traits::FocusableExt;
 pub use component_traits::{Disableable, Selectable};
 pub use date_picker::DatePicker;
@@ -135,10 +136,10 @@ pub use measure::{Measure, measure, measure_if};
 pub use motion::{
     Discrete, DiscreteError, Easing, EasingError, Interpolate, IterationCount, Keyframe,
     KeyframeError, Keyframes, LinearStop, MotionPhase, MotionReveal, MotionStatus, MotionTransform,
-    MotionValue, PlaybackDirection, Presence, PresencePhase, PresenceSample, Sequence,
-    SequenceSample, SequenceStep, SignedDuration, Spring, SpringError, Stagger, StaggerOrigin,
-    StepPosition, Timing, TimingSample, Transition, TransitionId, animate_keyframes, spring,
-    transition, transition_with_status,
+    MotionValue, PlaybackDirection, Presence, PresencePhase, PresenceSample, ReducedMotion,
+    Sequence, SequenceSample, SequenceStep, SignedDuration, Spring, SpringError, Stagger,
+    StaggerOrigin, StepPosition, Timing, TimingSample, Transition, TransitionId, animate_keyframes,
+    spring, transition, transition_with_status,
 };
 pub use nav_stack::{NavMotion, NavOperation, NavPage, NavStack, NavStackEvent, NavStackState};
 pub use number_input::{
@@ -151,7 +152,7 @@ pub use pagination::{Pagination, PaginationItem, PaginationState};
 pub use plot::PlotMotion;
 pub use popover::{Popover, PopoverState};
 pub use popup::{POPUP_PRIORITY, Popup};
-pub use positioner::{Align, Positioner, ResolvedPosition};
+pub use positioner::{Align, AlignedItem, Positioner, ResolvedPosition};
 pub use progress::{Progress, ProgressIndicator, ProgressTrack};
 pub use radio::{Radio, RadioStyles};
 pub use radio_group::RadioGroup;
@@ -208,8 +209,8 @@ pub use time_field::{
     TimePrecision, TimeSegment,
 };
 pub use toast::{
-    Toast, ToastAdvance, ToastManager, ToastMotion, ToastOptions, ToastPriority, ToastStack,
-    ToastStackState, ToastTransitionStatus,
+    SwipeDirection, Toast, ToastAdvance, ToastManager, ToastMotion, ToastOptions, ToastPriority,
+    ToastStack, ToastStackState, ToastSwipe, ToastTransitionStatus,
 };
 pub use toggle::{Toggle, ToggleStyles};
 pub use toggle_group::ToggleGroup;

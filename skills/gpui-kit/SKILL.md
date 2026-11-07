@@ -135,7 +135,7 @@ fetch the component's `.md` doc.
 | `OtpInput`    | `input::OtpInput`                               | Stateful. One-time password                  |
 | `SpeechButton` | `speech::{SpeechButton, SpeechState}`          | Stateful. Dictation, `speech` feature        |
 | `Select`      | `select::{Select, SelectState}`                 | Stateful. Dropdown picker                    |
-| `Combobox`    | `combobox::{Combobox, ComboboxState}`           | Stateful. Searchable select                  |
+| `Combobox`    | `combobox::{Combobox, ComboboxState}`           | Stateful. Input in the field, chips          |
 | `Checkbox`    | `checkbox::Checkbox`                            | Stateless. `on_click` receives `&bool`       |
 | `Switch`      | `switch::Switch`                                | Stateless. Toggle                            |
 | `Radio`       | `radio::{Radio, RadioGroup}`                    | Stateless.                                   |

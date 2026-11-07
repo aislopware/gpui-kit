@@ -1,14 +1,16 @@
 use std::rc::Rc;
 
 use gpui::{
-    Anchor, AnyElement, App, Bounds, Context, DispatchPhase, ElementId, InteractiveElement as _,
-    IntoElement, MouseMoveEvent, ParentElement as _, Pixels, Point, Render, RenderOnce, Stateful,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Subscription, Task, Window, canvas,
-    div, hover_intent, prelude::FluentBuilder as _,
+    Anchor, AnyElement, App, Context, ElementId, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, RenderOnce, Stateful, StatefulInteractiveElement as _,
+    StyleRefinement, Styled, Subscription, Window, div, prelude::FluentBuilder as _,
 };
 use std::time::Duration;
 
-use crate::{Popup, StyledExt as _};
+use crate::{
+    Popup, StyledExt as _,
+    hover_open::{self, HoverHost, HoverOpen},
+};
 
 type ContentBuilder = Box<
     dyn FnOnce(
@@ -102,17 +104,8 @@ impl Styled for HoverCard {
 /// State exposed to a [`HoverCard::content`] builder.
 pub struct HoverCardState {
     open: bool,
-    open_delay: Duration,
-    close_delay: Duration,
+    hover: HoverOpen,
     on_open_change: Option<OpenChangeHandler>,
-    open_task: Option<Task<()>>,
-    close_task: Option<Task<()>>,
-    epoch: usize,
-    is_hovering_trigger: bool,
-    is_hovering_content: bool,
-    /// Where the pointer left the trigger while the card was open, until it
-    /// reaches the card or turns away (see [`hover_intent`]).
-    apex: Option<Point<Pixels>>,
     /// While open: Escape, from any focus in its window, puts it away.
     escape: Option<Subscription>,
 }
@@ -121,15 +114,8 @@ impl HoverCardState {
     fn new(open_delay: Duration, close_delay: Duration) -> Self {
         Self {
             open: false,
-            open_delay,
-            close_delay,
+            hover: HoverOpen::new(open_delay, close_delay),
             on_open_change: None,
-            open_task: None,
-            close_task: None,
-            epoch: 0,
-            is_hovering_trigger: false,
-            is_hovering_content: false,
-            apex: None,
             escape: None,
         }
     }
@@ -144,49 +130,9 @@ impl HoverCardState {
         close_delay: Duration,
         on_open_change: Option<OpenChangeHandler>,
     ) {
-        self.open_delay = open_delay;
-        self.close_delay = close_delay;
+        self.hover.open_delay = open_delay;
+        self.hover.close_delay = close_delay;
         self.on_open_change = on_open_change;
-    }
-
-    fn schedule_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.cancel_tasks();
-        let epoch = self.next_epoch();
-        let delay = self.open_delay;
-        self.open_task = Some(cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor().timer(delay).await;
-            let _ = this.update_in(cx, |state, window, cx| {
-                if state.epoch == epoch {
-                    state.set_open(true, window, cx);
-                }
-            });
-        }));
-    }
-
-    fn schedule_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.cancel_tasks();
-        let epoch = self.next_epoch();
-        let delay = self.close_delay;
-        self.close_task = Some(cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor().timer(delay).await;
-            let _ = this.update_in(cx, |state, window, cx| {
-                if state.epoch == epoch && !state.is_hovering_trigger && !state.is_hovering_content
-                {
-                    state.set_open(false, window, cx);
-                }
-            });
-        }));
-    }
-
-    fn cancel_tasks(&mut self) {
-        self.epoch += 1;
-        self.open_task = None;
-        self.close_task = None;
-    }
-
-    fn next_epoch(&mut self) -> usize {
-        self.epoch += 1;
-        self.epoch
     }
 
     fn set_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -217,48 +163,21 @@ impl HoverCardState {
         }
     }
 
-    fn on_trigger_hover(&mut self, hovering: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.is_hovering_trigger = hovering;
-        self.apex = None;
-        if hovering {
-            self.schedule_open(window, cx);
-        } else if !self.is_hovering_content {
-            if self.open {
-                self.apex = Some(window.mouse_position());
-            }
-            self.schedule_close(window, cx);
-        }
-    }
-
-    fn on_content_hover(&mut self, hovering: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.is_hovering_content = hovering;
-        self.apex = None;
-        if hovering {
-            self.cancel_tasks();
-        } else if !self.is_hovering_trigger {
-            self.schedule_close(window, cx);
-        }
-    }
-
-    /// The pointer moved on its way from the trigger: while it heads for the
-    /// card, the close waits again from now, so the trip never closes it and
-    /// resting on the way does after the close delay; once it turns away the
-    /// close already waiting runs out.
-    fn on_travel(&mut self, card: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(apex) = self.apex else { return };
-        if hover_intent::heading_to(apex, card, window.mouse_position()) {
-            self.schedule_close(window, cx);
-        } else {
-            self.apex = None;
-        }
-    }
-
     /// Escape puts an open card away, as Base UI's does; it opens again once
     /// the pointer comes back to the trigger.
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.cancel_tasks();
-        self.apex = None;
+        self.hover.cancel();
         self.set_open(false, window, cx);
+    }
+}
+
+impl HoverHost for HoverCardState {
+    fn hover(&mut self) -> &mut HoverOpen {
+        &mut self.hover
+    }
+
+    fn hover_wants_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_open(open, window, cx);
     }
 }
 
@@ -286,7 +205,7 @@ impl RenderOnce for HoverCard {
                 .child(trigger)
                 .when(self.tap_to_open, |trigger| {
                     trigger.on_click(window.listener_for(&state, move |state, _, window, cx| {
-                        state.cancel_tasks();
+                        state.hover.cancel();
                         // Toggle the state rendered by this trigger even if
                         // outside dismissal handles the same release first.
                         state.set_open(!open, window, cx);
@@ -294,7 +213,8 @@ impl RenderOnce for HoverCard {
                 })
                 .when(!self.tap_to_open, |trigger| {
                     trigger.on_hover(window.listener_for(&state, |state, hovered, window, cx| {
-                        state.on_trigger_hover(*hovered, window, cx)
+                        let open = state.open;
+                        hover_open::trigger_hover(state, *hovered, open, window, cx)
                     }))
                 }),
         )
@@ -307,30 +227,15 @@ impl RenderOnce for HoverCard {
 
         popup.when_some(self.content, |popup, content| {
             let hover = window.listener_for(&state, |state, hovered, window, cx| {
-                state.on_content_hover(*hovered, window, cx)
+                hover_open::popup_hover(state, *hovered, window, cx)
             });
             let dismiss = window.listener_for(&state, |state, _, window, cx| {
-                state.cancel_tasks();
+                state.hover.cancel();
                 state.set_open(false, window, cx);
             });
-            let watch = state.downgrade();
             // Over the card's bounds: follows the pointer on its way from the
             // trigger.
-            let watcher = canvas(
-                |_, _, _| {},
-                move |card, _, window, _| {
-                    let travel = watch.clone();
-                    window.on_mouse_event(move |_: &MouseMoveEvent, phase, window, cx| {
-                        if phase == DispatchPhase::Capture {
-                            travel
-                                .update(cx, |state, cx| state.on_travel(card, window, cx))
-                                .ok();
-                        }
-                    });
-                },
-            )
-            .absolute()
-            .size_full();
+            let watcher = hover_open::travel_watcher(state.downgrade());
             popup.content(state.update(cx, |state, cx| {
                 content(state, window, cx)
                     .when(self.tap_to_open, |content| {
@@ -408,7 +313,9 @@ mod tests {
 
     /// Opens the harness's card by hovering its trigger, and returns the
     /// trigger's and the card's bounds.
-    fn open_card(cx: &mut gpui::VisualTestContext) -> (gpui::Bounds<Pixels>, gpui::Bounds<Pixels>) {
+    fn open_card(
+        cx: &mut gpui::VisualTestContext,
+    ) -> (gpui::Bounds<gpui::Pixels>, gpui::Bounds<gpui::Pixels>) {
         cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.simulate_mouse_move(point(px(10.), px(10.)), None, gpui::Modifiers::default());
         cx.executor().advance_clock(Duration::from_millis(100));

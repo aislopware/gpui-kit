@@ -3,9 +3,9 @@ use std::time::Instant;
 use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use gpui::{
-    Anchor, AnyElement, App, Div, ElementId, FocusHandle, InteractiveElement, Interactivity,
-    IntoElement, LiveRegion as _, MouseMoveEvent, ParentElement, Pixels, RenderOnce, Role,
-    Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, canvas, div,
+    Anchor, AnyElement, App, Axis, Div, ElementId, FocusHandle, InteractiveElement, Interactivity,
+    IntoElement, LiveRegion as _, MouseMoveEvent, ParentElement, Pixels, Point, RenderOnce, Role,
+    Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, canvas, div, point,
     prelude::FluentBuilder as _, px,
 };
 
@@ -275,6 +275,10 @@ impl<I: Clone + Eq, T> ToastManager<I, T> {
 }
 
 /// A deep toast-stack element that owns measurement, overlap, and expansion motion.
+///
+/// The stack is a landmark region, as Base UI's `Toast.Viewport`, so
+/// assistive technology can list it and jump to it. Name it with
+/// `aria_label`; the label is the application's copy.
 #[derive(IntoElement)]
 pub struct ToastStack {
     id: ElementId,
@@ -545,6 +549,7 @@ impl RenderOnce for ToastStack {
         let hovered_state = self.state.hovered.clone();
         let measured_width = self.state.width.clone();
         self.base
+            .role(Role::Region)
             .relative()
             .h(stack_height)
             .when_some(self.focus_handle, |this, handle| this.track_focus(&handle))
@@ -599,6 +604,244 @@ pub enum ToastPriority {
     Low,
     /// An alert, announced at once: errors and what needs action now.
     High,
+}
+
+/// A direction a toast can be swiped away in, as Base UI's `swipeDirection`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SwipeDirection {
+    /// Toward the top of the window.
+    Up,
+    /// Toward the bottom of the window.
+    Down,
+    /// Toward the left of the window.
+    Left,
+    /// Toward the right of the window.
+    Right,
+}
+
+impl SwipeDirection {
+    /// The directions that carry a toast in a stack at `placement` off the
+    /// window: toward the edge the stack sits against, and toward the nearer
+    /// side, which is right for a centered stack.
+    ///
+    /// This is Base UI's default of down and right, said for every placement:
+    /// a swipe only dismisses when it throws the toast out of the way it came,
+    /// never across the content it covers.
+    pub fn off_screen(placement: Anchor) -> Vec<Self> {
+        let vertical = match placement {
+            Anchor::TopLeft | Anchor::TopCenter | Anchor::TopRight => Some(Self::Up),
+            Anchor::BottomLeft | Anchor::BottomCenter | Anchor::BottomRight => Some(Self::Down),
+            Anchor::LeftCenter | Anchor::RightCenter => None,
+        };
+        let horizontal = match placement {
+            Anchor::TopLeft | Anchor::BottomLeft | Anchor::LeftCenter => Self::Left,
+            _ => Self::Right,
+        };
+        vertical.into_iter().chain([horizontal]).collect()
+    }
+
+    /// The direction a displacement of `distance` along `axis` points in, if
+    /// it points anywhere.
+    fn along(axis: Axis, distance: f32) -> Option<Self> {
+        match axis {
+            _ if distance == 0. => None,
+            Axis::Horizontal if distance > 0. => Some(Self::Right),
+            Axis::Horizontal => Some(Self::Left),
+            Axis::Vertical if distance > 0. => Some(Self::Down),
+            Axis::Vertical => Some(Self::Up),
+        }
+    }
+
+    /// `1` for the directions the window's coordinates grow in, `-1` for the
+    /// others.
+    fn sign(self) -> f32 {
+        match self {
+            Self::Down | Self::Right => 1.,
+            Self::Up | Self::Left => -1.,
+        }
+    }
+}
+
+/// How far a swipe travels before it commits to an axis, in pixels, so the
+/// tremor of a press is not read as a direction.
+const SWIPE_SLOP: f32 = 3.;
+/// The distance at which a pull in a direction the toast cannot leave by
+/// stops giving, in pixels.
+const SWIPE_RESISTANCE: f32 = 24.;
+/// The release speed that dismisses a toast short of the threshold, in pixels
+/// per millisecond.
+const SWIPE_FLICK_VELOCITY: f32 = 0.4;
+/// The least travel a flick needs, so a fast twitch of a press is no swipe.
+const SWIPE_FLICK_DISTANCE: f32 = 8.;
+/// How far back the release speed looks: the speed at the moment of letting
+/// go, not the average of the whole gesture.
+const SWIPE_VELOCITY_WINDOW: Duration = Duration::from_millis(100);
+
+/// The movement a pull of `distance` gives in a direction the toast cannot
+/// leave by: a little at first, stiffening toward [`SWIPE_RESISTANCE`], so the
+/// toast answers the pull and still reads as refusing it.
+fn resist(distance: f32) -> f32 {
+    distance / (1. + distance.abs() / SWIPE_RESISTANCE)
+}
+
+/// Swipe-to-dismiss for one toast, as Base UI's `Toast.Root` swipe.
+///
+/// It reads positions and times and answers with the offset to draw the toast
+/// at and, on release, whether the toast leaves. The application feeds it a
+/// press-drag or a trackpad's two-finger scroll alike and owns the drawing.
+///
+/// A gesture locks to the axis it first moves along. Along that axis the toast
+/// follows the pointer in a direction it may leave by and resists in the
+/// other; it leaves when released at least [`ToastSwipe::THRESHOLD`] out, or
+/// flicked out faster than a deliberate drag. Times come from the caller, so a
+/// test clock decides a flick exactly as the platform's does.
+#[derive(Clone, Debug, Default)]
+pub struct ToastSwipe {
+    directions: Vec<SwipeDirection>,
+    gesture: Option<SwipeGesture>,
+    offset: Point<Pixels>,
+    moved: bool,
+}
+
+#[derive(Clone, Debug)]
+struct SwipeGesture {
+    origin: Point<Pixels>,
+    axis: Option<Axis>,
+    /// Displacements along the locked axis, oldest first, kept for
+    /// [`SWIPE_VELOCITY_WINDOW`] to measure the release speed.
+    samples: VecDeque<(f32, Instant)>,
+}
+
+impl ToastSwipe {
+    /// The distance a toast must be released at to leave, as Base UI's 40 px.
+    pub const THRESHOLD: Pixels = px(40.);
+
+    /// Create a swipe that dismisses only in `directions`.
+    pub fn new(directions: impl IntoIterator<Item = SwipeDirection>) -> Self {
+        Self {
+            directions: directions.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+
+    /// Start a gesture with the pointer at `position`.
+    pub fn begin(&mut self, position: Point<Pixels>, now: Instant) {
+        // The press is the first sample, so a flick made in a single move
+        // still has a speed.
+        self.gesture = Some(SwipeGesture {
+            origin: position,
+            axis: None,
+            samples: VecDeque::from([(0., now)]),
+        });
+        self.offset = Point::default();
+        self.moved = false;
+    }
+
+    /// Follow the pointer to `position`.
+    pub fn move_to(&mut self, position: Point<Pixels>, now: Instant) {
+        let Some(gesture) = &mut self.gesture else {
+            return;
+        };
+        let dx = (position.x - gesture.origin.x).as_f32();
+        let dy = (position.y - gesture.origin.y).as_f32();
+        let axis = match gesture.axis {
+            Some(axis) => axis,
+            None if dx.abs().max(dy.abs()) < SWIPE_SLOP => return,
+            None => {
+                let axis = if dx.abs() >= dy.abs() {
+                    Axis::Horizontal
+                } else {
+                    Axis::Vertical
+                };
+                gesture.axis = Some(axis);
+                self.moved = true;
+                axis
+            }
+        };
+        let distance = match axis {
+            Axis::Horizontal => dx,
+            Axis::Vertical => dy,
+        };
+        gesture.samples.push_back((distance, now));
+        Self::forget_before(&mut gesture.samples, now);
+        let shown = match SwipeDirection::along(axis, distance) {
+            Some(direction) if self.directions.contains(&direction) => distance,
+            _ => resist(distance),
+        };
+        self.offset = match axis {
+            Axis::Horizontal => point(px(shown), px(0.)),
+            Axis::Vertical => point(px(0.), px(shown)),
+        };
+    }
+
+    /// End the gesture, returning the direction the toast leaves in.
+    ///
+    /// A toast that leaves keeps its offset, so its exit continues from where
+    /// the pointer let go; one that stays is offset back to rest, and the
+    /// application springs it there.
+    pub fn release(&mut self, now: Instant) -> Option<SwipeDirection> {
+        let mut gesture = self.gesture.take()?;
+        let leaving = gesture.axis.and_then(|axis| {
+            let &(distance, _) = gesture.samples.back()?;
+            let direction = SwipeDirection::along(axis, distance)
+                .filter(|direction| self.directions.contains(direction))?;
+            Self::forget_before(&mut gesture.samples, now);
+            let velocity = match (gesture.samples.front(), gesture.samples.back()) {
+                (Some(&(from, at)), Some(&(to, _))) => {
+                    let elapsed = now.saturating_duration_since(at).as_secs_f32() * 1000.;
+                    if elapsed > 0. {
+                        (to - from) / elapsed
+                    } else {
+                        0.
+                    }
+                }
+                _ => 0.,
+            };
+            let out = distance * direction.sign();
+            let flicked =
+                velocity * direction.sign() >= SWIPE_FLICK_VELOCITY && out >= SWIPE_FLICK_DISTANCE;
+            (out >= Self::THRESHOLD.as_f32() || flicked).then_some(direction)
+        });
+        if leaving.is_none() {
+            self.offset = Point::default();
+        }
+        leaving
+    }
+
+    /// Abandon the gesture, as when the system takes the touch: the toast
+    /// goes back to rest and does not leave.
+    pub fn cancel(&mut self) {
+        self.gesture = None;
+        self.offset = Point::default();
+    }
+
+    /// The offset to draw the toast at, from where it rests.
+    pub fn offset(&self) -> Point<Pixels> {
+        self.offset
+    }
+
+    /// Whether a gesture is in progress.
+    pub fn is_swiping(&self) -> bool {
+        self.gesture.is_some()
+    }
+
+    /// Whether the latest gesture moved far enough to be a swipe rather than
+    /// a press, so the release is not also taken as a click.
+    pub fn has_moved(&self) -> bool {
+        self.moved
+    }
+
+    /// Drop the samples older than [`SWIPE_VELOCITY_WINDOW`] before `now`.
+    /// With none left inside it, the pointer was at rest and the release
+    /// speed is zero.
+    fn forget_before(samples: &mut VecDeque<(f32, Instant)>, now: Instant) {
+        while samples
+            .front()
+            .is_some_and(|&(_, at)| now.saturating_duration_since(at) > SWIPE_VELOCITY_WINDOW)
+        {
+            samples.pop_front();
+        }
+    }
 }
 
 /// An unstyled semantic toast root. Applications own all presentation and motion.
@@ -834,6 +1077,168 @@ mod tests {
                 .write_a11y_info(&mut node);
             assert_eq!(node.live(), Some(accesskit::Live::Assertive));
         });
+    }
+
+    #[gpui::test]
+    fn the_stack_is_a_labelled_landmark_region(cx: &mut gpui::TestAppContext) {
+        struct Harness {
+            state: ToastStackState,
+            seen: Rc<RefCell<Option<(Option<Role>, Option<String>)>>>,
+        }
+        impl gpui::Render for Harness {
+            fn render(
+                &mut self,
+                window: &mut Window,
+                cx: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                let stack = ToastStack::new("stack", self.state.clone())
+                    .aria_label("Notifications")
+                    .item("first", div().h(px(40.)))
+                    .render(window, cx)
+                    .into_element();
+                let mut node = accesskit::Node::new(Role::Unknown);
+                stack.write_a11y_info(&mut node);
+                *self.seen.borrow_mut() =
+                    Some((stack.a11y_role(), node.label().map(str::to_owned)));
+                stack
+            }
+        }
+
+        let seen = Rc::new(RefCell::new(None));
+        let (_, cx) = cx.add_window_view({
+            let seen = seen.clone();
+            move |_, _| Harness {
+                state: ToastStackState::default(),
+                seen,
+            }
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert_eq!(
+            seen.borrow().clone(),
+            Some((Some(Role::Region), Some("Notifications".to_owned())))
+        );
+    }
+
+    const START: Point<Pixels> = point(px(100.), px(100.));
+
+    fn at(dx: f32, dy: f32) -> Point<Pixels> {
+        point(START.x + px(dx), START.y + px(dy))
+    }
+
+    #[test]
+    fn off_screen_directions_follow_the_edges_the_stack_sits_against() {
+        use SwipeDirection::*;
+        assert_eq!(SwipeDirection::off_screen(Anchor::TopRight), [Up, Right]);
+        assert_eq!(
+            SwipeDirection::off_screen(Anchor::BottomRight),
+            [Down, Right]
+        );
+        assert_eq!(SwipeDirection::off_screen(Anchor::BottomLeft), [Down, Left]);
+        assert_eq!(SwipeDirection::off_screen(Anchor::TopCenter), [Up, Right]);
+        assert_eq!(SwipeDirection::off_screen(Anchor::LeftCenter), [Left]);
+        assert_eq!(SwipeDirection::off_screen(Anchor::RightCenter), [Right]);
+    }
+
+    #[test]
+    fn a_swipe_released_at_the_threshold_leaves_and_one_short_of_it_rests() {
+        let now = Instant::now();
+        let mut swipe = ToastSwipe::new(SwipeDirection::off_screen(Anchor::TopRight));
+
+        swipe.begin(START, now);
+        swipe.move_to(at(39., 0.), now);
+        assert!(swipe.is_swiping());
+        assert_eq!(swipe.offset(), point(px(39.), px(0.)));
+        assert_eq!(swipe.release(now), None);
+        assert!(!swipe.is_swiping());
+        assert_eq!(swipe.offset(), Point::default());
+
+        swipe.begin(START, now);
+        swipe.move_to(at(0., -40.), now);
+        assert_eq!(swipe.release(now), Some(SwipeDirection::Up));
+        // The exit continues from where the pointer let go.
+        assert_eq!(swipe.offset(), point(px(0.), px(-40.)));
+    }
+
+    #[test]
+    fn a_swipe_resists_and_never_leaves_in_a_direction_it_may_not() {
+        let now = Instant::now();
+        let mut swipe = ToastSwipe::new(SwipeDirection::off_screen(Anchor::TopRight));
+        swipe.begin(START, now);
+        let mut previous = px(0.);
+        for distance in [10., 40., 200., 2000.] {
+            swipe.move_to(at(-distance, 0.), now);
+            let shown = swipe.offset().x;
+            assert!(shown < previous, "a harder pull still gives a little");
+            assert!(shown > px(-SWIPE_RESISTANCE), "{shown:?} at {distance}");
+            assert!(-shown.as_f32() < distance);
+            previous = shown;
+        }
+        assert_eq!(swipe.release(now), None);
+        assert_eq!(swipe.offset(), Point::default());
+    }
+
+    #[test]
+    fn a_swipe_locks_to_the_axis_it_first_moves_along() {
+        let now = Instant::now();
+        let mut swipe = ToastSwipe::new([SwipeDirection::Down, SwipeDirection::Right]);
+        swipe.begin(START, now);
+
+        // Within the slop a press is still a press.
+        swipe.move_to(at(2., 1.), now);
+        assert_eq!(swipe.offset(), Point::default());
+        assert!(!swipe.has_moved());
+
+        swipe.move_to(at(10., 4.), now);
+        assert!(swipe.has_moved());
+        assert_eq!(swipe.offset(), point(px(10.), px(0.)));
+
+        // A later turn downward does not move it off the horizontal.
+        swipe.move_to(at(10., 80.), now);
+        assert_eq!(swipe.offset(), point(px(10.), px(0.)));
+        assert_eq!(swipe.release(now), None);
+        assert!(swipe.has_moved(), "the release is not also a click");
+
+        swipe.cancel();
+        swipe.begin(START, now);
+        swipe.move_to(at(0., 30.), now);
+        swipe.cancel();
+        assert!(!swipe.is_swiping());
+        assert_eq!(swipe.offset(), Point::default());
+    }
+
+    #[test]
+    fn a_flick_leaves_short_of_the_threshold_but_a_paused_or_tiny_one_does_not() {
+        let start = Instant::now();
+        let ms = Duration::from_millis;
+        let mut swipe = ToastSwipe::new([SwipeDirection::Right]);
+
+        // 15 px in 20 ms is 0.75 px/ms.
+        swipe.begin(START, start);
+        swipe.move_to(at(15., 0.), start + ms(20));
+        assert_eq!(swipe.release(start + ms(20)), Some(SwipeDirection::Right));
+
+        // The same drag held still before letting go has no speed left.
+        swipe.begin(START, start);
+        swipe.move_to(at(15., 0.), start + ms(20));
+        assert_eq!(swipe.release(start + ms(300)), None);
+
+        // Only the last stretch counts: a slow drag that ends in a fast one
+        // is a flick.
+        swipe.begin(START, start);
+        swipe.move_to(at(5., 0.), start + ms(400));
+        swipe.move_to(at(6., 0.), start + ms(800));
+        swipe.move_to(at(20., 0.), start + ms(820));
+        assert_eq!(swipe.release(start + ms(820)), Some(SwipeDirection::Right));
+
+        // A twitch is fast but too short to be meant.
+        swipe.begin(START, start);
+        swipe.move_to(at(6., 0.), start + ms(4));
+        assert_eq!(swipe.release(start + ms(4)), None);
+
+        // A flick back the other way is refused like any pull there.
+        swipe.begin(START, start);
+        swipe.move_to(at(-30., 0.), start + ms(20));
+        assert_eq!(swipe.release(start + ms(20)), None);
     }
 
     #[gpui::test]

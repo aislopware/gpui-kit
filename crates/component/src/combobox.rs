@@ -1,8 +1,8 @@
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, DismissEvent, Edges, ElementId, Entity,
-    EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, Length,
+    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent, Length,
     MouseDownEvent, ParentElement, Pixels, Render, RenderOnce, SharedString,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window, deferred, div,
+    StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Window, deferred, div,
     prelude::FluentBuilder, px, rems,
 };
 
@@ -11,8 +11,11 @@ pub use crate::select::Caret;
 use crate::ThemeStyled as _;
 use crate::{
     ActiveTheme, Disableable, ElementExt as _, Icon, IconName, IndexPath, Sizable, Size,
-    StyleSized, StyledExt, h_flex,
-    input::{clear_button, input_style},
+    StyleSized, StyledExt,
+    actions::{SelectFirst, SelectLast},
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    input::{Backspace, Input, InputEvent, InputState, MoveLeft, clear_button, input_style},
     list::{List, ListState},
     searchable_list::{
         SearchableListAdapter, SearchableListChange, SearchableListDelegate, SearchableListItem,
@@ -21,45 +24,7 @@ use crate::{
     sizing::DROPDOWN_LIST_PADDING,
     v_flex,
 };
-use gpui_base::{Combobox as BaseCombobox, GlobalState};
-
-// MARK: ComboboxTriggerContext
-
-/// Context passed to the `render_trigger` closure on [`Combobox`].
-///
-/// The fields are private and reached through the methods below, so that a new
-/// one can be added without breaking the trigger renderers.
-pub struct ComboboxTriggerContext<'a, D: SearchableListDelegate + 'static> {
-    selection: &'a [(IndexPath, D::Item)],
-    placeholder: Option<&'a SharedString>,
-    open: bool,
-    disabled: bool,
-    size: Size,
-}
-
-impl<'a, D: SearchableListDelegate + 'static> ComboboxTriggerContext<'a, D> {
-    /// The items currently selected, empty when the combobox has no value.
-    pub fn selection(&self) -> &'a [(IndexPath, D::Item)] {
-        self.selection
-    }
-
-    pub fn placeholder(&self) -> Option<&'a SharedString> {
-        self.placeholder
-    }
-
-    /// Whether the dropdown list is showing.
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    pub fn is_disabled(&self) -> bool {
-        self.disabled
-    }
-
-    pub fn size(&self) -> Size {
-        self.size
-    }
-}
+use gpui_base::{Combobox as BaseCombobox, GlobalState, HighlightStep};
 
 // MARK: ComboboxChange
 
@@ -73,7 +38,6 @@ struct ComboboxOptions {
     size: Size,
     cleanable: bool,
     placeholder: Option<SharedString>,
-    search_placeholder: Option<SharedString>,
     menu_width: Length,
     menu_max_h: Length,
     disabled: bool,
@@ -90,7 +54,6 @@ impl Default for ComboboxOptions {
             size: Size::default(),
             cleanable: false,
             placeholder: None,
-            search_placeholder: None,
             menu_width: Length::Auto,
             menu_max_h: rems(20.).into(),
             disabled: false,
@@ -105,22 +68,40 @@ impl Default for ComboboxOptions {
 // MARK: ComboboxState
 
 /// State of the [`Combobox`] component.
+///
+/// The combobox's text input sits in its field, as Base UI's `Combobox.Input`
+/// does: typing there filters the list and opens it, and the keyboard focus
+/// stays in the input while the arrows move the highlight. A single
+/// combobox's input shows the committed item's label while the list is
+/// closed; a multiple one shows each selected item as a chip before the input.
 pub struct ComboboxState<D: SearchableListDelegate + 'static>
 where
     <D::Item as SearchableListItem>::Value: PartialEq + Clone,
 {
     pub(crate) state: SearchableListState<D>,
 
-    // Combobox-specific fields
     multiple: bool,
-    searchable: bool,
+    /// The list's search input, drawn in the field rather than in the popup.
+    input: Entity<InputState>,
+    input_focus: FocusHandle,
+    /// The placeholder last given to the input, so it is set only on change.
+    input_placeholder: Option<SharedString>,
+    /// The committed label last written into the input, so a selection set
+    /// from outside reaches the field on the next draw.
+    synced_label: Option<SharedString>,
+    /// The field's text as last seen, so only a change to it counts as
+    /// typing: an edit that leaves it as it was (an unhandled Enter reaching
+    /// the input) opens nothing.
+    seen_text: SharedString,
+    /// Focus for the chip the keyboard is on; the chip at `focused_chip`
+    /// tracks it.
+    chip_focus: FocusHandle,
+    focused_chip: Option<usize>,
     trigger_icon: Option<Icon>,
     check_icon: Option<Icon>,
-    render_trigger: Option<
-        Box<dyn Fn(&ComboboxTriggerContext<D>, &mut Window, &mut App) -> AnyElement + 'static>,
-    >,
     footer: Option<Box<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>>,
     focus_ring_enabled: bool,
+    _subscriptions: Vec<Subscription>,
 }
 
 /// Events emitted by [`ComboboxState`].
@@ -133,6 +114,8 @@ where
     /// Emitted when the popover closes.
     Confirm(Vec<<D::Item as SearchableListItem>::Value>),
 }
+
+type Adapter<D> = SearchableListAdapter<D>;
 
 impl<D> ComboboxState<D>
 where
@@ -202,6 +185,20 @@ where
                                     .iter()
                                     .any(|(_, selected)| selected.value() == item.value()));
 
+                        // A closing list drops its filter; a multiple one that stays
+                        // open empties the field after each pick, as Base UI's does.
+                        // Either way the picked row was a place in the filtered list,
+                        // so each value is found again among every item. This goes
+                        // through `list_state` directly, for the same reason as above.
+                        if should_close {
+                            Self::drop_filter(list_state, &mut selection, window, cx);
+                        } else if multiple && !list_state.query_input.read(cx).value().is_empty() {
+                            list_state.set_query("", window, cx);
+                            Self::reindex(list_state, &mut selection);
+                            let picked = list_state.delegate().delegate.position(item.value());
+                            list_state.set_selected_index(picked, window, cx);
+                        }
+
                         let new_selection = weak_confirm.update(cx, |this, cx| {
                             this.state.selection = selection;
 
@@ -213,8 +210,10 @@ where
                             if should_close {
                                 cx.emit(ComboboxEvent::Confirm(this.selected_values()));
                                 this.set_open(false, cx);
-                                this.focus(window, cx);
+                                this.sync_input(window, cx);
                             }
+                            // A click on a row moved the focus into the list.
+                            this.focus(window, cx);
 
                             this.state.selection.clone()
                         });
@@ -239,15 +238,25 @@ where
             move |_final_selected_index, window, cx| {
                 cx.defer_in(window, {
                     let weak_cancel = weak_cancel.clone();
-                    move |_list_state, window, cx| {
-                        _ = weak_cancel.update(cx, |this, cx| {
-                            // Cancel propagates to the BaseCombobox, which may already
-                            // have confirmed and closed before this deferred callback.
-                            if !this.state.open {
-                                return;
-                            }
+                    move |list_state, window, cx| {
+                        let Some(this) = weak_cancel.upgrade() else {
+                            return;
+                        };
+                        // Cancel propagates to the BaseCombobox, which may already
+                        // have confirmed and closed before this deferred callback.
+                        if !this.read(cx).state.open {
+                            return;
+                        }
+                        let mut selection = this.read(cx).state.selection.clone();
+                        Self::drop_filter(list_state, &mut selection, window, cx);
+                        list_state
+                            .delegate_mut()
+                            .update_selection_snapshot(selection.clone());
+                        this.update(cx, |this, cx| {
+                            this.state.selection = selection;
                             cx.emit(ComboboxEvent::Confirm(this.selected_values()));
                             this.set_open(false, cx);
+                            this.sync_input(window, cx);
                             this.focus(window, cx);
                         });
                     }
@@ -274,30 +283,40 @@ where
             cx,
         );
 
+        let input = state.list.read(cx).query_input.clone();
+        let input_focus = input.focus_handle(cx);
+        let chip_focus = cx.focus_handle();
+        let _subscriptions = vec![
+            cx.subscribe_in(&input, window, Self::on_input_event),
+            cx.on_blur(&chip_focus, window, Self::on_blur),
+        ];
+
         Self {
             state,
             multiple: false,
-            searchable: false,
+            input,
+            input_focus,
+            input_placeholder: None,
+            synced_label: None,
+            seen_text: SharedString::default(),
+            chip_focus,
+            focused_chip: None,
             trigger_icon: None,
             check_icon: None,
-            render_trigger: None,
             footer: None,
             focus_ring_enabled: true,
+            _subscriptions,
         }
     }
 
     /// Enable multi-select mode.
     ///
-    /// When `true`, clicking an item toggles it in the selection and the popover stays open.
-    /// When `false` (default), clicking an item replaces the selection and closes the popover.
+    /// When `true`, each selected item shows as a chip before the input, and
+    /// picking an item toggles it and keeps the list open. When `false`
+    /// (default), picking an item replaces the selection, closes the list and
+    /// shows the item's label in the input.
     pub fn multiple(mut self, multiple: bool) -> Self {
         self.multiple = multiple;
-        self
-    }
-
-    /// Enable or disable the search input at the top of the dropdown.
-    pub fn searchable(mut self, searchable: bool) -> Self {
-        self.searchable = searchable;
         self
     }
 
@@ -396,17 +415,17 @@ where
         });
     }
 
-    /// Focus the trigger.
+    /// Focus the input in the field.
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
-        self.state.focus_handle.focus(window, cx);
+        self.input_focus.focus(window, cx);
     }
 
-    /// Returns the search query.
+    /// Returns the text in the field.
     pub fn query(&self, cx: &App) -> SharedString {
-        self.state.list.read(cx).query_input.read(cx).value()
+        self.input.read(cx).value()
     }
 
-    /// Sets the search query and updates the filtered items.
+    /// Sets the text in the field and filters the items by it.
     pub fn set_query(&self, query: impl Into<SharedString>, window: &mut Window, cx: &mut App) {
         let query = query.into();
         self.state.list.update(cx, |list, cx| {
@@ -438,6 +457,27 @@ where
             changes.push(SearchableListChange::Select { index: ix });
             changes
         }
+    }
+
+    /// Finds each selected value again in the list as it is filtered now.
+    fn reindex(list: &ListState<Adapter<D>>, selection: &mut [(IndexPath, D::Item)]) {
+        for (index, item) in selection.iter_mut() {
+            if let Some(position) = list.delegate().delegate.position(item.value()) {
+                *index = position;
+            }
+        }
+    }
+
+    /// Shows every item again, leaving the text in the field alone, and finds
+    /// each selected value among them.
+    fn drop_filter(
+        list: &mut ListState<Adapter<D>>,
+        selection: &mut [(IndexPath, D::Item)],
+        window: &mut Window,
+        cx: &mut Context<ListState<Adapter<D>>>,
+    ) {
+        list.search("", window, cx);
+        Self::reindex(list, selection);
     }
 
     /// Process an item click: single-select replaces the selection and closes; multi-select toggles.
@@ -502,42 +542,284 @@ where
             });
 
             cx.emit(ComboboxEvent::Confirm(self.selected_values()));
-            self.set_open(false, cx);
-            self.focus(window, cx);
+            self.close_menu(window, cx);
         }
+        self.focus(window, cx);
     }
 
     fn on_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.state.list.read(cx).is_focused(window, cx)
+            || self.input_focus.is_focused(window)
+            || self.chip_focus.is_focused(window)
             || self.state.focus_handle.is_focused(window)
         {
             return;
         }
 
-        self.set_open(false, cx);
+        self.focused_chip = None;
+        if self.state.open {
+            self.close_menu(window, cx);
+        }
         cx.notify();
     }
 
+    /// Typing in the field opens the list; the list filters itself by the
+    /// same change.
+    fn on_input_event(
+        &mut self,
+        _: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event, InputEvent::Change) {
+            let text = self.input.read(cx).value();
+            if text == self.seen_text {
+                return;
+            }
+            self.seen_text = text;
+            // The list has already filtered itself by the new text; the
+            // highlight goes to the first match, as Enter is expected to
+            // commit it.
+            self.open_menu(false, window, cx);
+            self.highlight(HighlightStep::SelectedOrFirst, window, cx);
+        }
+    }
+
+    /// A press on the field puts the caret in the input and opens the list,
+    /// as Base UI's input does; it never closes an open list.
+    fn open_from_field(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        self.focus_input(window, cx);
+        self.open_menu(true, window, cx);
+    }
+
+    /// The caret toggles the list.
     fn toggle_menu(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
-
-        self.set_open(!self.state.open, cx);
-
+        self.focus_input(window, cx);
         if self.state.open {
-            self.state.list.focus_handle(cx).focus(window, cx);
-        } else {
             cx.emit(ComboboxEvent::Confirm(self.selected_values()));
-            self.focus(window, cx);
+            self.close_menu(window, cx);
+        } else {
+            self.open_menu(true, window, cx);
         }
+    }
 
+    /// Opens the list. `highlight_committed` puts the highlight on a single
+    /// combobox's committed item, which an opening by typing leaves to the
+    /// filter.
+    fn open_menu(
+        &mut self,
+        highlight_committed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.open || self.state.disabled {
+            return;
+        }
+        self.set_open(true, cx);
+        if highlight_committed {
+            let committed = (!self.multiple)
+                .then(|| self.state.selection.first().map(|(ix, _)| *ix))
+                .flatten();
+            self.state.list.update(cx, |list, cx| {
+                list.set_selected_index(committed, window, cx);
+            });
+        }
+    }
+
+    /// Closes the list, shows every item again for the next opening, and
+    /// puts the committed label back in the field.
+    fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_open(false, cx);
+        let mut selection = std::mem::take(&mut self.state.selection);
+        self.state.list.update(cx, |list, cx| {
+            Self::drop_filter(list, &mut selection, window, cx);
+        });
+        self.state.selection = selection;
+        self.state.sync_snapshot(cx);
+        self.sync_input(window, cx);
+    }
+
+    /// Moves the highlight as the arrow keys ask, the caret staying put.
+    fn highlight(&mut self, step: HighlightStep, window: &mut Window, cx: &mut Context<Self>) {
+        // With nothing highlighted, Down starts at the first item and Up at
+        // the last, whether or not the list has been drawn yet.
+        self.state.list.update(cx, |list, cx| {
+            let highlighted = list.selected_index().is_some();
+            match step {
+                HighlightStep::Next if highlighted => list.step_highlight(true, window, cx),
+                HighlightStep::Previous if highlighted => list.step_highlight(false, window, cx),
+                HighlightStep::SelectedOrFirst | HighlightStep::SelectedOrLast if highlighted => {
+                    list.scroll_to_selected_item(window, cx)
+                }
+                HighlightStep::Next | HighlightStep::SelectedOrFirst => {
+                    list.on_action_select_first(&SelectFirst, window, cx)
+                }
+                HighlightStep::Previous | HighlightStep::SelectedOrLast => {
+                    list.on_action_select_last(&SelectLast, window, cx)
+                }
+            }
+        });
+    }
+
+    /// Commits the highlighted item, as Enter does.
+    fn confirm_highlighted(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.state.list.update(cx, |list, cx| {
+            list.confirm_highlighted(false, window, cx);
+        });
+    }
+
+    /// Whether Escape in the closed combobox has anything to clear.
+    fn has_text_or_value(&self, cx: &App) -> bool {
+        !self.input.read(cx).value().is_empty()
+            || (!self.multiple && !self.state.selection.is_empty())
+    }
+
+    /// Escape in a closed combobox: empty the field and, in a single
+    /// combobox whose field shows its value, drop the value too.
+    fn clear_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.multiple && !self.state.selection.is_empty() {
+            self.clear_selection(cx);
+        }
+        self.state
+            .list
+            .update(cx, |list, cx| list.set_query("", window, cx));
+        self.sync_input(window, cx);
         cx.notify();
+    }
+
+    /// The text a closed field shows: the committed item's label in a single
+    /// combobox, nothing in a multiple one, whose chips show the selection.
+    fn committed_label(&self) -> SharedString {
+        if self.multiple {
+            return SharedString::default();
+        }
+        self.state
+            .selection
+            .first()
+            .map(|(_, item)| item.title())
+            .unwrap_or_default()
+    }
+
+    /// Puts the committed label in the field, over whatever was typed.
+    fn sync_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let label = self.committed_label();
+        if self.input.read(cx).value() != label {
+            self.input
+                .update(cx, |input, cx| input.set_value(label.clone(), window, cx));
+        }
+        self.seen_text = label.clone();
+        self.synced_label = Some(label);
+    }
+
+    fn focus_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focused_chip.take().is_some() {
+            cx.notify();
+        }
+        self.input_focus.focus(window, cx);
+    }
+
+    fn focus_chip(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.focused_chip = Some(ix);
+        self.chip_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Removes the chip at `ix`, as its remove button, Backspace or Delete do.
+    ///
+    /// The delegate is asked first, through the row the value has in the list
+    /// as it is filtered now; a value the filter hides is removed outright.
+    fn remove_chip(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some((_, item)) = self.state.selection.get(ix).cloned() else {
+            return;
+        };
+        let before = self.selected_values();
+        let mut selection = self.state.selection.clone();
+        self.state.list.update(cx, |list, _| {
+            let delegate = &mut list.delegate_mut().delegate;
+            match delegate.position(item.value()) {
+                Some(index) => delegate
+                    .on_will_change(&mut selection, &[SearchableListChange::Deselect { index }]),
+                None => selection.retain(|(_, selected)| selected.value() != item.value()),
+            }
+        });
+        self.state.selection = selection;
+        self.state.sync_snapshot(cx);
+        if self.selected_values() != before {
+            cx.emit(ComboboxEvent::Change(self.selected_values()));
+        }
+        cx.notify();
+    }
+
+    /// Left at the start of the input moves onto the last chip.
+    fn on_move_left(&mut self, _: &MoveLeft, window: &mut Window, cx: &mut Context<Self>) {
+        let chips = self.state.selection.len();
+        if !self.multiple || chips == 0 || self.focused_chip.is_some() {
+            cx.propagate();
+            return;
+        }
+        self.focus_chip(chips - 1, window, cx);
+    }
+
+    /// Backspace in an empty input removes the last chip.
+    fn on_backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
+        let chips = self.state.selection.len();
+        if !self.multiple || chips == 0 || !self.input.read(cx).value().is_empty() {
+            cx.propagate();
+            return;
+        }
+        self.remove_chip(chips - 1, cx);
+    }
+
+    /// Left and Right move across the chips and back into the input;
+    /// Backspace and Delete remove the focused chip.
+    fn on_chip_key_down(
+        &mut self,
+        ix: usize,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let modifiers = &event.keystroke.modifiers;
+        if modifiers.control || modifiers.platform || modifiers.alt || modifiers.shift {
+            return;
+        }
+        let chips = self.state.selection.len();
+        match event.keystroke.key.as_str() {
+            "left" => {
+                if ix > 0 {
+                    self.focus_chip(ix - 1, window, cx);
+                }
+            }
+            "right" if ix + 1 < chips => self.focus_chip(ix + 1, window, cx),
+            "right" => self.focus_input(window, cx),
+            key @ ("backspace" | "delete") => {
+                self.remove_chip(ix, cx);
+                let chips = self.state.selection.len();
+                // Backspace goes back a chip, Delete stays where it was;
+                // with no chip left the keyboard returns to the input.
+                let next = if key == "backspace" {
+                    ix.saturating_sub(1)
+                } else {
+                    ix
+                };
+                if chips == 0 {
+                    self.focus_input(window, cx);
+                } else {
+                    self.focus_chip(next.min(chips - 1), window, cx);
+                }
+            }
+            _ => return,
+        }
+        cx.stop_propagation();
     }
 
     /// Close the menu when a press lands outside the popup.
     ///
-    /// A press on the trigger is left to propagate: swallowing it here would keep nested
-    /// controls (a tag remove button, the clear button) from ever seeing the press, and
-    /// `toggle_menu` closes the menu on release anyway.
+    /// A press on the field is left to propagate: swallowing it here would keep nested
+    /// controls (a chip's remove button, the clear button) from ever seeing the press.
     fn dismiss(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if !self.state.open || self.state.bounds.contains(&event.position) {
             return;
@@ -546,8 +828,7 @@ where
         cx.stop_propagation();
         cx.emit(ComboboxEvent::Confirm(self.selected_values()));
 
-        self.set_open(false, cx);
-        self.focus(window, cx);
+        self.close_menu(window, cx);
         cx.notify();
     }
 
@@ -558,56 +839,76 @@ where
         cx.notify();
     }
 
-    fn clean(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn clean(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         self.clear_selection(cx);
+        self.sync_input(window, cx);
     }
 
-    fn default_trigger_body(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let placeholder_text = self
-            .state
-            .placeholder
-            .clone()
-            .unwrap_or_else(|| "Please select".into());
-
-        if self.state.selection.is_empty() {
-            return div()
-                .text_color(cx.theme().muted_foreground)
-                .child(placeholder_text)
-                .into_any_element();
-        }
-
-        if self.multiple {
-            let items: Vec<SharedString> = self
-                .state
-                .selection
-                .iter()
-                .map(|(_, i)| i.title())
-                .collect();
-
-            div()
-                .w_full()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .truncate()
-                .child(items.join(", "))
-                .into_any_element()
+    /// Gives the input the placeholder the field shows: none once a multiple
+    /// combobox has chips to show instead.
+    fn sync_input_placeholder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let placeholder = if self.multiple && !self.state.selection.is_empty() {
+            SharedString::default()
         } else {
-            let title = self
-                .state
-                .selection
-                .first()
-                .map(|(_, i)| i.title())
-                .unwrap_or_default();
-
-            div()
-                .w_full()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .truncate()
-                .child(title)
-                .into_any_element()
+            self.state
+                .placeholder
+                .clone()
+                .unwrap_or_else(|| "Please select".into())
+        };
+        if self.input_placeholder.as_ref() != Some(&placeholder) {
+            self.input.update(cx, |input, cx| {
+                input.set_placeholder(placeholder.clone(), window, cx)
+            });
+            self.input_placeholder = Some(placeholder);
         }
+    }
+
+    fn render_chips(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let focused_chip = self.focused_chip;
+        let disabled = self.state.disabled;
+        self.state
+            .selection
+            .iter()
+            .enumerate()
+            .map(|(ix, (_, item))| {
+                let title = item.title();
+                let focused = focused_chip == Some(ix);
+                h_flex()
+                    .id(("chip", ix))
+                    .flex_shrink_0()
+                    .min_w_0()
+                    .gap_0p5()
+                    .items_center()
+                    .rounded(cx.theme().radius / 2.)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .pl_1()
+                    .text_xs()
+                    .when(focused, |this| {
+                        this.track_focus(&self.chip_focus)
+                            .border_color(cx.theme().ring)
+                    })
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                        this.on_chip_key_down(ix, event, window, cx);
+                    }))
+                    .child(div().truncate().child(title.clone()))
+                    .child(
+                        Button::new(("chip-remove", ix))
+                            .ghost()
+                            .xsmall()
+                            .icon(Icon::new(IconName::Close).xsmall())
+                            .accessibility_label(format!("Remove {title}"))
+                            .tab_stop(false)
+                            .disabled(disabled)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.remove_chip(ix, cx);
+                            })),
+                    )
+                    .into_any_element()
+            })
+            .collect()
     }
 }
 
@@ -617,45 +918,34 @@ where
     <D::Item as SearchableListItem>::Value: PartialEq + Clone,
 {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let searchable = self.searchable;
-        let is_focused = self.state.focus_handle.is_focused(window);
+        let multiple = self.multiple;
+        let disabled = self.state.disabled;
+        let field_focused = self.state.focus_handle.contains_focused(window, cx);
         let show_clean = self.state.cleanable && !self.state.selection.is_empty();
         let bounds = self.state.bounds;
-        let allow_open = !self.state.disabled;
-        let outline_visible = self.state.open || (is_focused && !self.state.disabled);
-        let disabled = self.state.disabled;
+        let outline_visible = self.state.open || (field_focused && !disabled);
+        let size = self.state.size;
 
         let (bg, fg) = input_style(disabled, cx);
 
         self.state.list.update(cx, |list, cx| {
-            list.set_searchable(searchable, cx);
-            list.delegate_mut().size = self.state.size;
+            list.set_searchable(false, cx);
+            list.delegate_mut().size = size;
             list.delegate_mut().check_icon = self.check_icon.clone();
         });
+        self.sync_input_placeholder(window, cx);
+        // A selection set from outside reaches a closed field here.
+        if !self.state.open && self.synced_label.as_ref() != Some(&self.committed_label()) {
+            self.sync_input(window, cx);
+        }
 
-        let selection = &self.state.selection;
-        let placeholder = self.state.placeholder.as_ref();
-        let open = self.state.open;
-        let size = self.state.size;
-        let has_custom_trigger = self.render_trigger.is_some();
-
-        let trigger_body = if let Some(render_trigger) = &self.render_trigger {
-            let trigger = ComboboxTriggerContext {
-                selection,
-                placeholder,
-                open,
-                disabled,
-                size,
-            };
-
-            render_trigger(&trigger, window, cx)
+        let chips = if multiple {
+            self.render_chips(cx)
         } else {
-            self.default_trigger_body(window, cx)
+            Vec::new()
         };
 
-        let trailing: AnyElement = if has_custom_trigger {
-            div().into_any_element()
-        } else if show_clean {
+        let trailing: AnyElement = if show_clean {
             clear_button(cx)
                 .map(|this| {
                     if disabled {
@@ -665,22 +955,89 @@ where
                     }
                 })
                 .into_any_element()
-        } else if let Some(icon) = self.trigger_icon.clone() {
-            icon.xsmall()
-                .text_color(cx.theme().muted_foreground)
-                .into_any_element()
         } else {
-            Caret::new(size)
-                .text_color(cx.theme().muted_foreground)
+            let icon = match self.trigger_icon.clone() {
+                Some(icon) => icon
+                    .xsmall()
+                    .text_color(cx.theme().muted_foreground)
+                    .into_any_element(),
+                None => Caret::new(size)
+                    .text_color(cx.theme().muted_foreground)
+                    .into_any_element(),
+            };
+            div()
+                .id("caret")
+                .flex_shrink_0()
+                .when(!disabled, |this| {
+                    this.on_click(cx.listener(Self::toggle_menu))
+                })
+                .child(icon)
                 .into_any_element()
         };
 
-        let toggle_handler: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>> =
-            if allow_open {
-                Some(Box::new(cx.listener(Self::toggle_menu)))
-            } else {
-                None
-            };
+        let field = div()
+            .id("input")
+            .relative()
+            .flex()
+            .items_center()
+            .justify_between()
+            .border_1()
+            .border_color(cx.theme().transparent)
+            .when(self.state.appearance, |this| {
+                this.bg(bg)
+                    .text_color(fg)
+                    .when(disabled, |this| this.opacity(0.5))
+                    .border_color(cx.theme().input)
+                    .rounded(cx.theme().radius)
+            })
+            .input_size(size)
+            .input_text_size(size)
+            // Chips wrap, so a multiple field grows from the single height.
+            .when(multiple, |this| {
+                this.h_auto().min_h(field_min_height(size)).py_1()
+            })
+            .refine_style(&self.state.style)
+            .when(outline_visible && self.state.appearance, |this| {
+                this.border_1().border_color(cx.theme().ring)
+            })
+            .when(
+                outline_visible && self.state.appearance && self.focus_ring_enabled,
+                |this| this.focus_ring_style(window, cx),
+            )
+            .when(!disabled, |this| {
+                this.on_click(cx.listener(Self::open_from_field))
+            })
+            .on_action(cx.listener(Self::on_move_left))
+            .on_action(cx.listener(Self::on_backspace))
+            .child(
+                h_flex()
+                    .id("inner")
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .justify_between()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .items_center()
+                            .gap_1()
+                            .when(multiple, |this| this.flex_wrap())
+                            .children(chips)
+                            .child(
+                                div().flex_1().min_w(px(48.)).child(
+                                    Input::new(&self.input)
+                                        .appearance(false)
+                                        .with_size(size)
+                                        .disabled(disabled)
+                                        .p_0()
+                                        .h_auto(),
+                                ),
+                            ),
+                    )
+                    .child(trailing),
+            );
 
         let footer_el = self.footer.as_ref().map(|f| f(window, cx));
 
@@ -694,29 +1051,13 @@ where
                     let state = cx.entity();
                     move |bounds, _, cx| state.update(cx, |r, _| r.state.bounds = bounds)
                 })
-                .child(render_trigger_container(
-                    disabled,
-                    self.state.appearance,
-                    self.focus_ring_enabled,
-                    self.state.size,
-                    &self.state.style,
-                    bg,
-                    fg,
-                    outline_visible,
-                    allow_open,
-                    trigger_body,
-                    trailing,
-                    toggle_handler,
-                    window,
-                    cx,
-                ))
+                .child(field)
                 .when(self.state.open, |this| {
                     this.child(
                         deferred(render_popup_shell(
                             ("combobox-popup", cx.entity_id()),
                             &self.state.list,
                             self.state.menu_width,
-                            self.state.search_placeholder.clone(),
                             self.state.size,
                             self.state.menu_max_h,
                             bounds,
@@ -729,6 +1070,18 @@ where
                 }),
         )
     }
+}
+
+/// The least height of a field whose chips wrap: the single field's height.
+fn field_min_height(size: Size) -> Length {
+    match size {
+        Size::Large => rems(2.75),
+        Size::Medium => rems(2.),
+        Size::Small => rems(1.5),
+        Size::XSmall => rems(1.25),
+        _ => rems(1.5),
+    }
+    .into()
 }
 
 impl<D> EventEmitter<ComboboxEvent<D>> for ComboboxState<D>
@@ -749,21 +1102,20 @@ where
     D: SearchableListDelegate + 'static,
     <D::Item as SearchableListItem>::Value: PartialEq + Clone,
 {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        if self.state.open {
-            self.state.list.focus_handle(cx)
-        } else {
-            self.state.focus_handle.clone()
-        }
+    /// The input in the field, which keeps the focus while the list is open.
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.input_focus.clone()
     }
 }
 
 // MARK: Combobox element
 
-/// A combo box with support for single and multi-select.
+/// A combo box with its text input in the field, for single and multiple
+/// selection.
 ///
-/// Clicking an item toggles it in the selection; the dropdown stays open until the user
-/// presses Escape or clicks outside.
+/// Typing filters the list and opens it; Down and Up open it and move the
+/// highlight while the caret stays in the input; Enter commits the
+/// highlighted item; Escape closes the list, then clears the field.
 #[derive(IntoElement)]
 pub struct Combobox<D: SearchableListDelegate + 'static>
 where
@@ -772,9 +1124,6 @@ where
     id: ElementId,
     state: Entity<ComboboxState<D>>,
     options: ComboboxOptions,
-    render_trigger: Option<
-        Box<dyn Fn(&ComboboxTriggerContext<D>, &mut Window, &mut App) -> AnyElement + 'static>,
-    >,
     footer: Option<Box<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>>,
     empty: Option<Box<dyn Fn(&mut Window, &App) -> AnyElement + 'static>>,
 }
@@ -789,7 +1138,6 @@ where
             id: ("multi-combo-box", state.entity_id()).into(),
             state: state.clone(),
             options: ComboboxOptions::default(),
-            render_trigger: None,
             footer: None,
             empty: None,
         }
@@ -807,7 +1155,7 @@ where
         self
     }
 
-    /// Set the placeholder text shown when no items are selected.
+    /// Set the placeholder the input shows while the field is empty.
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.options.placeholder = Some(placeholder.into());
         self
@@ -822,12 +1170,6 @@ where
     /// Override the trailing check icon shown next to selected items.
     pub fn check_icon(mut self, icon: impl Into<Icon>) -> Self {
         self.options.check_icon = Some(icon.into());
-        self
-    }
-
-    /// Set the placeholder text for the search input.
-    pub fn search_placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
-        self.options.search_placeholder = Some(placeholder.into());
         self
     }
 
@@ -857,17 +1199,6 @@ where
     /// Control whether the trigger shows a border and background.
     pub fn appearance(mut self, appearance: bool) -> Self {
         self.options.appearance = appearance;
-        self
-    }
-
-    /// Override the entire trigger element.
-    pub fn render_trigger<E: IntoElement + 'static>(
-        mut self,
-        f: impl Fn(&ComboboxTriggerContext<D>, &mut Window, &mut App) -> E + 'static,
-    ) -> Self {
-        self.render_trigger = Some(Box::new(move |trigger, window, cx| {
-            f(trigger, window, cx).into_any_element()
-        }));
         self
     }
 
@@ -925,7 +1256,6 @@ where
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let disabled = self.options.disabled;
         let focus_handle = self.state.read(cx).state.focus_handle.clone();
-        let render_trigger = self.render_trigger;
         let footer = self.footer;
         let empty = self.empty;
         let opts = self.options;
@@ -935,7 +1265,6 @@ where
             this.state.size = opts.size;
             this.state.cleanable = opts.cleanable;
             this.state.placeholder = opts.placeholder;
-            this.state.search_placeholder = opts.search_placeholder;
             this.state.menu_width = opts.menu_width;
             this.state.menu_max_h = opts.menu_max_h;
             this.state.disabled = opts.disabled;
@@ -943,7 +1272,6 @@ where
             this.focus_ring_enabled = opts.focus_ring_enabled;
             this.trigger_icon = opts.trigger_icon;
             this.check_icon = opts.check_icon;
-            this.render_trigger = render_trigger;
             this.footer = footer;
 
             if let Some(empty) = empty {
@@ -952,24 +1280,44 @@ where
         });
 
         let is_open = self.state.read(cx).state.open;
-        let content_focus_handle = self.state.read(cx).state.list.focus_handle(cx);
+        let clearable = !is_open && self.state.read(cx).has_text_or_value(cx);
         let open_state = self.state.clone();
+        let highlight_state = self.state.clone();
         let confirm_state = self.state.clone();
+        let dismiss_state = self.state.clone();
+        let clear_state = self.state.clone();
 
         BaseCombobox::new(self.id)
             .open(is_open)
             .disabled(disabled)
             .focus_handle(&focus_handle)
-            .content_focus_handle(&content_focus_handle)
-            .on_open_change(move |open, _, cx| {
-                open_state.update(cx, |state, cx| state.set_open(open, cx));
+            .on_open_change(move |open, window, cx| {
+                open_state.update(cx, |state, cx| {
+                    if open {
+                        state.open_menu(true, window, cx);
+                    } else {
+                        state.close_menu(window, cx);
+                        state.focus(window, cx);
+                    }
+                });
+            })
+            .on_highlight(move |step, window, cx| {
+                highlight_state.update(cx, |state, cx| state.highlight(step, window, cx));
+            })
+            .on_confirm(move |window, cx| {
+                confirm_state.update(cx, |state, cx| state.confirm_highlighted(window, cx));
             })
             // This combobox commits its pending selection when the popup
-            // closes, so it listens for dismissal rather than Confirm.
+            // closes, so it reports dismissal as a Confirm.
             .on_dismiss(move |_, cx| {
-                confirm_state.update(cx, |state, cx| {
+                dismiss_state.update(cx, |state, cx| {
                     cx.emit(ComboboxEvent::Confirm(state.selected_values()));
                 });
+            })
+            .when(clearable, |this| {
+                this.on_clear(move |window, cx| {
+                    clear_state.update(cx, |state, cx| state.clear_field(window, cx));
+                })
             })
             .size_full()
             .child(self.state)
@@ -978,81 +1326,12 @@ where
 
 // MARK: Rendering helpers
 
-/// Renders the styled trigger container.
-#[allow(clippy::too_many_arguments)]
-fn render_trigger_container(
-    disabled: bool,
-    appearance: bool,
-    focus_ring_enabled: bool,
-    size: Size,
-    style: &StyleRefinement,
-    bg: Hsla,
-    fg: Hsla,
-    outline_visible: bool,
-    allow_open: bool,
-    trigger_body: AnyElement,
-    trailing: AnyElement,
-    toggle_handler: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
-    window: &Window,
-    cx: &mut App,
-) -> impl IntoElement {
-    div()
-        .id("input")
-        .relative()
-        .flex()
-        .items_center()
-        .justify_between()
-        .border_1()
-        .border_color(cx.theme().transparent)
-        .when(appearance, |this| {
-            this.bg(bg)
-                .text_color(fg)
-                .when(disabled, |this| this.opacity(0.5))
-                .border_color(cx.theme().input)
-                .rounded(cx.theme().radius)
-        })
-        .input_size(size)
-        .input_text_size(size)
-        .refine_style(style)
-        .when(outline_visible && appearance, |this| {
-            this.border_1().border_color(cx.theme().ring)
-        })
-        .when(
-            outline_visible && appearance && focus_ring_enabled,
-            |this| this.focus_ring_style(window, cx),
-        )
-        .when(allow_open, |this| {
-            this.when_some(toggle_handler, |this, handler| this.on_click(handler))
-        })
-        .child(
-            h_flex()
-                .id("inner")
-                .w_full()
-                .min_w_0()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .items_center()
-                .justify_between()
-                .gap_1()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .child(trigger_body),
-                )
-                .child(trailing),
-        )
-}
-
-/// Renders the deferred anchored popup shell containing the searchable list and optional footer.
+/// Renders the deferred anchored popup shell containing the list and optional footer.
 #[allow(clippy::too_many_arguments)]
 fn render_popup_shell<D: SearchableListDelegate + 'static>(
     id: impl Into<ElementId>,
     list: &Entity<ListState<SearchableListAdapter<D>>>,
     menu_width: Length,
-    search_placeholder: Option<SharedString>,
     size: Size,
     menu_max_h: Length,
     bounds: Bounds<Pixels>,
@@ -1074,9 +1353,6 @@ fn render_popup_shell<D: SearchableListDelegate + 'static>(
             .popover_style(cx)
             .child(
                 List::new(list)
-                    .when_some(search_placeholder, |this, placeholder| {
-                        this.search_placeholder(placeholder)
-                    })
                     .with_size(size)
                     .max_h(menu_max_h)
                     .paddings(Edges::all(DROPDOWN_LIST_PADDING)),
@@ -1148,11 +1424,10 @@ mod tests {
         let cx = cx.add_empty_window();
         cx.update(|window, cx| {
             let items = SearchableVec::new(vec!["Rust", "Go", "C++"]);
-            let state = cx.new(|cx| ComboboxState::new(items, vec![], window, cx).searchable(true));
+            let state = cx.new(|cx| ComboboxState::new(items, vec![], window, cx));
 
             let _cb = Combobox::new(&state)
                 .placeholder("Select language")
-                .search_placeholder("Search...")
                 .menu_width(gpui::px(300.))
                 .menu_max_h(gpui::rems(15.))
                 .cleanable(true)
@@ -1167,7 +1442,7 @@ mod tests {
         let cx = cx.add_empty_window();
         cx.update(|window, cx| {
             let items = SearchableVec::new(vec!["Rust", "Go", "C++"]);
-            let state = cx.new(|cx| ComboboxState::new(items, vec![], window, cx).searchable(true));
+            let state = cx.new(|cx| ComboboxState::new(items, vec![], window, cx));
 
             let count_before = state
                 .read(cx)
@@ -1206,7 +1481,7 @@ mod tests {
         let cx = cx.add_empty_window();
         cx.update(|window, cx| {
             let items = SearchableVec::new(vec!["Rust", "Go", "C++"]);
-            let state = cx.new(|cx| ComboboxState::new(items, vec![], window, cx).searchable(true));
+            let state = cx.new(|cx| ComboboxState::new(items, vec![], window, cx));
 
             state.update(cx, |state, cx| state.set_query(" Rust ", window, cx));
 
@@ -1232,14 +1507,11 @@ mod tests {
         cx.update(|window, cx| {
             let items = SearchableVec::new(vec!["React", "Vue", "Angular"]);
             let state = cx.new(|cx| {
-                ComboboxState::new(items, vec![IndexPath::new(0)], window, cx)
-                    .multiple(true)
-                    .searchable(true)
+                ComboboxState::new(items, vec![IndexPath::new(0)], window, cx).multiple(true)
             });
 
             let _cb = Combobox::new(&state)
                 .placeholder("Select frameworks")
-                .search_placeholder("Search...")
                 .menu_width(gpui::px(300.))
                 .cleanable(true)
                 .disabled(false);
@@ -1701,7 +1973,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn test_combo_box_dismiss_ignores_press_on_trigger(cx: &mut TestAppContext) {
+    fn test_combo_box_dismiss_ignores_press_on_field(cx: &mut TestAppContext) {
         cx.update(crate::init);
         let cx = cx.add_empty_window();
         let state = cx.update(|window, cx| {
@@ -1724,8 +1996,7 @@ mod tests {
         cx.update(|_, cx| {
             assert!(
                 state.read(cx).state.open,
-                "a press on the trigger must reach nested controls, so the menu stays open \
-                 and `toggle_menu` closes it on release instead",
+                "a press on the field must reach nested controls, so the list stays open",
             );
             assert_eq!(collector.read(cx).event_count.get(), 0);
         });
@@ -1741,7 +2012,7 @@ mod tests {
             assert_eq!(
                 collector.read(cx).event_count.get(),
                 1,
-                "dismissing from outside the trigger emits Confirm",
+                "dismissing from outside the field emits Confirm",
             );
         });
     }
@@ -1766,7 +2037,6 @@ mod tests {
                     window,
                     cx,
                 )
-                .searchable(true)
             })
         });
         let collector = cx.update(|_, cx| cx.new(|cx| TestComboboxEventCollector::new(&state, cx)));
@@ -1920,6 +2190,352 @@ mod tests {
                 cx.update(|window, cx| window.draw(cx).clear(cx));
             }
             assert_eq!(renders.get(), rendered, "the page was built again");
+        }
+    }
+
+    /// The input in the field, driven from the keyboard as Base UI's is.
+    mod in_field {
+        use std::time::Duration;
+
+        use gpui::{
+            AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _,
+            Render, Styled as _, TestAppContext, VisualTestContext, Window, div, px,
+        };
+
+        use crate::{
+            IndexPath,
+            combobox::{Combobox, ComboboxState},
+            searchable_list::{SearchableListDelegate as _, SearchableVec},
+        };
+
+        type Languages = SearchableVec<&'static str>;
+
+        struct Form {
+            state: Entity<ComboboxState<Languages>>,
+        }
+
+        impl Render for Form {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .child(div().w(px(240.)).child(Combobox::new(&self.state)))
+            }
+        }
+
+        /// A combobox of four languages with `selected` chosen and the caret
+        /// in its input.
+        fn form<'a>(
+            cx: &'a mut TestAppContext,
+            multiple: bool,
+            selected: &[usize],
+        ) -> (Entity<ComboboxState<Languages>>, &'a mut VisualTestContext) {
+            cx.update(crate::init);
+            let selected: Vec<_> = selected.iter().map(|&ix| IndexPath::new(ix)).collect();
+            let (form, cx) = cx.add_window_view(move |window, cx| {
+                let items = SearchableVec::new(vec!["Rust", "Go", "Ruby", "C++"]);
+                Form {
+                    state: cx.new(|cx| {
+                        ComboboxState::new(items, selected, window, cx).multiple(multiple)
+                    }),
+                }
+            });
+            let state = form.read_with(cx, |form, _| form.state.clone());
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+                let input = state.read(cx).focus_handle(cx);
+                input.focus(window, cx);
+                window.draw(cx).clear(cx);
+            });
+            (state, cx)
+        }
+
+        /// Runs what the last keys started, the list's search and the
+        /// deferred commit among it, and draws the result.
+        fn settle(cx: &mut VisualTestContext) {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            cx.run_until_parked();
+            cx.executor().advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+
+        fn is_open(state: &Entity<ComboboxState<Languages>>, cx: &mut VisualTestContext) -> bool {
+            state.read_with(cx, |state, _| state.state.open)
+        }
+
+        fn query(state: &Entity<ComboboxState<Languages>>, cx: &mut VisualTestContext) -> String {
+            state.read_with(cx, |state, cx| state.query(cx).to_string())
+        }
+
+        fn values(
+            state: &Entity<ComboboxState<Languages>>,
+            cx: &mut VisualTestContext,
+        ) -> Vec<&'static str> {
+            state.read_with(cx, |state, _| state.selected_values())
+        }
+
+        fn highlighted(
+            state: &Entity<ComboboxState<Languages>>,
+            cx: &mut VisualTestContext,
+        ) -> Option<IndexPath> {
+            state.read_with(cx, |state, cx| state.state.list.read(cx).selected_index())
+        }
+
+        /// The items the list shows as it is filtered now.
+        fn shown(
+            state: &Entity<ComboboxState<Languages>>,
+            cx: &mut VisualTestContext,
+        ) -> Vec<&'static str> {
+            state.read_with(cx, |state, cx| {
+                let list = state.state.list.read(cx);
+                let delegate = &list.delegate().delegate;
+                (0..delegate.items_count(0))
+                    .filter_map(|row| delegate.item(IndexPath::new(row)).copied())
+                    .collect()
+            })
+        }
+
+        fn input_focused(
+            state: &Entity<ComboboxState<Languages>>,
+            cx: &mut VisualTestContext,
+        ) -> bool {
+            cx.update(|window, cx| state.read(cx).focus_handle(cx).is_focused(window))
+        }
+
+        /// The chip that has the keyboard focus, if one has.
+        fn focused_chip(
+            state: &Entity<ComboboxState<Languages>>,
+            cx: &mut VisualTestContext,
+        ) -> Option<usize> {
+            cx.update(|window, cx| {
+                let state = state.read(cx);
+                state
+                    .focused_chip
+                    .filter(|_| state.chip_focus.is_focused(window))
+            })
+        }
+
+        #[gpui::test]
+        fn typing_opens_the_list_filtered_by_the_text(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, false, &[]);
+            cx.simulate_keystrokes("r u");
+            settle(cx);
+
+            assert!(is_open(&state, cx));
+            assert_eq!(query(&state, cx), "ru");
+            assert_eq!(shown(&state, cx), ["Rust", "Ruby"]);
+            assert_eq!(highlighted(&state, cx), Some(IndexPath::new(0)));
+            assert!(input_focused(&state, cx));
+        }
+
+        #[gpui::test]
+        fn arrows_open_the_list_and_move_the_highlight_with_the_caret_in_the_input(
+            cx: &mut TestAppContext,
+        ) {
+            let (state, cx) = form(cx, false, &[]);
+            cx.simulate_keystrokes("down");
+            settle(cx);
+            assert!(is_open(&state, cx));
+            assert_eq!(highlighted(&state, cx), Some(IndexPath::new(0)));
+
+            cx.simulate_keystrokes("down");
+            assert_eq!(highlighted(&state, cx), Some(IndexPath::new(1)));
+            cx.simulate_keystrokes("up");
+            assert_eq!(highlighted(&state, cx), Some(IndexPath::new(0)));
+            assert!(input_focused(&state, cx));
+        }
+
+        /// Up in a closed field opens the list at its last item.
+        #[gpui::test]
+        fn up_opens_the_list_at_the_end(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, false, &[]);
+            cx.simulate_keystrokes("up");
+            settle(cx);
+            assert!(is_open(&state, cx));
+            assert_eq!(highlighted(&state, cx), Some(IndexPath::new(3)));
+        }
+
+        #[gpui::test]
+        fn enter_commits_the_highlighted_item_and_the_field_shows_its_label(
+            cx: &mut TestAppContext,
+        ) {
+            let (state, cx) = form(cx, false, &[]);
+            cx.simulate_keystrokes("r u");
+            settle(cx);
+            cx.simulate_keystrokes("down");
+            settle(cx);
+            cx.simulate_keystrokes("enter");
+            settle(cx);
+
+            assert_eq!(values(&state, cx), ["Ruby"]);
+            assert!(!is_open(&state, cx));
+            assert_eq!(query(&state, cx), "Ruby");
+            assert_eq!(
+                shown(&state, cx).len(),
+                4,
+                "the next opening shows every item"
+            );
+            assert!(input_focused(&state, cx));
+        }
+
+        /// Enter in a closed field commits nothing.
+        #[gpui::test]
+        fn enter_in_a_closed_field_commits_nothing(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, false, &[]);
+            cx.simulate_keystrokes("enter");
+            settle(cx);
+            assert!(values(&state, cx).is_empty());
+            assert!(!is_open(&state, cx));
+        }
+
+        /// Escape first closes the list, putting the committed label back
+        /// over the typed text, then clears the field and its value.
+        #[gpui::test]
+        fn escape_closes_the_list_then_clears_the_field(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, false, &[0]);
+            assert_eq!(query(&state, cx), "Rust");
+
+            cx.simulate_keystrokes("end backspace");
+            settle(cx);
+            assert!(is_open(&state, cx));
+            assert_eq!(query(&state, cx), "Rus");
+
+            cx.simulate_keystrokes("escape");
+            settle(cx);
+            assert!(!is_open(&state, cx));
+            assert_eq!(query(&state, cx), "Rust");
+            assert_eq!(values(&state, cx), ["Rust"]);
+
+            cx.simulate_keystrokes("escape");
+            settle(cx);
+            assert!(!is_open(&state, cx));
+            assert_eq!(query(&state, cx), "");
+            assert!(values(&state, cx).is_empty());
+        }
+
+        /// A value set by the application shows in the closed field.
+        #[gpui::test]
+        fn a_value_set_from_outside_shows_in_the_field(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, false, &[]);
+            cx.update(|window, cx| {
+                state.update(cx, |state, cx| {
+                    state.set_selected_values(&["Go"], window, cx)
+                });
+            });
+            settle(cx);
+            assert_eq!(query(&state, cx), "Go");
+        }
+
+        /// Picking in a multiple combobox toggles the item and keeps the list
+        /// open; a pick made from typed text empties the field for the next.
+        #[gpui::test]
+        fn picking_toggles_and_keeps_the_list_open(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, true, &[]);
+            cx.simulate_keystrokes("down");
+            settle(cx);
+            cx.simulate_keystrokes("enter");
+            settle(cx);
+            assert_eq!(values(&state, cx), ["Rust"]);
+            assert!(is_open(&state, cx));
+
+            cx.simulate_keystrokes("enter");
+            settle(cx);
+            assert!(values(&state, cx).is_empty());
+            assert!(is_open(&state, cx));
+
+            cx.simulate_keystrokes("r u");
+            settle(cx);
+            cx.simulate_keystrokes("down");
+            settle(cx);
+            cx.simulate_keystrokes("enter");
+            settle(cx);
+            assert_eq!(values(&state, cx), ["Ruby"]);
+            assert!(is_open(&state, cx));
+            assert_eq!(query(&state, cx), "");
+            assert_eq!(shown(&state, cx).len(), 4);
+            assert_eq!(
+                highlighted(&state, cx),
+                Some(IndexPath::new(2)),
+                "the highlight stays on the picked item"
+            );
+            assert!(input_focused(&state, cx));
+        }
+
+        #[gpui::test]
+        fn backspace_in_the_empty_input_removes_the_last_chip(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, true, &[0, 1]);
+            cx.simulate_keystrokes("backspace");
+            settle(cx);
+            assert_eq!(values(&state, cx), ["Rust"]);
+            assert!(input_focused(&state, cx));
+        }
+
+        /// Backspace with text in the input deletes text, not a chip.
+        #[gpui::test]
+        fn backspace_with_text_in_the_input_deletes_text(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, true, &[0]);
+            cx.simulate_keystrokes("g backspace");
+            settle(cx);
+            assert_eq!(values(&state, cx), ["Rust"]);
+            assert_eq!(query(&state, cx), "");
+        }
+
+        #[gpui::test]
+        fn left_and_right_move_across_the_chips_and_back_to_the_input(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, true, &[0, 1]);
+            cx.simulate_keystrokes("left");
+            settle(cx);
+            assert_eq!(focused_chip(&state, cx), Some(1));
+
+            cx.simulate_keystrokes("left");
+            settle(cx);
+            assert_eq!(focused_chip(&state, cx), Some(0));
+
+            cx.simulate_keystrokes("left");
+            settle(cx);
+            assert_eq!(
+                focused_chip(&state, cx),
+                Some(0),
+                "the first chip is the end"
+            );
+
+            cx.simulate_keystrokes("right");
+            settle(cx);
+            assert_eq!(focused_chip(&state, cx), Some(1));
+
+            cx.simulate_keystrokes("right");
+            settle(cx);
+            assert_eq!(focused_chip(&state, cx), None);
+            assert!(input_focused(&state, cx));
+        }
+
+        /// Delete removes the focused chip and stays in place; Backspace
+        /// removes it and goes back one; the last removal returns the
+        /// keyboard to the input.
+        #[gpui::test]
+        fn delete_and_backspace_remove_the_focused_chip(cx: &mut TestAppContext) {
+            let (state, cx) = form(cx, true, &[0, 1, 2]);
+            cx.simulate_keystrokes("left");
+            settle(cx);
+            cx.simulate_keystrokes("left");
+            settle(cx);
+            assert_eq!(focused_chip(&state, cx), Some(1));
+
+            cx.simulate_keystrokes("delete");
+            settle(cx);
+            assert_eq!(values(&state, cx), ["Rust", "Ruby"]);
+            assert_eq!(focused_chip(&state, cx), Some(1));
+
+            cx.simulate_keystrokes("backspace");
+            settle(cx);
+            assert_eq!(values(&state, cx), ["Rust"]);
+            assert_eq!(focused_chip(&state, cx), Some(0));
+
+            cx.simulate_keystrokes("backspace");
+            settle(cx);
+            assert!(values(&state, cx).is_empty());
+            assert_eq!(focused_chip(&state, cx), None);
+            assert!(input_focused(&state, cx));
         }
     }
 }

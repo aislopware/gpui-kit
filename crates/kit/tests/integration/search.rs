@@ -199,7 +199,7 @@ use gpui_kit::component::{
     combobox::{Combobox, ComboboxEvent, ComboboxState},
     searchable_list::SearchableVec,
 };
-use gpui_kit::test::TestAppContextExt;
+use gpui_kit::test::{TestAppContextExt, TestQueryExt};
 use std::time::Duration;
 
 type LanguageState = ComboboxState<SearchableVec<&'static str>>;
@@ -248,7 +248,6 @@ fn languages(
                     cx,
                 )
                 .multiple(multiple)
-                .searchable(true)
             });
             let subscription =
                 cx.subscribe(&state, |this: &mut Languages, _, event, _| match event {
@@ -445,5 +444,35 @@ fn combobox_clear_button_updates_selection_without_reopening(cx: &mut TestAppCon
         assert!(view.state.read(cx).selected_values().is_empty());
         assert_eq!(view.changes, vec![vec!["Rust"], vec![]]);
         assert_eq!(view.confirmations, vec![vec!["Rust"]]);
+    });
+}
+
+/// Each chip names its remove button after the chip, and pressing it
+/// removes that value alone without opening the list.
+#[gpui_kit::test]
+fn combobox_chip_remove_buttons_are_named_and_remove_their_chip(cx: &mut TestAppContext) {
+    let (handle, view) = languages(cx, true, false);
+    let id = cx.update(|cx| ("multi-combo-box", view.read(cx).state.entity_id()));
+    cx.update_window(handle.into(), |_, window, cx| {
+        let state = view.read(cx).state.clone();
+        state.update(cx, |state, cx| {
+            state.set_selected_values(&["Rust", "Go"], window, cx)
+        });
+        window.render_frame(cx);
+        assert_eq!(
+            window.find(("chip-remove", 0usize)).label(),
+            Some("Remove Rust")
+        );
+        assert!(window.find_by_label("Remove Go").visible());
+        window.click(("chip-remove", 0usize), cx);
+        window.render_frame(cx);
+        assert_eq!(window.find(id).expanded(), Some(false));
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let view = view.read(cx);
+        assert_eq!(view.state.read(cx).selected_values(), vec!["Go"]);
+        assert_eq!(view.changes, vec![vec!["Go"]]);
     });
 }

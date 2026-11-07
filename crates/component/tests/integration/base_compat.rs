@@ -228,14 +228,16 @@ fn legacy_tree_models_are_base_types() {
 
 #[test]
 fn base_combobox_accepts_application_owned_content() {
-    fn build(trigger: gpui::FocusHandle, content: gpui::FocusHandle) {
+    fn build(field: gpui::FocusHandle) {
         let _ = gpui_base::Combobox::new("language")
             .open(true)
             .disabled(false)
-            .focus_handle(&trigger)
-            .content_focus_handle(&content)
+            .focus_handle(&field)
             .on_open_change(|_, _, _| {})
+            .on_highlight(|_: gpui_base::HighlightStep, _, _| {})
             .on_confirm(|_, _| {})
+            .on_dismiss(|_, _| {})
+            .on_clear(|_, _| {})
             .child(gpui::div());
     }
 

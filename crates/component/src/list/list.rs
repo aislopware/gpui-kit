@@ -100,7 +100,10 @@ pub struct ListState<D: ListDelegate> {
     pub(crate) query_input: Entity<InputState>,
     options: ListOptions,
     delegate: D,
-    last_query: Option<String>,
+    /// The query the delegate was last asked to filter by, set as the search
+    /// starts rather than when it lands, so a list that was never searched
+    /// is known to be unfiltered.
+    filtered_by: String,
     scroll_handle: VirtualListScrollHandle,
     rows_cache: RowsCache,
     selected_index: Option<IndexPath>,
@@ -138,7 +141,7 @@ where
             delegate,
             rows_cache: RowsCache::default(),
             query_input,
-            last_query: None,
+            filtered_by: String::new(),
             selected_index: None,
             selectable: true,
             searchable: false,
@@ -355,7 +358,7 @@ where
             InputEvent::Change => {
                 let text = state.read(cx).value();
                 let text = text.trim().to_string();
-                if Some(&text) == self.last_query.as_ref() {
+                if text == self.filtered_by {
                     return;
                 }
 
@@ -365,9 +368,44 @@ where
         }
     }
 
+    /// Filters the list by `query` without touching the search input, so a
+    /// field can show one text while the list is filtered by another, as a
+    /// combobox that shows its committed label shows every item.
+    pub(crate) fn search(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let query = query.trim().to_string();
+        if self.filtered_by == query {
+            return;
+        }
+        self.start_search(query, window, cx);
+    }
+
+    /// Where the item at `ix` sits among the rows as the list last laid them
+    /// out: its top edge below the first row's top edge, its height, and the
+    /// height of all the rows together. `None` for an item it does not show.
+    pub(crate) fn item_extent(&self, ix: IndexPath) -> Option<(Pixels, Pixels, Pixels)> {
+        let position = self.rows_cache.position_of(&ix)?;
+        let sizes = &self.rows_cache.entries_sizes;
+        let height = sizes.get(position)?.height;
+        let top = sizes[..position].iter().map(|size| size.height).sum();
+        let total = sizes.iter().map(|size| size.height).sum();
+        Some((top, height, total))
+    }
+
+    /// Confirms the highlighted item, as Enter does in the list, for a field
+    /// that keeps the keyboard focus while the list is open.
+    pub(crate) fn confirm_highlighted(
+        &mut self,
+        secondary: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.on_action_confirm(&Confirm { secondary }, window, cx);
+    }
+
     fn start_search(&mut self, query: String, window: &mut Window, cx: &mut Context<Self>) {
         self.set_searching(true, window, cx);
         let search = self.delegate.perform_search(&query, window, cx);
+        self.filtered_by = query;
 
         if self.rows_cache.len() > 0 {
             self._set_selected_index(Some(IndexPath::default()), window, cx);
@@ -380,7 +418,6 @@ where
 
             _ = this.update_in(window, |this, _, _| {
                 this.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
-                this.last_query = Some(query);
             });
 
             // Always wait 100ms to avoid flicker
@@ -495,7 +532,12 @@ where
 
     /// Move the highlight to the next enabled item, wrapping around, from
     /// wherever the highlight is.
-    fn step_highlight(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn step_highlight(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let mut ix = self.selected_index;
         for _ in 0..self.rows_cache.items_count() {
             let next = if forward {
@@ -511,7 +553,7 @@ where
         }
     }
 
-    fn on_action_select_first(
+    pub(crate) fn on_action_select_first(
         &mut self,
         _: &SelectFirst,
         window: &mut Window,
@@ -526,7 +568,7 @@ where
         }
     }
 
-    fn on_action_select_last(
+    pub(crate) fn on_action_select_last(
         &mut self,
         _: &SelectLast,
         window: &mut Window,
@@ -717,6 +759,7 @@ where
 
         div()
             .id(id)
+            .debug_selector(|| format!("list-item-{}-{}", ix.section, ix.row))
             .role(Role::ListItem)
             .aria_position_in_set(ix.row + 1)
             .aria_size_of_set(total_items)

@@ -59,11 +59,11 @@ gpui-fps = { path = "crates/fps", version = "0.9.0" }
 # falls back to GPUI's no-op text system, which shapes with made-up advances
 # and rasterizes no glyph: every window, the headless test ones included,
 # draws no text. gpui_platform enables nothing by default, so it is named here.
-gpui = { git = "https://github.com/aislopware/gpui-fast", rev = "a60db31eda31ac7364813dacc5ea98924337a90c", default-features = false }
-gpui_platform = { git = "https://github.com/aislopware/gpui-fast", rev = "a60db31eda31ac7364813dacc5ea98924337a90c", default-features = false, features = ["font-kit"] }
-gpui_macros = { git = "https://github.com/aislopware/gpui-fast", rev = "a60db31eda31ac7364813dacc5ea98924337a90c" }
-reqwest_client = { git = "https://github.com/aislopware/gpui-fast", rev = "a60db31eda31ac7364813dacc5ea98924337a90c" }
-sum_tree = { git = "https://github.com/aislopware/gpui-fast", rev = "a60db31eda31ac7364813dacc5ea98924337a90c" }
+gpui = { git = "https://github.com/aislopware/gpui-fast", rev = "909e5d773b5d0c1d217e806d7c51641bced3778c", default-features = false }
+gpui_platform = { git = "https://github.com/aislopware/gpui-fast", rev = "909e5d773b5d0c1d217e806d7c51641bced3778c", default-features = false, features = ["font-kit"] }
+gpui_macros = { git = "https://github.com/aislopware/gpui-fast", rev = "909e5d773b5d0c1d217e806d7c51641bced3778c" }
+reqwest_client = { git = "https://github.com/aislopware/gpui-fast", rev = "909e5d773b5d0c1d217e806d7c51641bced3778c" }
+sum_tree = { git = "https://github.com/aislopware/gpui-fast", rev = "909e5d773b5d0c1d217e806d7c51641bced3778c" }
 
 anyhow = "1"
 log = "0.4"

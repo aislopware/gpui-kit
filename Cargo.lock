@@ -479,7 +479,7 @@ dependencies = [
 [[package]]
 name = "bench_metrics"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "anyhow",
  "criterion",
@@ -874,7 +874,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "gpui_util",
  "indexmap",
@@ -1276,7 +1276,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2014,7 +2014,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -2287,7 +2287,7 @@ dependencies = [
 [[package]]
 name = "gpui_apple"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "anyhow",
  "async-task",
@@ -2326,7 +2326,7 @@ dependencies = [
 [[package]]
 name = "gpui_ios"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -2357,7 +2357,7 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -2397,7 +2397,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -2408,7 +2408,7 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "anyhow",
  "gpui",
@@ -2419,7 +2419,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "schemars",
  "serde",
@@ -2429,7 +2429,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "anyhow",
  "log",
@@ -2593,7 +2593,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2611,7 +2611,7 @@ dependencies = [
 [[package]]
 name = "http_client_tls"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "log",
  "rustls",
@@ -4950,7 +4950,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "derive_refineable",
 ]
@@ -4987,7 +4987,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "reqwest_client"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5285,7 +5285,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "async-task",
  "backtrace",
@@ -5761,7 +5761,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "heapless",
  "rayon",
@@ -7782,7 +7782,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 dependencies = [
  "tracing",
  "ztracing_macro",
@@ -7791,7 +7791,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/aislopware/gpui-fast?rev=41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8#41a8aa7c7e9c528217c5e296cf4b7dfe2f1563b8"
+source = "git+https://github.com/aislopware/gpui-fast?rev=2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9#2f31c2300fabdbfb0d07909d1cd88c2f6fb5b2a9"
 
 [[package]]
 name = "zune-core"
